@@ -16,7 +16,7 @@ workspace = true
 [dev-dependencies]
 lb-core     = { features = ["test-utils"], workspace = true }
 lb-faucet   = { workspace = true }
-lb-groth16  = { workspace = true }
+lb-groth16  = { features = ["test-utils"], workspace = true }
 lb-mmr      = { workspace = true }
 serial_test = { workspace = true }
 

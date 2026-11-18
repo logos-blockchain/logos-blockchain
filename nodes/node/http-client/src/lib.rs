@@ -26,7 +26,9 @@ use lb_http_api_common::{
         chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{
             ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
-            ChannelWithdrawResponseBody,
+            ChannelWithdrawResponseBody, ProgramRegisterRequestBody, ProgramRegisterResponseBody,
+            ProgramStepProveRequestBody, ProgramStepProveResponseBody, ProgramStepRequestBody,
+            ProgramStepResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
@@ -40,10 +42,10 @@ use lb_http_api_common::{
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
-        CHANNEL_STEP, CHANNEL_WITHDRAW, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
-        LEADER_AGED_NOTES, MANTLE_GAS_PRICES, MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION,
-        MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION,
-        TIME_INFO,
+        CHANNEL_PROGRAM_STEP, CHANNEL_PROGRAM_STEP_PROVE, CHANNEL_STEP, CHANNEL_WITHDRAW,
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES,
+        MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
+        MEMPOOL_ADD_TX, NODE_VERSION, PROGRAM_REGISTER, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -790,6 +792,46 @@ impl CommonHttpClient {
     ) -> Result<WalletFundResponseBody, Error> {
         let request_url = base_url
             .join(FUND.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Register a program, funded by the node's wallet.
+    pub async fn program_register(
+        &self,
+        base_url: Url,
+        body: ProgramRegisterRequestBody,
+    ) -> Result<ProgramRegisterResponseBody, Error> {
+        let request_url = base_url
+            .join(PROGRAM_REGISTER.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Request a program step built from the notes of a program the node's
+    /// wallet follows in a channel.
+    pub async fn channel_program_step(
+        &self,
+        base_url: Url,
+        body: ProgramStepRequestBody,
+    ) -> Result<ProgramStepResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_PROGRAM_STEP.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Request the `ZkProgramSpend` of a program step of an inscription.
+    pub async fn channel_program_step_prove(
+        &self,
+        base_url: Url,
+        body: ProgramStepProveRequestBody,
+    ) -> Result<ProgramStepProveResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_PROGRAM_STEP_PROVE.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

@@ -2,8 +2,13 @@ use std::sync::LazyLock;
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
+use lb_mmr::MerklePath;
 use lb_poseidon2::Digest as _;
-use lb_program_spend::check_bounds;
+use lb_program_spend::{
+    ZkProgramSpendChainInputsData, ZkProgramSpendInputNoteData, ZkProgramSpendOutputNoteData,
+    ZkProgramSpendWalletInputsData, ZkProgramSpendWitnessInputs, ZkProgramSpendWitnessInputsData,
+    check_bounds,
+};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -16,8 +21,8 @@ use crate::{
     mantle::{
         Value,
         channel::Error,
-        notes::{InputNullifiers, OutputCommitments, ProgramId},
-        ops::ProgramStepProof,
+        notes::{InputNullifiers, Note, OutputCommitments, ProgramId},
+        ops::{ProgramStepProof, ZkProgramSpendProof},
     },
 };
 
@@ -180,15 +185,110 @@ pub fn program_deposits_hash(deposits: &[&ProgramDeposit]) -> Fr {
     ZkHasher::digest(&elements)
 }
 
+pub type ProgramSpendProveError = lb_program_spend::ProveError;
+
+// The ZkProgramSpend witness of a program step.
+#[derive(Clone)]
+pub struct ProgramSpendWitness(ZkProgramSpendWitnessInputs);
+
+impl core::fmt::Debug for ProgramSpendWitness {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ProgramSpendWitness")
+    }
+}
+
+impl ProgramSpendWitness {
+    // Each input is a note of the program, held by `PK0`, and its path to
+    // `tx_commitment_root`; the first `program_outputs` outputs are notes of
+    // the program, the others the user notes the step pays.
+    pub fn new(
+        inputs: &[(Note, MerklePath)],
+        outputs: &[Note],
+        program_outputs: usize,
+        tx_commitment_root: Fr,
+        program_id: ProgramId,
+        paid_value: Value,
+        msg: Fr,
+    ) -> Result<Self, Error> {
+        check_bounds(inputs.len(), outputs.len())?;
+        let outputs_of_program: Vec<bool> =
+            (0..outputs.len()).map(|j| j < program_outputs).collect();
+        Ok(Self(witness_inputs(
+            inputs,
+            outputs,
+            &outputs_of_program,
+            tx_commitment_root,
+            program_id,
+            paid_value,
+            msg,
+        )))
+    }
+
+    pub fn prove(self) -> Result<ZkProgramSpendProof, ProgramSpendProveError> {
+        lb_program_spend::prove(self.0).map(|(proof, _)| ZkProgramSpendProof::new(proof))
+    }
+}
+
+// The flags missing past `outputs_of_program` are false.
+fn witness_inputs(
+    inputs: &[(Note, MerklePath)],
+    outputs: &[Note],
+    outputs_of_program: &[bool],
+    tx_commitment_root: Fr,
+    program_id: ProgramId,
+    paid_value: Value,
+    msg: Fr,
+) -> ZkProgramSpendWitnessInputs {
+    let wallet = ZkProgramSpendWalletInputsData {
+        inputs: core::array::from_fn(|i| {
+            inputs
+                .get(i)
+                .map_or_else(ZkProgramSpendInputNoteData::inactive, |(note, path)| {
+                    ZkProgramSpendInputNoteData {
+                        stake_public_key: *note.stake_public_key.as_fr(),
+                        nonce: note.nonce,
+                        value: note.value,
+                        data: note.data,
+                        path_and_selectors: core::array::from_fn(|h| {
+                            path.path_and_selectors(h).into()
+                        }),
+                    }
+                })
+        }),
+        outputs: core::array::from_fn(|j| {
+            outputs
+                .get(j)
+                .map_or_else(ZkProgramSpendOutputNoteData::inactive, |note| {
+                    ZkProgramSpendOutputNoteData {
+                        public_key: *note.public_key.as_fr(),
+                        stake_public_key: *note.stake_public_key.as_fr(),
+                        nonce: note.nonce,
+                        value: note.value,
+                        program: note.program,
+                        data: note.data,
+                    }
+                })
+        }),
+    };
+    let chain = ZkProgramSpendChainInputsData {
+        inputs_active: core::array::from_fn(|i| i < inputs.len()),
+        outputs_active: core::array::from_fn(|j| j < outputs.len()),
+        outputs_of_program: core::array::from_fn(|j| {
+            outputs_of_program.get(j).copied().unwrap_or(false)
+        }),
+        tx_commitment_root,
+        program_id,
+        paid_value,
+        msg,
+    };
+    ZkProgramSpendWitnessInputsData::from_chain_and_wallet_data(chain, wallet).into()
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils {
     use lb_groth16::Fr;
     use lb_mmr::MerklePath;
-    use lb_program_spend::{
-        ZkProgramSpendChainInputsData, ZkProgramSpendInputNoteData, ZkProgramSpendOutputNoteData,
-        ZkProgramSpendVerifierInput, ZkProgramSpendWalletInputsData,
-        ZkProgramSpendWitnessInputsData,
-    };
+    use lb_program_spend::ZkProgramSpendVerifierInput;
 
     use crate::mantle::{
         Value,
@@ -196,9 +296,7 @@ pub mod test_utils {
     };
 
     // Proves a ZkProgramSpend from note openings and their commitment MMR
-    // paths, as `prove_transfer`. Each input is a note of the program, held
-    // by `PK0`, and its path in the commitment MMR; the flags missing past
-    // `outputs_of_program` are false.
+    // paths, as `prove_transfer`.
     #[must_use]
     pub fn prove_program_spend(
         inputs: &[(Note, MerklePath)],
@@ -212,51 +310,15 @@ pub mod test_utils {
         lb_program_spend::ZkProgramSpendProof,
         ZkProgramSpendVerifierInput,
     ) {
-        let wallet = ZkProgramSpendWalletInputsData {
-            inputs: core::array::from_fn(|i| {
-                inputs
-                    .get(i)
-                    .map_or_else(ZkProgramSpendInputNoteData::inactive, |(note, path)| {
-                        ZkProgramSpendInputNoteData {
-                            stake_public_key: *note.stake_public_key.as_fr(),
-                            nonce: note.nonce,
-                            value: note.value,
-                            data: note.data,
-                            path_and_selectors: core::array::from_fn(|h| {
-                                path.path_and_selectors(h).into()
-                            }),
-                        }
-                    })
-            }),
-            outputs: core::array::from_fn(|j| {
-                outputs
-                    .get(j)
-                    .map_or_else(ZkProgramSpendOutputNoteData::inactive, |note| {
-                        ZkProgramSpendOutputNoteData {
-                            public_key: *note.public_key.as_fr(),
-                            stake_public_key: *note.stake_public_key.as_fr(),
-                            nonce: note.nonce,
-                            value: note.value,
-                            program: note.program,
-                            data: note.data,
-                        }
-                    })
-            }),
-        };
-        let chain = ZkProgramSpendChainInputsData {
-            inputs_active: core::array::from_fn(|i| i < inputs.len()),
-            outputs_active: core::array::from_fn(|j| j < outputs.len()),
-            outputs_of_program: core::array::from_fn(|j| {
-                outputs_of_program.get(j).copied().unwrap_or(false)
-            }),
+        lb_program_spend::prove(super::witness_inputs(
+            inputs,
+            outputs,
+            outputs_of_program,
             tx_commitment_root,
             program_id,
             paid_value,
             msg,
-        };
-        lb_program_spend::prove(
-            ZkProgramSpendWitnessInputsData::from_chain_and_wallet_data(chain, wallet).into(),
-        )
+        ))
         .expect("the witness proves")
     }
 }

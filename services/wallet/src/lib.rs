@@ -22,14 +22,24 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, TxHash, Value, VerificationError,
+        channel::channel_note_set,
         gas::{GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
-        notes::{NoteCommitment, NoteNullifier},
-        ops::{
-            ChannelInscribeProof, NoOpProof, OpRef, ZkAndEd25519Proof, ZkTransferProof,
-            channel::ChannelId,
+        notes::{
+            InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments,
+            derive_note_nullifier, derive_program_output_nonce,
         },
+        ops::{
+            ChannelInscribeProof, NoOpProof, OpId as _, OpRef, ProgramNoteOpening,
+            ZkAndEd25519Proof, ZkTransferProof,
+            channel::{
+                ChannelId,
+                inscribe::Step,
+                program_step::{ProgramSpendWitness, ProgramStep},
+            },
+        },
+        programs::program_step_id_of,
         traits::{GenesisTx as _, Hashable as _, MantleTx as _, SignedMantleTx, StorageSize},
         transactions::{
             MantleTxBuilder, OpProofs, Ops, TxBuilderError,
@@ -47,7 +57,7 @@ use lb_key_management_system_service::{
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, Ed25519Signature, Key, KeyOperators,
-        PayloadEncoding, SignatureEncoding, ZkKey, ZkPublicKey, secured_key::SecuredKey,
+        PK0, PayloadEncoding, SignatureEncoding, ZkKey, ZkPublicKey, secured_key::SecuredKey,
     },
     operators::zk::{nullifier::DeriveNullifier, voucher::UnsafeVoucherOperator},
 };
@@ -65,7 +75,7 @@ use lb_utils::bounded::BoundedError;
 pub use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, SPEND_ROOT_DEPTH};
 use lb_wallet::{
     KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
-    transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
+    transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses, program_spend_inputs},
 };
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -80,7 +90,10 @@ use tokio::{
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
-pub use crate::channel::{ChannelStep, ChannelStepRequest, ChannelWithdrawal, ProgramPayment};
+pub use crate::channel::{
+    BuiltProgramStep, ChannelStep, ChannelStepRequest, ChannelWithdrawal, ProgramOutput,
+    ProgramPayment, ProgramSpendRequest, ProgramStepRequest,
+};
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
@@ -143,6 +156,18 @@ pub enum WalletServiceError {
 
     #[error("A channel step must pay a note or deposit to a program")]
     EmptyChannelStep,
+
+    #[error("The wallet holds no spendable note of nullifier {0:?} in channel {1:?}")]
+    NoChannelNoteOf(NoteNullifier, ChannelId),
+
+    #[error("Step {0} of the inscription is not a program step")]
+    NotAProgramStep(usize),
+
+    #[error("The openings do not match the outputs of program step {0}")]
+    ProgramStepOpenings(usize),
+
+    #[error("Invalid program step: {0}")]
+    ProgramStep(#[from] lb_core::mantle::channel::Error),
 
     #[error("Failed to read or write the persisted state of the wallet: {0}")]
     PersistedState(DynError),
@@ -247,6 +272,16 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         request: ChannelStepRequest,
         resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
+    },
+    BuildProgramStep {
+        tip: Option<HeaderId>,
+        request: ProgramStepRequest,
+        resp_tx: Sender<Result<TipResponse<BuiltProgramStep>, WalletServiceError>>,
+    },
+    ProgramSpendWitness {
+        tip: Option<HeaderId>,
+        request: Box<ProgramSpendRequest>,
+        resp_tx: Sender<Result<TipResponse<ProgramSpendWitness>, WalletServiceError>>,
     },
     ChannelWithdrawal {
         tip: Option<HeaderId>,
@@ -363,6 +398,8 @@ impl WalletMsg {
             | Self::SpendRoot { tip, .. }
             | Self::ProveChannelStep { tip, .. }
             | Self::ChannelWithdrawal { tip, .. }
+            | Self::BuildProgramStep { tip, .. }
+            | Self::ProgramSpendWitness { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
@@ -1007,6 +1044,39 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
                 }
             }
+            WalletMsg::BuildProgramStep {
+                tip,
+                request,
+                resp_tx,
+            } => {
+                let response = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => Self::build_program_step(tip, request, state.wallet())
+                        .map(|response| TipResponse { tip, response }),
+                    Err(err) => Err(err),
+                };
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to BuildProgramStep");
+                }
+            }
+            WalletMsg::ProgramSpendWitness {
+                tip,
+                request,
+                resp_tx,
+            } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let response = Self::program_spend_witness(tip, *request, state, kms)
+                    .await
+                    .map(|response| TipResponse { tip, response });
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to ProgramSpendWitness");
+                }
+            }
             WalletMsg::ChannelWithdrawal {
                 tip,
                 channel_id,
@@ -1465,6 +1535,204 @@ where
             proof,
             outputs: opening.outputs,
         })
+    }
+
+    // A program step consuming the notes of the program the request names, at
+    // the spend state of `tip`. The step of a program consuming a note has the
+    // nonces of its outputs derived from its first input, as the ZkProgramSpend
+    // enforces.
+    fn build_program_step(
+        tip: HeaderId,
+        request: ProgramStepRequest,
+        wallet: &Wallet,
+    ) -> Result<BuiltProgramStep, WalletServiceError> {
+        let ProgramStepRequest {
+            channel_id,
+            program_id,
+            inputs,
+            program_outputs,
+            payments,
+            inscription,
+        } = request;
+        let note_set = channel_note_set(channel_id)
+            .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
+        let spend_state = wallet.spend_state(tip)?;
+        let inputs = inputs
+            .iter()
+            .map(|commitment| {
+                spend_state
+                    .notes
+                    .get(commitment)
+                    .filter(|owned| owned.note_set == note_set && owned.note.program == program_id)
+                    .ok_or(WalletServiceError::NoChannelNote(*commitment, channel_id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let first_input = inputs.first().map(|owned| owned.nullifier);
+        let nonce = |output: usize, value: Value, public_key: &ZkPublicKey| {
+            first_input.map_or_else(random_nonce, |first_input| {
+                derive_program_output_nonce(&first_input, output, value, public_key)
+            })
+        };
+        let program_notes: Vec<ProgramNoteOpening> = program_outputs
+            .into_iter()
+            .enumerate()
+            .map(|(output, program_output)| ProgramNoteOpening {
+                value: program_output.value,
+                nonce: nonce(output, program_output.value, &PK0),
+                stake_public_key: program_output.stake_public_key,
+                data: program_output.data,
+            })
+            .collect();
+        let paid_notes: Vec<Note> = payments
+            .into_iter()
+            .enumerate()
+            .map(|(payment, (public_key, value))| {
+                let output = program_notes.len() + payment;
+                Note::new(value, nonce(output, value, &public_key), public_key)
+            })
+            .collect();
+        let program_output_notes: Vec<Note> = program_notes
+            .iter()
+            .map(|opening| opening.note(program_id))
+            .collect();
+        let input_notes: Vec<Note> = inputs.iter().map(|owned| owned.note).collect();
+        let output_notes = [program_output_notes.as_slice(), paid_notes.as_slice()].concat();
+        let step = ProgramStep {
+            program_id,
+            inputs: InputNullifiers::try_from_iter(inputs.iter().map(|owned| owned.nullifier))
+                .map_err(WalletError::from)?,
+            program_outputs: OutputCommitments::try_from_iter(
+                program_output_notes.iter().map(Note::commitment),
+            )
+            .map_err(WalletError::from)?,
+            outputs: OutputCommitments::try_from_iter(paid_notes.iter().map(Note::commitment))
+                .map_err(WalletError::from)?,
+            commitment_merkle_root: spend_state.root_of(note_set),
+            program_step_id: program_step_id_of(&input_notes, &output_notes),
+            inscription,
+        };
+        Ok(BuiltProgramStep {
+            step,
+            program_notes,
+            paid_notes,
+        })
+    }
+
+    // The ZkProgramSpend witness of the program step the request names, proven
+    // against its root extended with the notes the steps before it create and
+    // bound to the id of its inscription. The notes it creates are registered,
+    // so the wallet follows the ones of the program and the ones paid to its
+    // own keys once the step is inscribed.
+    async fn program_spend_witness(
+        tip: HeaderId,
+        request: ProgramSpendRequest,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ProgramSpendWitness, WalletServiceError> {
+        let ProgramSpendRequest {
+            op,
+            step_index,
+            program_notes,
+            paid_notes,
+        } = request;
+        let channel_id = op.channel_id;
+        let note_set = channel_note_set(channel_id)
+            .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
+
+        // The notes the steps before it create, and the value the program
+        // deposits before it in its mini-block pay.
+        let mut appended = Vec::new();
+        let mut index = 0;
+        let mut found = None;
+        'mini_blocks: for mini_block in op.mini_blocks.iter() {
+            let mut paid_value: Value = 0;
+            for step in mini_block.iter() {
+                if index == step_index {
+                    found = Some((step, paid_value));
+                    break 'mini_blocks;
+                }
+                match step {
+                    Step::ProgramDeposit(deposit) => {
+                        paid_value = paid_value.checked_add(deposit.value).ok_or(GasOverflow)?;
+                    }
+                    Step::Program(_) => paid_value = 0,
+                    Step::User(_) => {}
+                }
+                appended.extend(step.outputs().iter().copied());
+                index += 1;
+            }
+        }
+        let Some((Step::Program(step), paid_value)) = found else {
+            return Err(WalletServiceError::NotAProgramStep(step_index));
+        };
+
+        let program_output_notes: Vec<Note> = program_notes
+            .iter()
+            .map(|opening| opening.note(step.program_id))
+            .collect();
+        let output_notes = [program_output_notes.as_slice(), paid_notes.as_slice()].concat();
+        if !output_notes
+            .iter()
+            .map(Note::commitment)
+            .eq(step.outputs().iter().copied())
+        {
+            return Err(WalletServiceError::ProgramStepOpenings(step_index));
+        }
+
+        let spend_state = state.wallet().spend_state(tip)?;
+        if spend_state.root_of(note_set) != step.commitment_merkle_root {
+            return Err(WalletError::UnknownRoot {
+                op_index: step_index,
+            }
+            .into());
+        }
+        let input_notes = step
+            .inputs
+            .iter()
+            .map(|nullifier| {
+                spend_state
+                    .notes
+                    .values()
+                    .find(|owned| owned.note_set == note_set && owned.nullifier == *nullifier)
+                    .map(|owned| owned.note)
+                    .ok_or(WalletServiceError::NoChannelNoteOf(*nullifier, channel_id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let (tx_commitment_root, inputs) = program_spend_inputs(
+            &spend_state,
+            state.wallet().known_notes(),
+            note_set,
+            &appended,
+            step.inputs.as_slice(),
+            input_notes,
+        )?;
+        let witness = ProgramSpendWitness::new(
+            &inputs,
+            &output_notes,
+            program_output_notes.len(),
+            tx_commitment_root,
+            step.program_id,
+            paid_value,
+            lb_groth16::fr_from_mod_bytes(&op.op_id()),
+        )?;
+
+        let program_nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
+        let mut known_notes: Vec<KnownNote> = program_output_notes
+            .iter()
+            .map(|note| KnownNote {
+                note: *note,
+                note_set,
+                nullifier: derive_note_nullifier(&note.commitment(), &program_nullifier_key),
+            })
+            .collect();
+        for note in &paid_notes {
+            if let Some(key_id) = state.wallet().known_keys().get(&note.public_key).cloned() {
+                known_notes.push(Self::known_note(kms, key_id, *note, note_set).await?);
+            }
+        }
+        state.add_known_notes(known_notes);
+
+        Ok(witness)
     }
 
     // The withdrawal of `notes` from the channel at the spend state of `tip`.

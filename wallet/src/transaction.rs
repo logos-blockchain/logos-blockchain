@@ -112,6 +112,24 @@ pub fn step_witness(
     op_witness(state, known, &appended, 0, opening, spend, msg)
 }
 
+// The notes a program step spends with their paths, and the root they are
+// proven against: the root of `note_set` at `state` extended by `appended`,
+// the commitments the steps before it create.
+pub fn program_spend_inputs(
+    state: &WalletState,
+    known: &KnownNotes,
+    note_set: NoteSetIndex,
+    appended: &[NoteCommitment],
+    nullifiers: &[NoteNullifier],
+    inputs: Vec<Note>,
+) -> Result<(Fr, Vec<(Note, MerklePath)>), WalletError> {
+    let opening = ZkTransferOpening {
+        inputs,
+        outputs: Vec::new(),
+    };
+    in_set_inputs(state, known, note_set, appended, 0, &opening, nullifiers)
+}
+
 fn witnesses_of(
     state: &WalletState,
     known: &KnownNotes,
@@ -249,19 +267,15 @@ fn op_witness(
             {
                 return Err(WalletError::UnknownRoot { op_index });
             }
-            let (mmr, commitments, paths) = set_buffer(
+            in_set_inputs(
                 state,
+                known,
                 note_set,
                 appended.get(&note_set).map_or(&[], Vec::as_slice),
+                op_index,
                 opening,
-            )?;
-            let inputs = input_paths(state, known, op_index, opening, nullifiers, |commitment| {
-                commitments
-                    .iter()
-                    .position(|buffered| buffered == commitment)
-                    .map(|position| paths[position].clone())
-            })?;
-            (mmr.frontier_root(), inputs)
+                nullifiers,
+            )?
         }
         Spend::ServiceNote(nullifier) => {
             let [service] = opening.inputs.as_slice() else {
@@ -304,6 +318,27 @@ fn op_witness(
         witness: transfer_witness(&inputs, &opening.outputs, tx_commitment_root, msg),
         signers: inputs.iter().map(|(note, _)| note.public_key).collect(),
     })
+}
+
+// The root of `note_set` at `state` extended by `appended`, and the opened
+// inputs with their paths to it.
+fn in_set_inputs(
+    state: &WalletState,
+    known: &KnownNotes,
+    note_set: NoteSetIndex,
+    appended: &[NoteCommitment],
+    op_index: usize,
+    opening: &ZkTransferOpening,
+    nullifiers: &[NoteNullifier],
+) -> Result<(Fr, Vec<(Note, MerklePath)>), WalletError> {
+    let (mmr, commitments, paths) = set_buffer(state, note_set, appended, opening)?;
+    let inputs = input_paths(state, known, op_index, opening, nullifiers, |commitment| {
+        commitments
+            .iter()
+            .position(|buffered| buffered == commitment)
+            .map(|position| paths[position].clone())
+    })?;
+    Ok((mmr.frontier_root(), inputs))
 }
 
 fn channel_note_set(

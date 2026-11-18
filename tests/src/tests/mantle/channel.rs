@@ -12,44 +12,51 @@ use lb_core::{
         gas::GasCost,
         notes::NoteCommitment,
         ops::{
-            ChannelInscribeProof, StepProof,
+            ChannelInscribeProof, OpId as _, ProgramProof, ProgramStepProof, StepProof,
             channel::{
                 ChannelId, MsgId,
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
-                program_step::program_deposit_id,
+                program_step::{program_deposit_id, program_deposits_hash},
             },
             zk_transfer::defer_zk_transfer,
         },
+        programs::ProgramVerificationKey,
         traits::Hashable as _,
         transactions::{MantleTxBuilder, OpProofs, hash::TxHash},
     },
 };
-use lb_groth16::Fr;
+use lb_groth16::{
+    CompressedGroth16Proof, Fr, fr_from_mod_bytes,
+    test_utils::{three_input_prove, three_input_setup},
+};
 use lb_http_api_common::bodies::{
     channel::{
         ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelPayment,
         ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
-        ChannelWithdrawResponseBody, ProgramDepositBody,
+        ChannelWithdrawResponseBody, ProgramDepositBody, ProgramOutputBody,
+        ProgramRegisterRequestBody, ProgramRegisterResponseBody, ProgramStepProveRequestBody,
+        ProgramStepProveResponseBody, ProgramStepRequestBody, ProgramStepResponseBody,
     },
     wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+    DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
     common::manual_cluster::{
-        ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
-        wait_for_nodes_height, wait_for_spendable,
+        LocalManualClusterHarnessBase, ManualNodeLayout, api_url, get_wallet_balance,
+        start_local_manual_cluster_with_layout, wait_for_nodes_height, wait_for_spendable,
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
+use serde::{Serialize, de::DeserializeOwned};
 use serial_test::serial;
-use testing_framework_core::scenario::DynError;
+use testing_framework_core::scenario::{DynError, StartedNode};
 use tokio::time::{sleep, timeout};
 
 /// Generous cap on channel transaction fees at genesis gas prices; actual fees
@@ -536,6 +543,218 @@ async fn channel_note_round_trip() {
     .await;
 }
 
+/// 1. Register a program, create a channel and deposit into it.
+/// 2. Inscribe a program deposit from the node's wallet together with the
+///    program step that consumes it into a note of the program.
+/// 3. Inscribe a second program step that consumes that note and pays it to a
+///    user key, once the wallet follows the note and it is deep enough.
+/// 4. Withdraw the paid note, which the wallet holds only if it followed the
+///    outputs of the program step.
+#[tokio::test]
+#[serial]
+async fn channel_program_step() {
+    let deposit_amount = 5;
+    let (_base, nodes, funding_pk) =
+        start_channel_cluster("channel_program_step", deposit_amount).await;
+    let node = &nodes[0].client;
+    let mut block_stream = node.blocks_stream().await.unwrap();
+
+    // The program accepts any public inputs, so its proofs only need the
+    // values the ledger checks them against.
+    let (verification_key, proving_key) = three_input_setup(1);
+    let program_proof = |public: [Fr; 3]| {
+        ProgramProof::new(
+            CompressedGroth16Proof::try_from(&three_input_prove(&proving_key, public, 5))
+                .expect("the program proof compresses"),
+        )
+    };
+    let ProgramRegisterResponseBody {
+        hash: register_tx_hash,
+        program_id,
+    } = post_until_success(
+        node,
+        "program/register",
+        &ProgramRegisterRequestBody {
+            tip: None,
+            verification_key: ProgramVerificationKey::try_from(&verification_key)
+                .expect("the setup key is a program key"),
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
+        },
+    )
+    .await;
+    wait_for_tx_inclusion(&mut block_stream, register_tx_hash, "program register").await;
+
+    let (channel_id, parent) = create_channel(node, &mut block_stream, funding_pk).await;
+    deposit(
+        node,
+        &mut block_stream,
+        channel_id,
+        funding_pk,
+        deposit_amount,
+    )
+    .await;
+
+    // A program deposit of the holder, then the program step consuming it.
+    let paid = 3;
+    let ChannelStepResponseBody {
+        step: deposit_step,
+        proof: deposit_proof,
+        ..
+    } = post_until_success(
+        node,
+        "channel/step",
+        &ChannelStepRequestBody {
+            tip: None,
+            channel_id,
+            appended: Vec::new(),
+            payments: Vec::new(),
+            program_deposit: Some(ProgramDepositBody {
+                program_id,
+                value: paid,
+                intent: Fr::from(7u64),
+            }),
+            inscription: Inscription::new_unchecked(b"program deposit".to_vec()),
+            change_public_key: funding_pk,
+            holder_public_keys: vec![funding_pk],
+        },
+    )
+    .await;
+    let Step::ProgramDeposit(program_deposit) = deposit_step.clone() else {
+        panic!("a step with a program deposit is a program deposit");
+    };
+    let ProgramStepResponseBody {
+        tip,
+        step,
+        program_notes,
+        paid_notes,
+    } = post_until_success(
+        node,
+        "channel/program-step",
+        &ProgramStepRequestBody {
+            tip: None,
+            channel_id,
+            program_id,
+            inputs: Vec::new(),
+            program_outputs: vec![ProgramOutputBody {
+                value: paid,
+                stake_public_key: funding_pk,
+                data: Fr::from(1u64),
+            }],
+            payments: Vec::new(),
+            inscription: Inscription::new_unchecked(b"program step".to_vec()),
+        },
+    )
+    .await;
+    let program_note = step.program_outputs[0];
+    let op = channel_inscription(
+        channel_id,
+        parent,
+        vec![deposit_step, Step::Program(step.clone())],
+    );
+    let ProgramStepProveResponseBody { spend_proof } = post_until_success(
+        node,
+        "channel/program-step/prove",
+        &ProgramStepProveRequestBody {
+            tip,
+            op: op.clone(),
+            step_index: 1,
+            program_notes: program_notes.clone(),
+            paid_notes,
+        },
+    )
+    .await;
+    let step_proof = StepProof::ProgramStep(ProgramStepProof {
+        spend_proof,
+        program_proof: program_proof([
+            step.program_step_id,
+            program_deposits_hash(&[&program_deposit]),
+            fr_from_mod_bytes(&op.op_id()),
+        ]),
+        program_notes,
+    });
+    let parent = op.id();
+    inscribe(
+        node,
+        &mut block_stream,
+        funding_pk,
+        op,
+        vec![StepProof::ZkTransfer(deposit_proof), step_proof],
+    )
+    .await;
+
+    // The note of the program is consumed once the wallet adopted it and its
+    // block is deep enough; the step pays it to a user key.
+    let ProgramStepResponseBody {
+        tip,
+        step,
+        program_notes,
+        paid_notes,
+    } = post_until_success(
+        node,
+        "channel/program-step",
+        &ProgramStepRequestBody {
+            tip: None,
+            channel_id,
+            program_id,
+            inputs: vec![program_note],
+            program_outputs: Vec::new(),
+            payments: vec![ChannelPayment {
+                public_key: funding_pk,
+                value: paid,
+            }],
+            inscription: Inscription::new_unchecked(b"program payout".to_vec()),
+        },
+    )
+    .await;
+    let op = channel_inscription(channel_id, parent, vec![Step::Program(step.clone())]);
+    let ProgramStepProveResponseBody { spend_proof } = post_until_success(
+        node,
+        "channel/program-step/prove",
+        &ProgramStepProveRequestBody {
+            tip,
+            op: op.clone(),
+            step_index: 0,
+            program_notes: program_notes.clone(),
+            paid_notes: paid_notes.clone(),
+        },
+    )
+    .await;
+    let step_proof = StepProof::ProgramStep(ProgramStepProof {
+        spend_proof,
+        program_proof: program_proof([
+            step.program_step_id,
+            program_deposits_hash(&[]),
+            fr_from_mod_bytes(&op.op_id()),
+        ]),
+        program_notes,
+    });
+    inscribe(node, &mut block_stream, funding_pk, op, vec![step_proof]).await;
+
+    // The wallet holds the note the program paid.
+    let ChannelWithdrawResponseBody { outputs, .. } = post_until_success(
+        node,
+        "channel/withdraw",
+        &ChannelWithdrawRequestBody {
+            tip: None,
+            channel_id,
+            notes: vec![paid_notes[0].commitment()],
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
+        },
+    )
+    .await;
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|note| (note.value, note.public_key))
+            .collect::<Vec<_>>(),
+        vec![(paid, funding_pk)]
+    );
+}
+
 // A user step paying `paid` to `funding_pk` from its channel notes, behind the
 // `appended` commitments.
 async fn channel_user_step(
@@ -601,6 +820,161 @@ where
     response.unwrap_or_else(|_| {
         panic!("timed out waiting for the {label} to succeed, last error: {last_error:?}")
     })
+}
+
+// Two nodes producing blocks, the first holding a note of `deposit_amount` and
+// a fee note under the key returned.
+async fn start_channel_cluster(
+    test_name: &str,
+    deposit_amount: u64,
+) -> (
+    LocalManualClusterHarnessBase,
+    Vec<StartedNode<LbcEnv>>,
+    ZkPublicKey,
+) {
+    let (wallet_config, funding_pk, _funding_account) =
+        channel_deposit_wallet_config(deposit_amount, FEE_NOTE_AMOUNT);
+    let (base, nodes) = start_local_manual_cluster_with_layout(
+        &test_name.replace('_', "-"),
+        "mantle-channel",
+        DeploymentBuilder::new(
+            TfTopologyConfig::with_node_numbers(2)
+                .with_allow_multiple_genesis_tokens(true)
+                .with_test_context(Some(test_name.to_owned())),
+        )
+        .with_wallet_config(wallet_config),
+        2,
+        ManualNodeLayout::SelectNodeSeed(0),
+        |config| Ok::<_, DynError>(channel_test_config(config)),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
+    )
+    .await;
+    wait_for_nodes_height(
+        nodes
+            .iter()
+            .map(|node| &node.client)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        3,
+        Duration::from_mins(5),
+    )
+    .await;
+    (base, nodes, funding_pk)
+}
+
+// Deposits `amount` into the channel to `funding_pk` and waits for its
+// inclusion.
+async fn deposit(
+    node: &NodeHttpClient,
+    block_stream: &mut (impl futures::Stream<Item = ProcessedBlockEvent> + Unpin),
+    channel_id: ChannelId,
+    funding_pk: ZkPublicKey,
+    amount: u64,
+) {
+    wait_for_spendable(node, funding_pk, Duration::from_mins(2)).await;
+    let ChannelDepositResponseBody { hash, .. } = post_until_success(
+        node,
+        "channel/deposit",
+        &ChannelDepositRequestBody {
+            tip: None,
+            channel_id,
+            amount,
+            holder_public_key: funding_pk,
+            metadata: Metadata::new_unchecked(b"deposit".to_vec()),
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
+        },
+    )
+    .await;
+    wait_for_tx_inclusion(block_stream, hash, "deposit").await;
+}
+
+// Posts `body` to `path` until the node accepts it: a note the request spends
+// is refused until the wallet adopted it and its block is deep enough.
+async fn post_until_success<Request: Serialize + Sync, Response: DeserializeOwned>(
+    node: &NodeHttpClient,
+    path: &str,
+    body: &Request,
+) -> Response {
+    timeout(Duration::from_mins(2), async {
+        loop {
+            let response = reqwest::Client::new()
+                .post(api_url(node, path))
+                .json(body)
+                .send()
+                .await
+                .expect("request should not fail");
+            if response.status().is_success() {
+                return response
+                    .json::<Response>()
+                    .await
+                    .expect("response should be valid JSON");
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {path} to succeed"))
+}
+
+fn channel_signing_key() -> Ed25519Key {
+    Ed25519Key::from_bytes(&[7u8; 32])
+}
+
+// An inscription of the channel carrying `steps` in one mini-block.
+fn channel_inscription(channel_id: ChannelId, parent: MsgId, steps: Vec<Step>) -> InscriptionOp {
+    InscriptionOp {
+        channel_id,
+        inscription: Inscription::new_unchecked(b"zone block".to_vec()),
+        parent,
+        signer: channel_signing_key().public_key().into_unverified(),
+        mini_blocks: MiniBlocks::from([
+            MiniBlock::try_from(steps).expect("the steps fit a mini-block")
+        ]),
+    }
+}
+
+// Funds `op` from the node's wallet, signs it with the proofs of its steps,
+// submits it and waits for its inclusion.
+async fn inscribe(
+    node: &NodeHttpClient,
+    block_stream: &mut (impl futures::Stream<Item = ProcessedBlockEvent> + Unpin),
+    funding_pk: ZkPublicKey,
+    op: InscriptionOp,
+    step_proofs: Vec<StepProof>,
+) {
+    let tx_builder = MantleTxBuilder::new()
+        .push_op(Op::ChannelInscribe(op))
+        .expect("inscription op should fit");
+    let WalletFundResponseBody {
+        funded_tx: ops,
+        transfer_proof,
+        ..
+    } = node
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            tx_builder,
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
+            priority_fee_percent: 0,
+        })
+        .await
+        .expect("inscription should be funded");
+    let tx_hash = ops.hash();
+    let op_proofs = OpProofs::from([
+        OpProof::ChannelInscribe(ChannelInscribeProof::new(
+            channel_signing_key().sign_payload(tx_hash.as_signing_bytes()),
+            step_proofs,
+        )),
+        transfer_proof.expect("funding at non-zero gas prices should add a transfer"),
+    ]);
+    let signed_tx = SignedOps::from_parts(ops, op_proofs).expect("funded tx should be valid");
+    node.submit_transaction(&signed_tx)
+        .await
+        .expect("inscription should be submitted");
+    wait_for_tx_inclusion(block_stream, tx_hash, "inscription").await;
 }
 
 // Creates a channel with an inscription the node's wallet funds from

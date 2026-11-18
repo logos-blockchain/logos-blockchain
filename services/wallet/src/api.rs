@@ -9,7 +9,7 @@ use lb_core::{
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{NoteCommitment, NoteNullifier},
-        ops::channel::ChannelId,
+        ops::channel::{ChannelId, program_step::ProgramSpendWitness},
         transactions::{
             MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
             tx_list::ops::OpsContext,
@@ -30,8 +30,9 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    AgedNote, ChannelStep, ChannelStepRequest, ChannelWithdrawal, LeaderAgedNotesInfo, TipResponse,
-    WalletMsg, WalletServiceError, WalletServiceSettings,
+    AgedNote, BuiltProgramStep, ChannelStep, ChannelStepRequest, ChannelWithdrawal,
+    LeaderAgedNotesInfo, ProgramSpendRequest, ProgramStepRequest, TipResponse, WalletMsg,
+    WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -293,6 +294,41 @@ where
             .send(WalletMsg::ProveChannelStep {
                 tip,
                 request,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// A program step consuming notes of a program the wallet follows in a
+    /// channel.
+    pub async fn build_program_step(
+        &self,
+        tip: Option<HeaderId>,
+        request: ProgramStepRequest,
+    ) -> Result<TipResponse<BuiltProgramStep>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::BuildProgramStep {
+                tip,
+                request,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// The `ZkProgramSpend` witness of a program step of an inscription.
+    pub async fn program_spend_witness(
+        &self,
+        tip: Option<HeaderId>,
+        request: ProgramSpendRequest,
+    ) -> Result<TipResponse<ProgramSpendWitness>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ProgramSpendWitness {
+                tip,
+                request: Box::new(request),
                 resp_tx,
             })
             .await?;

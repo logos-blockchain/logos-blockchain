@@ -264,6 +264,18 @@ pub struct SpendOutputFields {
 }
 
 impl SpendInputFields {
+    #[must_use]
+    pub const fn of(note: &Note) -> Self {
+        Self {
+            active: true,
+            value: note.value,
+            nonce: note.nonce,
+            public_key: note.public_key,
+            stake_public_key: note.stake_public_key,
+            data: note.data,
+        }
+    }
+
     // The circuit derives the public key of every input.
     #[must_use]
     pub fn inactive() -> Self {
@@ -304,6 +316,23 @@ impl SpendOutputFields {
             data: note.data,
         }
     }
+}
+
+// The `program_step_id` of a spend of the notes `inputs` creating `outputs`.
+#[must_use]
+pub fn program_step_id_of(inputs: &[Note], outputs: &[Note]) -> Fr {
+    program_step_id(
+        &core::array::from_fn(|i| {
+            inputs
+                .get(i)
+                .map_or_else(SpendInputFields::inactive, SpendInputFields::of)
+        }),
+        &core::array::from_fn(|j| {
+            outputs
+                .get(j)
+                .map_or_else(SpendOutputFields::inactive, SpendOutputFields::of)
+        }),
+    )
 }
 
 #[must_use]

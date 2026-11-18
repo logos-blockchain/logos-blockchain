@@ -44,6 +44,9 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::MEMPOOL_VIEW => crate::api::handlers::mempool_view, mempool_view::<MempoolStorageAdapter, RuntimeServiceId>;
             get lb_http_api_common::paths::CHANNEL => crate::api::handlers::channel, channel::<RuntimeServiceId>;
             post lb_http_api_common::paths::CHANNEL_STEP => crate::api::handlers::channel_step, channel_step::<WalletService, RuntimeServiceId>;
+            post lb_http_api_common::paths::CHANNEL_PROGRAM_STEP => crate::api::handlers::channel_program_step, channel_program_step::<WalletService, RuntimeServiceId>;
+            post lb_http_api_common::paths::CHANNEL_PROGRAM_STEP_PROVE => crate::api::handlers::channel_program_step_prove, channel_program_step_prove::<WalletService, RuntimeServiceId>;
+            post lb_http_api_common::paths::PROGRAM_REGISTER => crate::api::handlers::program_register, program_register::<WalletService, MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::CHANNEL_WITHDRAW => crate::api::handlers::channel_withdraw, channel_withdraw::<WalletService, MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::CHANNEL_DEPOSIT => crate::api::handlers::channel_deposit, channel_deposit::<WalletService, MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::SDP_POST_DECLARATION => crate::api::handlers::post_declaration, post_declaration::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;

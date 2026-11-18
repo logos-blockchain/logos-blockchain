@@ -6,11 +6,11 @@ use lb_core::{
         note_set::NoteSetIndex,
         notes::{InputNullifiers, NoteCommitment, OutputCommitments, ProgramId},
         ops::{
-            ZkTransferProof,
+            ProgramNoteOpening, ZkTransferProof,
             channel::{
                 ChannelId,
-                inscribe::{Inscription, Step, UserStep, user_step_id},
-                program_step::{ProgramDeposit, program_deposit_id},
+                inscribe::{Inscription, InscriptionOp, Step, UserStep, user_step_id},
+                program_step::{ProgramDeposit, ProgramStep, program_deposit_id},
                 withdraw::ChannelWithdrawOp,
             },
         },
@@ -59,6 +59,46 @@ pub struct ChannelStep {
     pub step: Step,
     pub proof: ZkTransferProof,
     pub outputs: Vec<Note>,
+}
+
+/// A program step a sequencer asks its wallet to build from the notes of the
+/// program it holds in a channel.
+#[derive(Debug)]
+pub struct ProgramStepRequest {
+    pub channel_id: ChannelId,
+    pub program_id: ProgramId,
+    /// The notes of the program the step consumes, possibly none.
+    pub inputs: Vec<NoteCommitment>,
+    /// The notes of the program the step creates.
+    pub program_outputs: Vec<ProgramOutput>,
+    /// The user notes the step pays, by holder key.
+    pub payments: Vec<(ZkPublicKey, Value)>,
+    pub inscription: Inscription,
+}
+
+#[derive(Debug)]
+pub struct ProgramOutput {
+    pub value: Value,
+    pub stake_public_key: ZkPublicKey,
+    pub data: Fr,
+}
+
+/// A program step with the openings of the notes it creates.
+#[derive(Debug)]
+pub struct BuiltProgramStep {
+    pub step: ProgramStep,
+    pub program_notes: Vec<ProgramNoteOpening>,
+    pub paid_notes: Vec<Note>,
+}
+
+/// The program step at `step_index` of `op`, over all its mini-blocks, with
+/// the openings of the notes it creates.
+#[derive(Debug)]
+pub struct ProgramSpendRequest {
+    pub op: InscriptionOp,
+    pub step_index: usize,
+    pub program_notes: Vec<ProgramNoteOpening>,
+    pub paid_notes: Vec<Note>,
 }
 
 /// A withdrawal of channel notes of the wallet, each released as a ledger

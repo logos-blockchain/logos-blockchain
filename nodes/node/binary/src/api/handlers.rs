@@ -28,9 +28,14 @@ use lb_core::{
     mantle::{
         Note, Op, TxHash,
         channel::{ChannelState, channel_note_set},
+        gas::GasCost,
         ledger::verification_mode::StandardMode,
         notes::NoteNullifier,
-        ops::channel::{ChannelId, deposit::DepositOp},
+        ops::{
+            channel::{ChannelId, deposit::DepositOp},
+            program::ProgramRegisterOp,
+        },
+        programs::derive_program_id,
         traits::Hashable,
         transactions::{
             MantleTxBuilder, builder::ZkTransferOpening, genesis_tx::ChainId, states::Unverified,
@@ -47,6 +52,8 @@ use lb_http_api_common::{
         channel::{
             ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
             ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
+            ProgramRegisterRequestBody, ProgramRegisterResponseBody, ProgramStepProveRequestBody,
+            ProgramStepProveResponseBody, ProgramStepRequestBody, ProgramStepResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
@@ -73,7 +80,7 @@ use lb_tx_service::{
 };
 use lb_version::BuildVersionInfo;
 use lb_wallet_service::{
-    ChannelStepRequest, ProgramPayment,
+    ChannelStepRequest, ProgramOutput, ProgramPayment, ProgramSpendRequest, ProgramStepRequest,
     api::{WalletApi, WalletServiceData, added_nullifiers},
 };
 use overwatch::{
@@ -103,10 +110,7 @@ use crate::{
 
 const TARGET: &str = node::api::ROOT;
 
-fn validate_max_tx_fee(
-    tx_fee: lb_core::mantle::gas::GasCost,
-    max_tx_fee: lb_core::mantle::gas::GasCost,
-) -> Result<(), DynError> {
+fn validate_max_tx_fee(tx_fee: GasCost, max_tx_fee: GasCost) -> Result<(), DynError> {
     if tx_fee > max_tx_fee {
         return Err(overwatch::DynError::from(format!(
             "tx_fee({tx_fee}) exceeds max_tx_fee({max_tx_fee})"
@@ -121,7 +125,7 @@ fn validate_max_tx_fee(
 async fn check_funded_tx_fee<WalletService, RuntimeServiceId>(
     wallet: &WalletApi<WalletService, RuntimeServiceId>,
     funded: &MantleTxBuilder,
-    max_tx_fee: lb_core::mantle::gas::GasCost,
+    max_tx_fee: GasCost,
     reserved: Vec<NoteNullifier>,
 ) -> Result<(), DynError>
 where
@@ -1263,46 +1267,268 @@ where
                 return Err(error);
             }
         };
-        // A funding that fails releases the notes of `tx_builder` in the
-        // wallet.
-        let lb_wallet_service::TipResponse {
-            tip,
-            response: funded_tx_builder,
-        } = wallet
-            .fund_tx(
-                // the split names the spend root of this tip
-                Some(split_tip),
-                tx_builder.clone(),
-                req.change_public_key,
-                req.funding_public_keys,
-                None,
-                Some(req.max_tx_fee),
-            )
-            .await?;
-
-        let reserved = added_nullifiers(&tx_builder, &funded_tx_builder)
-            .into_iter()
-            .chain(split_builder.nullifiers_consumed())
-            .collect();
-        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
-
-        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
-        let tx_hash = signed_tx.hash();
-
-        mempool::add_tx::<
-            Libp2pNetworkBackend,
-            MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
-            StorageAdapter,
-            ValidatedTx,
-            NtpTimeBackend,
-            RuntimeServiceId,
-        >(&handle, signed_tx, Hashable::hash)
+        // the split names the spend root of this tip
+        let tx_hash = fund_sign_submit(
+            &handle,
+            &wallet,
+            Some(split_tip),
+            tx_builder,
+            req.change_public_key,
+            req.funding_public_keys,
+            req.max_tx_fee,
+            split_builder.nullifiers_consumed().collect(),
+        )
         .await?;
 
         Ok::<_, overwatch::DynError>(ChannelDepositResponseBody {
             hash: tx_hash,
             holder_note,
         })
+    })
+}
+
+// Funds `tx_builder` from the wallet within `max_tx_fee`, signs it and submits
+// it to the mempool. A funding that fails releases the notes of `tx_builder` in
+// the wallet; a fee over the maximum also releases `also_reserved`, the notes
+// the caller reserved for it.
+#[expect(clippy::too_many_arguments, reason = "the funding inputs")]
+async fn fund_sign_submit<WalletService, StorageAdapter, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    wallet: &WalletApi<WalletService, RuntimeServiceId>,
+    tip: Option<HeaderId>,
+    tx_builder: MantleTxBuilder,
+    change_public_key: lb_key_management_system_service::keys::ZkPublicKey,
+    funding_public_keys: Vec<lb_key_management_system_service::keys::ZkPublicKey>,
+    max_tx_fee: GasCost,
+    also_reserved: Vec<NoteNullifier>,
+) -> Result<TxHash, DynError>
+where
+    WalletService: WalletServiceData,
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
+            BlockId = HeaderId,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Clone
+        + Display
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
+                StorageAdapter,
+                NtpTimeBackend,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    let lb_wallet_service::TipResponse {
+        tip,
+        response: funded_tx_builder,
+    } = wallet
+        .fund_tx(
+            tip,
+            tx_builder.clone(),
+            change_public_key,
+            funding_public_keys,
+            None,
+            Some(max_tx_fee),
+        )
+        .await?;
+    let reserved = added_nullifiers(&tx_builder, &funded_tx_builder)
+        .into_iter()
+        .chain(also_reserved)
+        .collect();
+    check_funded_tx_fee(wallet, &funded_tx_builder, max_tx_fee, reserved).await?;
+
+    let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+    let tx_hash = signed_tx.hash();
+    mempool::add_tx::<
+        Libp2pNetworkBackend,
+        MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
+        StorageAdapter,
+        ValidatedTx,
+        NtpTimeBackend,
+        RuntimeServiceId,
+    >(handle, signed_tx, Hashable::hash)
+    .await?;
+    Ok(tx_hash)
+}
+
+#[utoipa::path(
+    post,
+    path = paths::CHANNEL_PROGRAM_STEP,
+    responses(
+        (status = 200, description = "A program step with the openings of its outputs"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn channel_program_step<WalletService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ProgramStepRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+        let request = ProgramStepRequest {
+            channel_id: req.channel_id,
+            program_id: req.program_id,
+            inputs: req.inputs,
+            program_outputs: req
+                .program_outputs
+                .into_iter()
+                .map(|output| ProgramOutput {
+                    value: output.value,
+                    stake_public_key: output.stake_public_key,
+                    data: output.data,
+                })
+                .collect(),
+            payments: req
+                .payments
+                .into_iter()
+                .map(|payment| (payment.public_key, payment.value))
+                .collect(),
+            inscription: req.inscription,
+        };
+        let lb_wallet_service::TipResponse { tip, response } =
+            wallet.build_program_step(req.tip, request).await?;
+        Ok::<_, DynError>(ProgramStepResponseBody {
+            tip,
+            step: response.step,
+            program_notes: response.program_notes,
+            paid_notes: response.paid_notes,
+        })
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = paths::CHANNEL_PROGRAM_STEP_PROVE,
+    responses(
+        (status = 200, description = "The ZkProgramSpend of a program step"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn channel_program_step_prove<WalletService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ProgramStepProveRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+        let witness = wallet
+            .program_spend_witness(
+                Some(req.tip),
+                ProgramSpendRequest {
+                    op: req.op,
+                    step_index: req.step_index,
+                    program_notes: req.program_notes,
+                    paid_notes: req.paid_notes,
+                },
+            )
+            .await?
+            .response;
+        // Proving is CPU-bound, so it stays off the async workers.
+        let spend_proof = tokio::task::spawn_blocking(move || witness.prove())
+            .await?
+            .map_err(|error| DynError::from(format!("ZkProgramSpend proving failed: {error:?}")))?;
+        Ok::<_, DynError>(ProgramStepProveResponseBody { spend_proof })
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = paths::PROGRAM_REGISTER,
+    responses(
+        (status = 200, description = "Submit a program registration"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn program_register<WalletService, StorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ProgramRegisterRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
+            BlockId = HeaderId,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Clone
+        + Display
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
+                StorageAdapter,
+                NtpTimeBackend,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+        let program_id = derive_program_id(&req.verification_key);
+        let tx_builder =
+            MantleTxBuilder::new().push_op(Op::ProgramRegister(ProgramRegisterOp {
+                verification_key: req.verification_key,
+            }))?;
+        let hash = fund_sign_submit(
+            &handle,
+            &wallet,
+            req.tip,
+            tx_builder,
+            req.change_public_key,
+            req.funding_public_keys,
+            req.max_tx_fee,
+            Vec::new(),
+        )
+        .await?;
+        Ok::<_, DynError>(ProgramRegisterResponseBody { hash, program_id })
     })
 }
 
@@ -1367,35 +1593,17 @@ where
         let outputs = withdrawal.opening.outputs.clone();
         let tx_builder = MantleTxBuilder::new()
             .push_op_with_opening(Op::ChannelWithdraw(withdrawal.op), withdrawal.opening)?;
-        // The withdrawal names the channel root of this tip. A funding that
-        // fails releases the notes of `tx_builder` in the wallet.
-        let lb_wallet_service::TipResponse {
-            tip,
-            response: funded_tx_builder,
-        } = wallet
-            .fund_tx(
-                Some(spend_tip),
-                tx_builder.clone(),
-                req.change_public_key,
-                req.funding_public_keys,
-                None,
-                Some(req.max_tx_fee),
-            )
-            .await?;
-        let reserved = added_nullifiers(&tx_builder, &funded_tx_builder);
-        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
-
-        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
-        let tx_hash = signed_tx.hash();
-
-        mempool::add_tx::<
-            Libp2pNetworkBackend,
-            MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
-            StorageAdapter,
-            ValidatedTx,
-            NtpTimeBackend,
-            RuntimeServiceId,
-        >(&handle, signed_tx, Hashable::hash)
+        // The withdrawal names the channel root of this tip.
+        let tx_hash = fund_sign_submit(
+            &handle,
+            &wallet,
+            Some(spend_tip),
+            tx_builder,
+            req.change_public_key,
+            req.funding_public_keys,
+            req.max_tx_fee,
+            Vec::new(),
+        )
         .await?;
 
         Ok::<_, overwatch::DynError>(ChannelWithdrawResponseBody {

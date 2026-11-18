@@ -5,13 +5,15 @@ use lb_core::{
         gas::GasCost,
         notes::{NoteCommitment, ProgramId},
         ops::{
-            ZkTransferProof,
+            ProgramNoteOpening, ZkProgramSpendProof, ZkTransferProof,
             channel::{
                 ChannelId,
                 deposit::Metadata,
-                inscribe::{Inscription, Step, serde_inscription},
+                inscribe::{Inscription, InscriptionOp, Step, serde_inscription},
+                program_step::ProgramStep,
             },
         },
+        programs::ProgramVerificationKey,
         transactions::hash::TxHash,
     },
 };
@@ -109,4 +111,73 @@ pub struct ChannelStepResponseBody {
     /// The openings of the notes the step creates, the change last. A payee
     /// whose wallet is not this node's imports its note to spend it.
     pub outputs: Vec<Note>,
+}
+
+/// A program step consuming notes of a program this node's wallet follows in
+/// the channel.
+#[derive(Serialize, Deserialize)]
+pub struct ProgramStepRequestBody {
+    pub tip: Option<HeaderId>,
+    pub channel_id: ChannelId,
+    #[serde(with = "serde_fr")]
+    pub program_id: ProgramId,
+    /// The notes of the program the step consumes, possibly none.
+    pub inputs: Vec<NoteCommitment>,
+    /// The notes of the program the step creates.
+    pub program_outputs: Vec<ProgramOutputBody>,
+    /// The user notes the step pays.
+    pub payments: Vec<ChannelPayment>,
+    #[serde(with = "serde_inscription")]
+    pub inscription: Inscription,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProgramOutputBody {
+    pub value: Value,
+    pub stake_public_key: ZkPublicKey,
+    #[serde(with = "serde_fr")]
+    pub data: Fr,
+}
+
+/// The step, for the sequencer to place in its inscription, and the openings
+/// of the notes it creates. `tip` is the one to prove the step at.
+#[derive(Serialize, Deserialize)]
+pub struct ProgramStepResponseBody {
+    pub tip: HeaderId,
+    pub step: ProgramStep,
+    pub program_notes: Vec<ProgramNoteOpening>,
+    pub paid_notes: Vec<Note>,
+}
+
+/// The program step at `step_index` of `op`, over all its mini-blocks, with
+/// the openings its build returned.
+#[derive(Serialize, Deserialize)]
+pub struct ProgramStepProveRequestBody {
+    pub tip: HeaderId,
+    pub op: InscriptionOp,
+    pub step_index: usize,
+    pub program_notes: Vec<ProgramNoteOpening>,
+    pub paid_notes: Vec<Note>,
+}
+
+/// The `ZkProgramSpend` of the step, bound to the id of its inscription.
+#[derive(Serialize, Deserialize)]
+pub struct ProgramStepProveResponseBody {
+    pub spend_proof: ZkProgramSpendProof,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProgramRegisterRequestBody {
+    pub tip: Option<HeaderId>,
+    pub verification_key: ProgramVerificationKey,
+    pub change_public_key: ZkPublicKey,
+    pub funding_public_keys: Vec<ZkPublicKey>,
+    pub max_tx_fee: GasCost,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProgramRegisterResponseBody {
+    pub hash: TxHash,
+    #[serde(with = "serde_fr")]
+    pub program_id: ProgramId,
 }
