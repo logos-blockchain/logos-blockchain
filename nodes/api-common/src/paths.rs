@@ -56,6 +56,9 @@ pub mod wallet {
     pub const TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS: &str =
         "/wallet/transactions/transfer-funds-to-address";
     pub const IMPORT_DELIVERY_MESSAGES: &str = "/wallet/delivery-messages/import";
+    pub const REDELIVER_NOTE: &str = "/wallet/notes/redeliver";
+    pub const NAME_STAKING_KEY: &str = "/wallet/staking-keys/name";
+    pub const RESCAN: &str = "/wallet/rescan";
 }
 
 pub mod admin {

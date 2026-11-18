@@ -30,8 +30,9 @@ use lb_http_api_common::{
             balance::WalletBalanceResponseBody,
             delivery::{
                 WalletAddressResponseBody, WalletImportDeliveryMessagesRequestBody,
-                WalletImportDeliveryMessagesResponseBody, WalletTransferFundsToAddressRequestBody,
-                WalletTransferFundsToAddressResponseBody,
+                WalletImportDeliveryMessagesResponseBody, WalletNameStakingKeyRequestBody,
+                WalletRedeliverRequestBody, WalletRedeliverResponseBody,
+                WalletTransferFundsToAddressRequestBody, WalletTransferFundsToAddressResponseBody,
             },
             fund::{WalletFundRequestBody, WalletFundResponseBody},
             import::WalletImportNoteRequestBody,
@@ -45,8 +46,8 @@ use lb_http_api_common::{
         MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
         MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{
-            ADDRESS, BALANCE, FUND, IMPORT_DELIVERY_MESSAGES, IMPORT_NOTE,
-            TRANSACTIONS_TRANSFER_FUNDS, TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS,
+            ADDRESS, BALANCE, FUND, IMPORT_DELIVERY_MESSAGES, IMPORT_NOTE, NAME_STAKING_KEY,
+            REDELIVER_NOTE, TRANSACTIONS_TRANSFER_FUNDS, TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS,
         },
     },
     queries::BlocksStreamQuery,
@@ -849,6 +850,33 @@ impl CommonHttpClient {
     ) -> Result<WalletImportDeliveryMessagesResponseBody, Error> {
         let request_url = base_url
             .join(IMPORT_DELIVERY_MESSAGES.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Ask the node's wallet to deliver again a note it paid.
+    pub async fn redeliver_note(
+        &self,
+        base_url: Url,
+        body: WalletRedeliverRequestBody,
+    ) -> Result<WalletRedeliverResponseBody, Error> {
+        let request_url = base_url
+            .join(REDELIVER_NOTE.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Name a staking key the node's wallet asked a sender to use in place of
+    /// its public key.
+    pub async fn name_staking_key(
+        &self,
+        base_url: Url,
+        body: WalletNameStakingKeyRequestBody,
+    ) -> Result<(), Error> {
+        let request_url = base_url
+            .join(NAME_STAKING_KEY.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

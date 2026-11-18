@@ -246,7 +246,7 @@ pub mod import {
 pub mod delivery {
     use lb_core::{
         header::HeaderId,
-        mantle::{Note, TxHash, Value},
+        mantle::{Note, TxHash, Value, notes::NoteCommitment},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use serde::{Deserialize, Serialize};
@@ -265,6 +265,10 @@ pub mod delivery {
         pub funding_public_keys: Vec<ZkPublicKey>,
         /// The Bech32m address of the recipient.
         pub recipient_address: String,
+        /// The staking key the recipient named, when it asked for another
+        /// than its public key.
+        #[serde(default)]
+        pub recipient_stake_public_key: Option<ZkPublicKey>,
         pub amount: Value,
     }
 
@@ -286,6 +290,30 @@ pub mod delivery {
     #[derive(Serialize, Deserialize)]
     pub struct WalletImportDeliveryMessagesRequestBody {
         pub messages: Vec<String>,
+    }
+
+    /// A note this node's wallet paid, to deliver again to the address of its
+    /// recipient.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletRedeliverRequestBody {
+        pub commitment: NoteCommitment,
+        pub recipient_address: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletRedeliverResponseBody {
+        /// A new delivery message of the note, in hex, when the address holds
+        /// an encryption key.
+        pub delivery_message: Option<String>,
+        /// The note in the clear, when the address holds no encryption key.
+        pub recipient_note: Option<Note>,
+    }
+
+    /// A staking key this node's wallet asked a sender to use in place of its
+    /// public key.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletNameStakingKeyRequestBody {
+        pub staking_key: ZkPublicKey,
     }
 
     #[derive(Serialize, Deserialize)]

@@ -23,17 +23,26 @@ fn decapsulation_key(key: &ZkKey) -> DecapsulationKey {
 }
 
 // The note `message` delivers to the holder of `sk_enc` and `public_key`:
-// the ciphertext opens, and its contents under `public_key`, as public key
-// and as staking key, recompute the commitment of the message. A sender gives
-// a delivered note the public key of its recipient as staking key.
+// the ciphertext opens, and its contents under `public_key` recompute the
+// commitment of the message. The ciphertext carries no key: a sender gives a
+// delivered note the public key of its recipient as staking key, unless the
+// recipient named another, so `public_key` is tried as staking key first,
+// then each of `staking_keys`.
 fn open_delivery_message(
     sk_enc: &DecapsulationKey,
     public_key: ZkPublicKey,
+    staking_keys: &[ZkPublicKey],
     message: &DeliveryMessage,
 ) -> Option<Note> {
     let (value, nonce) = decrypt_note(sk_enc, &message.commitment, &message.ciphertext)?;
-    let note = Note::new(value, fr_from_bytes(&nonce).ok()?, public_key);
-    (fr_to_bytes(&note.commitment().0) == message.commitment).then_some(note)
+    let nonce = fr_from_bytes(&nonce).ok()?;
+    core::iter::once(public_key)
+        .chain(staking_keys.iter().copied())
+        .map(|stake_public_key| Note {
+            stake_public_key,
+            ..Note::new(value, nonce, public_key)
+        })
+        .find(|note| fr_to_bytes(&note.commitment().0) == message.commitment)
 }
 
 /// Gives the key senders encrypt the notes of this ZK key to, `pk_enc`.
@@ -76,9 +85,11 @@ impl SecureKeyOperator for DeriveNoteEncryptionKey {
 ///
 /// The result holds, for each message in order, the note it delivers to this
 /// key, or `None` when the message is for another key, was altered, or opens
-/// to a note committed to other keys.
+/// to a note committed to other keys. `staking_keys` are the staking keys the
+/// holder named to senders, tried after its own public key.
 pub struct OpenDeliveryMessages {
     messages: Vec<DeliveryMessage>,
+    staking_keys: Vec<ZkPublicKey>,
     result_channel: oneshot::Sender<Vec<Option<Note>>>,
 }
 
@@ -92,10 +103,12 @@ impl OpenDeliveryMessages {
     #[must_use]
     pub const fn new(
         messages: Vec<DeliveryMessage>,
+        staking_keys: Vec<ZkPublicKey>,
         result_channel: oneshot::Sender<Vec<Option<Note>>>,
     ) -> Self {
         Self {
             messages,
+            staking_keys,
             result_channel,
         }
     }
@@ -109,13 +122,14 @@ impl SecureKeyOperator for OpenDeliveryMessages {
     async fn execute(self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
         let Self {
             messages,
+            staking_keys,
             result_channel,
         } = *self;
         let sk_enc = decapsulation_key(key);
         let public_key = key.to_public_key();
         let notes = messages
             .iter()
-            .map(|message| open_delivery_message(&sk_enc, public_key, message))
+            .map(|message| open_delivery_message(&sk_enc, public_key, &staking_keys, message))
             .collect();
         if result_channel.send(notes).is_err() {
             debug!(target: LOG_TARGET, "Failed to send result via channel");
@@ -142,8 +156,16 @@ mod tests {
     }
 
     async fn open(key: &ZkKey, messages: Vec<DeliveryMessage>) -> Vec<Option<Note>> {
+        open_with(key, messages, vec![]).await
+    }
+
+    async fn open_with(
+        key: &ZkKey,
+        messages: Vec<DeliveryMessage>,
+        staking_keys: Vec<ZkPublicKey>,
+    ) -> Vec<Option<Note>> {
         let (sender, receiver) = oneshot::channel();
-        key.execute(OpenDeliveryMessages::new(messages, sender))
+        key.execute(OpenDeliveryMessages::new(messages, staking_keys, sender))
             .await
             .unwrap();
         receiver.await.unwrap()
@@ -205,6 +227,49 @@ mod tests {
         assert_eq!(
             open(&recipient, messages).await,
             vec![Some(own), None, None, None, None]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_note_under_a_named_staking_key_is_owned_once_the_key_is_named() {
+        let recipient = ZkKey::new(Fr::from(7u64));
+        let staking_key = ZkKey::new(Fr::from(9u64)).to_public_key();
+        let pk_enc = encryption_key(&recipient).await;
+        let note = Note {
+            stake_public_key: staking_key,
+            ..Note::new(1000, Fr::from(3u64), recipient.to_public_key())
+        };
+        let message = deliver(&note, &pk_enc);
+
+        assert_eq!(open(&recipient, vec![message.clone()]).await, vec![None]);
+        // Another named key does not help, the right one does.
+        let other = ZkKey::new(Fr::from(10u64)).to_public_key();
+        assert_eq!(
+            open_with(&recipient, vec![message.clone()], vec![other]).await,
+            vec![None]
+        );
+        assert_eq!(
+            open_with(&recipient, vec![message], vec![other, staking_key]).await,
+            vec![Some(note)]
+        );
+    }
+
+    // Two outputs of one Operation paid to the same key: each has its own
+    // nonce, commitment and ciphertext, and both are owned.
+    #[tokio::test]
+    async fn two_notes_paid_to_one_key_in_a_batch_are_both_owned() {
+        let recipient = ZkKey::new(Fr::from(7u64));
+        let pk_enc = encryption_key(&recipient).await;
+        let first = Note::new(1000, Fr::from(3u64), recipient.to_public_key());
+        let second = Note::new(1000, Fr::from(4u64), recipient.to_public_key());
+
+        assert_eq!(
+            open(
+                &recipient,
+                vec![deliver(&first, &pk_enc), deliver(&second, &pk_enc)]
+            )
+            .await,
+            vec![Some(first), Some(second)]
         );
     }
 }
