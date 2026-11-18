@@ -1,4 +1,8 @@
-use std::sync::LazyLock;
+use std::{
+    fmt::{self, Debug, Formatter},
+    hash::{self, Hash},
+    sync::{Arc, LazyLock, OnceLock},
+};
 
 use ark_ff::{AdditiveGroup as _, PrimeField as _};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
@@ -30,42 +34,98 @@ static PROGRAM_STEP_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
 });
 
 // Alpha G1, Beta Gamma Delta G2, 4 IC G1, compressed.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ProgramVerificationKey(CompressedGroth16VerificationKey);
+//
+// The key is the compressed points alone: two keys of the same points are
+// equal and hash alike, whether `ProgramVerificationKey::groth16` has kept
+// their decompression or not.
+#[derive(Clone)]
+pub struct ProgramVerificationKey {
+    compressed: CompressedGroth16VerificationKey,
+    groth16: OnceLock<Arc<Groth16VerificationKey>>,
+}
 
 impl ProgramVerificationKey {
     pub fn new(key: CompressedGroth16VerificationKey) -> Result<Self, ProgramKeyError> {
         if key.ic.len() != PROGRAM_KEY_IC_LEN {
             return Err(ProgramKeyError::IcCount(key.ic.len()));
         }
-        Ok(Self(key))
+        Ok(Self::from_compressed(key))
+    }
+
+    const fn from_compressed(compressed: CompressedGroth16VerificationKey) -> Self {
+        Self {
+            compressed,
+            groth16: OnceLock::new(),
+        }
     }
 
     #[must_use]
     pub const fn as_compressed(&self) -> &CompressedGroth16VerificationKey {
-        &self.0
+        &self.compressed
     }
 
+    /// Decompresses every point and checks it is on its curve, in its prime
+    /// order subgroup and not the point at infinity.
     pub fn to_groth16(&self) -> Result<Groth16VerificationKey, ProgramKeyError> {
-        Groth16VerificationKey::try_from(&self.0).map_err(|_| ProgramKeyError::InvalidPoint)
+        Groth16VerificationKey::try_from(&self.compressed)
+            .map_err(|_| ProgramKeyError::InvalidPoint)
+    }
+
+    /// The key [`Self::to_groth16`] gives, decompressed and checked on the
+    /// first call and kept for the next ones, clones included: the
+    /// verification of a `PROGRAM_REGISTER` and its execution decompress the
+    /// points once. A key that fails the check keeps nothing and fails again.
+    pub fn groth16(&self) -> Result<&Groth16VerificationKey, ProgramKeyError> {
+        if let Some(key) = self.groth16.get() {
+            return Ok(key);
+        }
+        let key = self.to_groth16()?;
+        Ok(self.groth16.get_or_init(|| Arc::new(key)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn keeps_groth16(&self) -> bool {
+        self.groth16.get().is_some()
     }
 
     #[must_use]
     pub fn to_bytes(&self) -> [u8; PROGRAM_KEY_SIZE] {
-        self.0
+        self.compressed
             .to_bytes()
             .try_into()
             .expect("a program key encodes to its size")
     }
 
     /// Reads the bytes alone: whether the points are valid is left to
-    /// [`Self::to_groth16`], called when a `PROGRAM_REGISTER` is verified.
+    /// [`Self::groth16`], called when a `PROGRAM_REGISTER` is verified.
     pub fn try_from_bytes(bytes: &[u8; PROGRAM_KEY_SIZE]) -> Result<Self, ProgramKeyError> {
         let key = CompressedGroth16VerificationKey::from_bytes(bytes)
             .expect("a program key size holds 4 ic points");
         key.check_encoding()
             .map_err(|_| ProgramKeyError::NonCanonicalPoint)?;
-        Ok(Self(key))
+        Ok(Self::from_compressed(key))
+    }
+}
+
+impl PartialEq for ProgramVerificationKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.compressed == other.compressed
+    }
+}
+
+impl Eq for ProgramVerificationKey {}
+
+impl Hash for ProgramVerificationKey {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.compressed.hash(state);
+    }
+}
+
+impl Debug for ProgramVerificationKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ProgramVerificationKey")
+            .field(&self.compressed)
+            .finish()
     }
 }
 
@@ -146,7 +206,7 @@ pub struct RegisteredProgram {
 
 impl RegisteredProgram {
     pub fn new(key: ProgramVerificationKey) -> Result<Self, ProgramKeyError> {
-        let groth16_key = key.to_groth16()?;
+        let groth16_key = key.groth16()?.clone();
         let alpha_beta = groth16_key.alpha_beta();
         Ok(Self {
             key,
