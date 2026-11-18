@@ -26,7 +26,7 @@
     security_param: 30
     slot_activation_coeff:
       numerator: 1
-      denominator: 20
+      denominator: 30
     learning_rate: 0.5
     uncle_reference_window_in_block: 12
     max_uncles: 4
@@ -108,18 +108,31 @@
       ema_smoothing_factor:
         numerator: 1
         denominator: 2
-    # The block rewards: the stake target, the scale of the emission's weight, the
-    # blocks the pooled fees are averaged over, the weight of those fees, a
-    # block's emission in full, and the Blend nodes' share of a reward, the leader
-    # taking the rest.
+    # The block rewards: I_max and I_min, the stake target and the target of
+    # the pooled fees as shares of the supply cap, the weights α_d and α_a,
+    # the blocks the pooled fees are averaged over, and the Blend nodes' share
+    # of a reward, the leader taking the rest. The node derives the values of a
+    # block from them, the slot duration and the slot activation coefficient.
     block_rewards:
-      stake_target: 3000000000000000000
-      emission_factor_scale: 120000000000000000
+      max_emission_rate:
+        numerator: 1
+        denominator: 100
+      min_emission_rate:
+        numerator: 0
+        denominator: 1
+      stake_target:
+        numerator: 3
+        denominator: 10
+      pooled_fees_target:
+        numerator: 1
+        denominator: 1
+      stake_deviation_weight:
+        numerator: 1
+        denominator: 4
+      pooled_fees_weight:
+        numerator: 1
+        denominator: 1
       pooled_fees_window: 120
-      fee_average_numerator: 10512
-      max_emission_per_block:
-        numerator: 62500000000000
-        denominator: 657
       blend_share:
         numerator: 6
         denominator: 10
