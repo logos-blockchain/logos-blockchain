@@ -91,6 +91,16 @@ impl PartialEq for ImtError {
 impl Eq for ImtError {}
 
 impl ImtError {
+    /// Whether the error comes from the store the tree is read from or written
+    /// to, and so says nothing of the nullifiers the tree was given.
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::Storage(_) | Self::MissingNode(_) | Self::Corrupted(_)
+        )
+    }
+
     fn storage(error: impl Error + Send + Sync + 'static) -> Self {
         Self::Storage(Arc::new(error))
     }

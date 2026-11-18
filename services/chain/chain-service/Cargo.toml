@@ -44,6 +44,7 @@ utoipa                     = { features = ["macros"], optional = true, workspace
 
 [dev-dependencies]
 lb-core                       = { features = ["test-utils"], workspace = true }
+lb-imt                        = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-mmr                        = { workspace = true }
 lb-network-service            = { workspace = true }

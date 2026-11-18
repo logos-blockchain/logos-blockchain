@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display},
+    io,
     num::NonZero,
     sync::{Arc, Mutex},
 };
@@ -20,7 +21,7 @@ use lb_core::{
         channel::Channels,
         gas::{Gas, GasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
-        note_set::{CommitmentMmr, NoteSetIndex},
+        note_set::{CommitmentMmr, NoteSetError, NoteSetIndex},
         notes::{OutputCommitments, derive_note_nullifier},
         ops::{
             ZkTransferProof,
@@ -49,12 +50,13 @@ use lb_core::{
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
+use lb_imt::store::ImtError;
 use lb_key_management_system_keys::keys::{
     Ed25519Key, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey,
 };
 use lb_kv_store::MemKv;
 use lb_ledger::{
-    GENESIS_STAKE_SUPPLY, LedgerState,
+    GENESIS_STAKE_SUPPLY, LedgerError, LedgerState,
     config::{
         BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig,
         RewardPoWConfig, config_for_slot,
@@ -82,6 +84,7 @@ use tokio::{
 use crate::{
     BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
     CryptarchiaConsensusState, Error, LibInfo, OfflineGracePeriodConfig, TipEra,
+    api::{ApiError, apply_block_api_error},
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, go_online, process_block, store_immutable_blocks_index},
 };
@@ -765,6 +768,89 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
+/// A storage failure is no verdict on the block: it reaches the network as
+/// [`ApiError::Storage`], and the same block is applied once the storage
+/// recovers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_block_failing_to_be_stored_is_applied_once_the_storage_recovers() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, mut storage_rx) = mpsc::channel(10);
+    let (backend_tx, backend_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(backend_rx);
+    // Fails the first block write, and forwards every other request.
+    tokio::spawn(async move {
+        let mut failed = false;
+        while let Some(msg) = storage_rx.recv().await {
+            match msg {
+                StorageMsg::StoreBlockData { response_tx, .. } if !failed => {
+                    failed = true;
+                    drop(response_tx.send(Err("the disk is full".to_owned())));
+                }
+                msg => backend_tx.send(msg).await.unwrap(),
+            }
+        }
+    });
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    );
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let initial_info = cryptarchia.info();
+    let (id, slot) = (block.header().id(), block.header().slot());
+
+    let err = verify_and_process_block(
+        &mut cryptarchia,
+        block.clone(),
+        slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .err()
+    .expect("the block write fails");
+    assert!(matches!(
+        apply_block_api_error(err, id),
+        ApiError::Storage { id: failed, .. } if failed == id
+    ));
+    assert_eq!(cryptarchia.info(), initial_info);
+
+    verify_and_process_block(
+        &mut cryptarchia,
+        block,
+        slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .expect("the storage recovered");
+    assert_eq!(cryptarchia.tip(), id);
+}
+
+/// The nullifier tree reads its store while a block is applied: a failure there
+/// is a storage failure, while a nullifier the tree refuses is the block's.
+#[test]
+fn a_nullifier_store_failure_is_a_storage_error() {
+    let id = HeaderId::from([1; 32]);
+    let imt_error = |error| Error::Ledger(LedgerError::NoteSet(NoteSetError::Imt(error)));
+
+    let failure = ImtError::Storage(Arc::new(io::Error::other("the disk is gone")));
+    assert!(matches!(
+        apply_block_api_error(imt_error(failure), id),
+        ApiError::Storage { id: failed, .. } if failed == id
+    ));
+    assert!(matches!(
+        apply_block_api_error(imt_error(ImtError::Full), id),
+        ApiError::Unexpected(_)
+    ));
+}
+
 /// `tx`, carried by a block at `slot`.
 const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
     TxInBlock { tx, slot }
@@ -992,8 +1078,8 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
         panic!("expected the copy to be rejected");
     };
     assert!(matches!(
-        crate::api::apply_block_api_error(err, id),
-        crate::api::ApiError::InvalidOperationProof(block_id) if block_id == id
+        apply_block_api_error(err, id),
+        ApiError::InvalidOperationProof(block_id) if block_id == id
     ));
     assert_eq!(cryptarchia.tip(), genesis_id);
 
@@ -1120,8 +1206,8 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
         panic!("expected the copy to be rejected");
     };
     assert!(matches!(
-        crate::api::apply_block_api_error(err, id),
-        crate::api::ApiError::InvalidOperationProof(block_id) if block_id == id
+        apply_block_api_error(err, id),
+        ApiError::InvalidOperationProof(block_id) if block_id == id
     ));
     assert_eq!(cryptarchia.tip(), parent_id);
 
@@ -1160,7 +1246,7 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
         cryptarchia
             .verify_header(header.clone(), UncleHeaders::empty(), current_slot)
             .map(|_| ())
-            .map_err(crate::api::ApiError::from)
+            .map_err(ApiError::from)
     };
 
     check(header, slot).expect("the genuine header must pass");
@@ -1176,7 +1262,7 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     );
     assert!(matches!(
         check(&forged, slot),
-        Err(crate::api::ApiError::InvalidLeaderProof)
+        Err(ApiError::InvalidLeaderProof)
     ));
 
     let unknown_parent: HeaderId = [1; 32].into();
@@ -1188,14 +1274,14 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     );
     assert!(matches!(
         check(&orphan, slot),
-        Err(crate::api::ApiError::ParentMissing { parent, .. }) if parent == unknown_parent
+        Err(ApiError::ParentMissing { parent, .. }) if parent == unknown_parent
     ));
 
     // The forged header reaches this error only if the wallclock check runs
     // before the proof.
     assert!(matches!(
         check(&forged, Slot::genesis()),
-        Err(crate::api::ApiError::FutureBlock { block_slot, current_slot })
+        Err(ApiError::FutureBlock { block_slot, current_slot })
             if block_slot == slot && current_slot == Slot::genesis()
     ));
 }
@@ -1613,11 +1699,11 @@ fn a_block_overstating_its_reward_is_condemned_after_a_valid_proof() {
     let err = cryptarchia.try_apply_block(block, slot).err().unwrap();
     assert!(matches!(
         err,
-        Error::Ledger(lb_ledger::LedgerError::WrongRewardValue { .. })
+        Error::Ledger(LedgerError::WrongRewardValue { .. })
     ));
     assert!(matches!(
-        crate::api::apply_block_api_error(err, id),
-        crate::api::ApiError::Unexpected(_)
+        apply_block_api_error(err, id),
+        ApiError::Unexpected(_)
     ));
 }
 
