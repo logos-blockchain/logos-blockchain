@@ -6,7 +6,7 @@ use std::{
 
 use futures::{Stream, TryStreamExt as _};
 use lb_core::{
-    block::{Block, UncleHeaders, genesis::GenesisBlock},
+    block::{UncleHeaders, genesis::GenesisBlock},
     events::Events,
     header::{Header, HeaderId},
     sdp::{Declaration, DeclarationId},
@@ -21,8 +21,8 @@ use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::{
-    AppliedBlock, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, EpochStateQueryResult,
-    LibUpdate, ProcessedBlockEvent, Query,
+    AppliedBlock, BlockWithVerifiedHeader, ChainServiceInfo, ConsensusMsg, CryptarchiaInfo,
+    EpochStateQueryResult, LibUpdate, ProcessedBlockEvent, Query, VerifiedBlockHeader,
 };
 
 pub trait CryptarchiaServiceData:
@@ -51,37 +51,44 @@ pub enum ApiError {
     },
     #[error("Block {0} has already been applied")]
     AlreadyApplied(HeaderId),
-    #[error("Invalid proof of leadership in block {0}")]
-    InvalidLeaderProof(HeaderId),
+    /// The header is not valid on its own, so the block is invalid.
+    #[error("Invalid block header: {0}")]
+    InvalidHeader(String),
+    /// The slot of the header is not after its parent's, so the block is
+    /// invalid.
+    #[error("Block slot {block:?} is not after its parent's slot {parent:?}")]
+    InvalidSlot { parent: Slot, block: Slot },
+    /// The proof of leadership in the header is invalid. The block ID does not
+    /// cover the proof, so only the received copy is invalid, not the block.
+    #[error("Invalid proof of leadership")]
+    InvalidLeaderProof,
+    /// An operation proof of block {0} is invalid. The block ID does not cover
+    /// the proofs, so only the received copy is invalid, not the block.
     #[error("Invalid Operation proof in block {0}")]
     InvalidOperationProof(HeaderId),
+    /// The uncles carried with the header are invalid.
+    #[error("Invalid uncles: {0}")]
+    InvalidUncles(String),
+    /// The uncles or transactions carried are not the ones the header commits
+    /// to, so only the received copy is invalid, not the block.
+    #[error("Invalid block body: {0}")]
+    InvalidBody(String),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
     Unexpected(String),
 }
 
+/// The [`ApiError`] of `err`, raised while applying block `id`.
 pub(crate) fn apply_block_api_error(err: crate::Error, id: HeaderId) -> ApiError {
     match err {
-        crate::Error::ParentMissing { parent, info } => ApiError::ParentMissing { parent, info },
-        crate::Error::FutureBlock {
-            block_slot,
-            current_slot,
-        } => ApiError::FutureBlock {
-            block_slot,
-            current_slot,
-        },
-        crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
-        crate::Error::Ledger(lb_ledger::LedgerError::InvalidProof) => {
-            ApiError::InvalidLeaderProof(id)
-        }
         crate::Error::BatchDeferredProofVerification(_) => ApiError::InvalidOperationProof(id),
         crate::Error::Ledger(lb_ledger::LedgerError::VerificationError(err))
             if err.is_operation_proof_failure() =>
         {
             ApiError::InvalidOperationProof(id)
         }
-        err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
+        err => err.into(),
     }
 }
 
@@ -272,33 +279,6 @@ where
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetLedgerState"))
         })
-    }
-
-    /// Check a proposal header against the chain, leaving the chain untouched.
-    pub async fn verify_proposal_header(&self, header: Header) -> Result<(), ApiError> {
-        let (reply_channel, rx) = oneshot::channel();
-
-        let header_id = header.id();
-        self.relay
-            .send(
-                Query::VerifyProposalHeader {
-                    header: Box::new(header),
-                    reply_channel,
-                }
-                .into(),
-            )
-            .await
-            .map_err(|error| {
-                ApiError::CommsFailure(format!("{error} while sending VerifyProposalHeader"))
-            })?;
-
-        rx.await
-            .map_err(|relay_error| {
-                ApiError::CommsFailure(format!(
-                    "{relay_error} while receiving VerifyProposalHeader"
-                ))
-            })?
-            .map_err(|err| apply_block_api_error(err, header_id))
     }
 
     /// The ledger config of the era of `slot`.
@@ -508,11 +488,39 @@ where
         })
     }
 
-    /// Apply a block through the chain service,
-    /// and return how the canonical chain changed if successful.
+    /// Verifies a block header through the chain service.
+    pub async fn verify_header(
+        &self,
+        header: Header,
+        uncle_headers: UncleHeaders,
+    ) -> Result<VerifiedBlockHeader, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+        self.relay
+            .send(
+                Query::VerifyHeader {
+                    header: Box::new(header),
+                    uncle_headers: Box::new(uncle_headers),
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending VerifyHeader"))
+            })?;
+
+        rx.await
+            .map_err(|relay_error| {
+                ApiError::CommsFailure(format!("{relay_error} while receiving VerifyHeader"))
+            })?
+            .map_err(Into::into)
+    }
+
+    /// Apply a block whose header is verified through the chain service, and
+    /// return how the canonical chain changed if successful.
     pub async fn apply_block(
         &self,
-        block: Block<Cryptarchia::Tx>,
+        block: BlockWithVerifiedHeader<Cryptarchia::Tx>,
     ) -> Result<AppliedBlock<Cryptarchia::Tx>, ApiError> {
         let (reply_channel, rx) = oneshot::channel();
 
@@ -586,5 +594,28 @@ where
             })?;
 
         Ok(())
+    }
+}
+
+impl From<crate::Error> for ApiError {
+    fn from(err: crate::Error) -> Self {
+        match err {
+            crate::Error::ParentMissing { parent, info } => Self::ParentMissing { parent, info },
+            crate::Error::FutureBlock {
+                block_slot,
+                current_slot,
+            } => Self::FutureBlock {
+                block_slot,
+                current_slot,
+            },
+            crate::Error::AlreadyApplied(block_id) => Self::AlreadyApplied(block_id),
+            crate::Error::InvalidHeader(err) => Self::InvalidHeader(err.to_string()),
+            crate::Error::InvalidSlot { parent, block } => Self::InvalidSlot { parent, block },
+            crate::Error::InvalidLeaderProof => Self::InvalidLeaderProof,
+            err @ (crate::Error::InvalidUncle { .. } | crate::Error::TooManyUncles { .. }) => {
+                Self::InvalidUncles(err.to_string())
+            }
+            err => Self::Unexpected(format!("Failure while applying block: {err:?}")),
+        }
     }
 }

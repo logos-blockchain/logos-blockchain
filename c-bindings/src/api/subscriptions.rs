@@ -92,9 +92,7 @@ pub fn subscribe_to_new_blocks_sync(
                                 block.header().clone(),
                                 block.uncle_headers().clone(),
                                 txs_with_id,
-                                u32::MAX,
-                            )
-                            .expect("Block should always build from valid block");
+                            );
                             callback_per_block(Block::from(block).as_ptr());
                         } else {
                             logging::error!(
