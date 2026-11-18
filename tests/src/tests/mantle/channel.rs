@@ -891,7 +891,8 @@ async fn deposit(
 }
 
 // Posts `body` to `path` until the node accepts it: a note the request spends
-// is refused until the wallet adopted it and its block is deep enough.
+// or funds itself with is refused until the wallet adopted it and its block is
+// deep enough.
 async fn post_until_success<Request: Serialize + Sync, Response: DeserializeOwned>(
     node: &NodeHttpClient,
     path: &str,
@@ -951,17 +952,19 @@ async fn inscribe(
         funded_tx: ops,
         transfer_proof,
         ..
-    } = node
-        .fund_tx(WalletFundRequestBody {
+    } = post_until_success(
+        node,
+        "wallet/fund",
+        &WalletFundRequestBody {
             tip: None,
             tx_builder,
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],
             max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
             priority_fee_percent: 0,
-        })
-        .await
-        .expect("inscription should be funded");
+        },
+    )
+    .await;
     let tx_hash = ops.hash();
     let op_proofs = OpProofs::from([
         OpProof::ChannelInscribe(ChannelInscribeProof::new(
@@ -1001,17 +1004,19 @@ async fn create_channel(
         funded_tx: ops,
         transfer_proof,
         ..
-    } = node
-        .fund_tx(WalletFundRequestBody {
+    } = post_until_success(
+        node,
+        "wallet/fund",
+        &WalletFundRequestBody {
             tip: None,
             tx_builder,
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],
             max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
             priority_fee_percent: 0,
-        })
-        .await
-        .expect("inscription should be funded");
+        },
+    )
+    .await;
     let tx_hash = ops.hash();
     let op_proofs = OpProofs::from([
         OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(
