@@ -8,6 +8,7 @@ use lb_core::{
     mantle::{
         Note, Op, SignedOps,
         channel::channel_note_set,
+        gas::GasCost,
         ledger::verification_mode::StandardMode,
         notes::NoteCommitment as CoreNoteCommitment,
         ops::channel::{
@@ -734,9 +735,9 @@ pub(crate) fn transfer_funds_sync(
     })
 }
 
-/// A submitted transfer and the nonce of the note it creates for the
-/// recipient, who needs it, with the amount and its public key, to import
-/// the note.
+/// A submitted transfer and the nonce of the note it creates for the recipient.
+///
+/// The recipient needs the nonce to import the note.
 #[repr(C)]
 #[derive(Default)]
 pub struct TransferFunds {
@@ -758,9 +759,8 @@ pub type FfiTransferFundsResult = FfiStatusResult<TransferFunds>;
 ///
 /// # Returns
 ///
-/// A [`FfiTransferFundsResult`] containing the transaction [`Hash`] and the
-/// recipient note's nonce on success, or an [`OperationStatus`] error on
-/// failure. Both are in little-endian format.
+/// A [`FfiTransferFundsResult`] containing a [`TransferFunds`] on success, or
+/// an [`OperationStatus`] error on failure.
 ///
 /// # Safety
 ///
@@ -978,8 +978,8 @@ pub(crate) fn channel_deposit_sync(
                 )
             })?;
 
-            // 2. The deposit spends the exact note to a note of the holder,
-            //    which the wallet adopts when it owns the holder key.
+            // 2. The funder spends a note to create a note of the same value in the
+            //    channel, owned by the holder.
             let mut nonce = [0u8; 32];
             OsRng.fill_bytes(&mut nonce);
             let holder_note = Note::new(amount, fr_from_mod_bytes(&nonce), holder_public_key);
@@ -1232,21 +1232,7 @@ pub(crate) fn wallet_fund_tx_sync(
                 )
             })?;
 
-        let fee_check = match funded_tx_builder.tx_fee() {
-            Ok(tx_fee) if tx_fee > request.max_tx_fee => Err(OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!(
-                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
-                    request.max_tx_fee
-                ),
-            )),
-            Ok(_) => Ok(()),
-            Err(error) => Err(OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to compute tx fee: {error}"),
-            )),
-        };
-        if let Err(error) = fee_check {
+        if let Err(error) = check_tx_fee(&funded_tx_builder, request.max_tx_fee) {
             // The wallet reserved the notes of the funding, which no
             // transaction will spend. The inputs of the caller's own ops may be
             // reserved by another request, so they are kept.
@@ -1272,6 +1258,22 @@ pub(crate) fn wallet_fund_tx_sync(
             transfer_proof,
         })
     })
+}
+
+fn check_tx_fee(builder: &MantleTxBuilder, max_tx_fee: GasCost) -> StatusResult<()> {
+    let tx_fee = builder.tx_fee().map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Failed to compute tx fee: {error}"),
+        )
+    })?;
+    if tx_fee > max_tx_fee {
+        return Err(OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("tx_fee({tx_fee}) exceeds max_tx_fee({max_tx_fee})"),
+        ));
+    }
+    Ok(())
 }
 
 pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
