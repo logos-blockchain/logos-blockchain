@@ -38,6 +38,11 @@ pub enum StorageMsg {
         value: Bytes,
         reply_channel: Sender<Result<(), String>>,
     },
+    /// One atomic batch, answered once all entries have been written.
+    BulkStoreConfirmed {
+        items: HashMap<Bytes, Bytes>,
+        reply_channel: Sender<Result<(), String>>,
+    },
     Remove {
         key: Bytes,
         reply_channel: Sender<Option<Bytes>>,
@@ -116,6 +121,7 @@ impl StorageMsg {
             | Self::GetTransactions { .. } => true,
             Self::Store { .. }
             | Self::StoreConfirmed { .. }
+            | Self::BulkStoreConfirmed { .. }
             | Self::Remove { .. }
             | Self::Execute { .. }
             | Self::StoreBlockData { .. }
@@ -151,6 +157,10 @@ impl Debug for StorageMsg {
             Self::StoreConfirmed { key, value, .. } => {
                 write!(f, "StoreConfirmed {{ {key:?}, {value:?}}}")
             }
+            Self::BulkStoreConfirmed { items, .. } => f
+                .debug_struct("BulkStoreConfirmed")
+                .field("entries", &items.len())
+                .finish(),
             Self::Remove { key, .. } => {
                 write!(f, "Remove {{ {key:?} }}")
             }
