@@ -1,10 +1,13 @@
-use std::{iter::Enumerate, vec::IntoIter};
+use std::{
+    iter::{Enumerate, Peekable},
+    vec::IntoIter,
+};
 
 use crate::mantle::{
     VerificationError,
     batch::DeferredProofs,
     ledger::verification_mode::StandardMode,
-    ops::SignedOp,
+    ops::{OpRef, SignedOp},
     traits::Hashable as _,
     transactions::{
         OperationVerificationHelper, SignedOps,
@@ -16,7 +19,7 @@ use crate::mantle::{
 pub type VerifiedOperationStep = (VerifiedOperations, SignedOp<Verified, StandardMode>);
 
 pub struct VerifiedOperations {
-    signed_ops: Enumerate<IntoIter<SignedOp<Preverified, StandardMode>>>,
+    signed_ops: Peekable<Enumerate<IntoIter<SignedOp<Preverified, StandardMode>>>>,
     tx_hash_view: TxHashView,
 }
 
@@ -25,11 +28,19 @@ impl VerifiedOperations {
     pub fn new(signed_ops: SignedOps<Preverified, StandardMode>) -> Self {
         let tx_hash = signed_ops.hash();
         let tx_hash_view = TxHashView::from(tx_hash);
-        let signed_ops = signed_ops.into_iter().enumerate();
+        let signed_ops = signed_ops.into_iter().enumerate().peekable();
         Self {
             signed_ops,
             tx_hash_view,
         }
+    }
+
+    /// The next operation, before it is verified: it can be priced, and
+    /// refused, before its verification does any work.
+    pub fn peek_operation(&mut self) -> Option<OpRef<'_>> {
+        self.signed_ops
+            .peek()
+            .map(|(_, signed_op)| signed_op.operation())
     }
 
     /// Yields the next operation if it passes verification.
