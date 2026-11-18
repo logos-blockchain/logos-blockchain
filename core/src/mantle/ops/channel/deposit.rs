@@ -188,9 +188,9 @@ impl<Mode: VerificationMode> ExecutableOperation for SignedOperation<DepositOp, 
         // Resolved again here since the genesis mode executes unverified
         let channel_set = context.channels.note_set_index(operation.channel_id)?;
 
-        // Spend the inputs in the ledger note set and add the outputs to the channel
-        // note set, step 5 of the Validate of CHANNEL_DEPOSIT done at execution as
-        // for every Operation.
+        // Spend the inputs in the ledger note set and add the outputs to the
+        // channel note set, step 5 of the Validate of CHANNEL_DEPOSIT
+        // done at execution as for every Operation.
         context.note_sets = context.note_sets.execute_transfer(
             context.tx_notes,
             NoteSetIndex::Ledger,
@@ -289,8 +289,8 @@ mod test {
         )
     }
 
-    // CHANNEL owns note set 2; the ledger set holds commitment(1), recorded at the
-    // end of block 0.
+    // CHANNEL owns note set 2; the ledger set holds commitment(1), recorded at
+    // the end of block 0.
     fn state() -> (Channels, NoteSets) {
         let (channels, note_sets) =
             Channels::new().create_channel(CHANNEL, Slot::from(0u64), keys(), NoteSets::new());

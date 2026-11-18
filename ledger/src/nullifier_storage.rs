@@ -637,8 +637,9 @@ mod tests {
             self.extend_with(parent, &[(LEDGER_SET, nullifiers)], |state| state)
         }
 
-        // Applies a block on `parent`: `amend` to its state, then the spending of
-        // `spent` in each set. Then prunes what the consensus prunes.
+        // Applies a block on `parent`: `amend` to its state, then the spending
+        // of `spent` in each set. Then prunes what the consensus
+        // prunes.
         fn extend_with(
             &mut self,
             parent: Id,

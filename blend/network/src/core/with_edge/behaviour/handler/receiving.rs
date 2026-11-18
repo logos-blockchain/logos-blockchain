@@ -51,8 +51,8 @@ impl ReceivingState {
         incoming_message: MessageReceiveFuture,
         waker: Option<Waker>,
     ) -> Self {
-        // We wake here since the future to receive the message must be polled once to
-        // start making any progress.
+        // We wake here since the future to receive the message must be polled
+        // once to start making any progress.
         if let Some(waker) = waker {
             waker.wake();
         }
@@ -72,9 +72,9 @@ impl From<ReceivingState> for ConnectionState {
 
 impl StateTrait for ReceivingState {
     // If the timer elapses, moves the state machine to `DroppedState` with a
-    // timeout error. Otherwise, if the message is correctly received it generates a
-    // new message, else it moves to the `DroppedState` with the message reception
-    // error.
+    // timeout error. Otherwise, if the message is correctly received it
+    // generates a new message, else it moves to the `DroppedState` with the
+    // message reception error.
     fn poll(mut self, cx: &mut Context<'_>) -> PollResult<ConnectionState> {
         let Poll::Pending = self.timeout_timer.poll_unpin(cx) else {
             tracing::debug!(target: LOG_TARGET, "Timeout reached without completing the reception of the message. Closing the connection.");
@@ -84,8 +84,8 @@ impl StateTrait for ReceivingState {
             );
         };
         let Poll::Ready(message_receive_result) = self.incoming_message.poll_unpin(cx) else {
-            // We don't wake here since the `incoming_message` future will wake the waker
-            // when completed.
+            // We don't wake here since the `incoming_message` future will wake
+            // the waker when completed.
             self.waker = Some(cx.waker().clone());
             return (Poll::Pending, self.into());
         };

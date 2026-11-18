@@ -340,8 +340,7 @@ fn build_wallet_transaction(
     let outputs = openings
         .into_values()
         .next()
-        .map(|opening| opening.outputs)
-        .unwrap_or_default();
+        .map_or_default(|opening| opening.outputs);
 
     let proof = prove_transfer(
         &[(input.note.note, secret_key, input.note.path.clone())],

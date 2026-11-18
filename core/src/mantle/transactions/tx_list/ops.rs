@@ -194,8 +194,8 @@ impl TxGasCalculator for OpRefs<'_> {
                 Ok((state, total))
             },
         )?;
-        // The transaction itself, once: its bytes, the note sets it changed and the
-        // root extensions its proofs share.
+        // The transaction itself, once: its bytes, the note sets it changed and
+        // the root extensions its proofs share.
         operations_gas
             .checked_add(context.gas_profile.tx_terms_gas(
                 minimum_signed_transaction_size(self, context),
@@ -241,8 +241,8 @@ impl BinaryDecode for Ops {
 }
 
 impl Hashable for Ops {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> = tx_hasher;
     type Hash = TxHash;
 
@@ -507,7 +507,8 @@ mod tests {
             GasPrices::new(1_000_000_000, 1_000_000_000),
             GAS_PROFILE,
         );
-        // The config creates the channel, so the transaction changes its note set.
+        // The config creates the channel, so the transaction changes its note
+        // set.
         let terms = GAS_PROFILE
             .tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1)
             .unwrap();

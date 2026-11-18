@@ -91,8 +91,8 @@ impl Cryptarchia {
             }
         }
 
-        // Each uncle's parent must be on the chain the block extends, within the
-        // uncle reference window of the block's era.
+        // Each uncle's parent must be on the chain the block extends, within
+        // the uncle reference window of the block's era.
         let uncle_reference_window = era
             .parameters
             .consensus_config
@@ -149,7 +149,8 @@ impl Cryptarchia {
             current = self.consensus.branches().get(&block.parent());
         }
 
-        // Return an error if any uncle's parent was not found during the walk-back.
+        // Return an error if any uncle's parent was not found during the
+        // walk-back.
         for uncle in uncle_headers.iter() {
             if !found_uncle_parents.contains(&uncle.parent()) {
                 return Err(Error::InvalidUncle {
@@ -366,8 +367,9 @@ mod tests {
     fn test_reject_uncle_whose_parent_is_outside_window() {
         let (cryptarchia, _, u1, ..) = chain_with_fork();
 
-        // The block is more than `uncle_reference_window` slots after the uncle's
-        // parent, which puts the uncle's parent outside the window.
+        // The block is more than `uncle_reference_window` slots after the
+        // uncle's parent, which puts the uncle's parent outside the
+        // window.
         let uncle_reference_window = cryptarchia
             .ledger
             .era_schedule()

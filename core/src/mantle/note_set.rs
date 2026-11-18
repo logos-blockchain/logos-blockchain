@@ -498,9 +498,9 @@ impl NoteSet {
         Ok(mmr.frontier_root())
     }
 
-    // Same root as `step_commitment_root`, resuming from the closest extended MMR
-    // `tx_roots` holds for the referenced root instead of replaying the whole
-    // buffer for every Operation and step.
+    // Same root as `step_commitment_root`, resuming from the closest extended
+    // MMR `tx_roots` holds for the referenced root instead of replaying the
+    // whole buffer for every Operation and step.
     pub fn cached_step_commitment_root(
         &self,
         tx_roots: &TxRoots,
@@ -596,8 +596,8 @@ impl NoteSet {
         }
     }
 
-    // Called at the end of `block` on a set the block changed. The nullifiers the
-    // block inserted are hashed into the tree here, once each.
+    // Called at the end of `block` on a set the block changed. The nullifiers
+    // the block inserted are hashed into the tree here, once each.
     fn record_commitment_root(
         mut self,
         block: BlockNumber,
@@ -1058,7 +1058,8 @@ impl NoteSets {
         root_window: BlockNumber,
     ) -> Result<Self, NoteSetError> {
         for index in self.changed.clone().iter().copied() {
-            // `record_commitment_root` computes the commitment root of the set once.
+            // `record_commitment_root` computes the commitment root of the set
+            // once.
             let set = self
                 .expect_set(index)
                 .clone()
@@ -1605,8 +1606,8 @@ mod test {
         sets.update_ledger(set).end_block(block, 1024).unwrap()
     }
 
-    // The recent roots of `set` with the first block that cannot reference each,
-    // after checking the order by expiry holds the same entries.
+    // The recent roots of `set` with the first block that cannot reference
+    // each, after checking the order by expiry holds the same entries.
     fn recent_entries(set: &NoteSet) -> HashMap<Fr, BlockNumber> {
         let roots = &set.recent_commitment_roots;
         let entries: HashMap<Fr, BlockNumber> = roots
@@ -1752,8 +1753,8 @@ mod test {
         };
         let mut seen = vec![seed];
         for block in 0..3500 {
-            // blocks that leave the set unchanged, among them a gap longer than the
-            // window
+            // blocks that leave the set unchanged, among them a gap longer than
+            // the window
             if block % 7 == 3 || (1500..2700).contains(&block) {
                 continue;
             }
@@ -2014,8 +2015,8 @@ mod test {
     fn test_seed_root_leaves_the_window_1024_blocks_after_the_set_first_changes() {
         let empty = NoteSet::empty().commitment_root();
 
-        // Genesis changes the ledger set at block 0: the seed root was current before
-        // it.
+        // Genesis changes the ledger set at block 0: the seed root was current
+        // before it.
         let sets = add_and_end_block(NoteSets::new(), commitment(1), 0);
         let set = sets.ledger();
         assert!(
@@ -2242,7 +2243,8 @@ mod test {
             serde_json::from_str(&serde_json::to_string(&sets).unwrap()).unwrap();
         assert_eq!(decoded, sets);
         assert_eq!(decoded.eligible_root(), sets.eligible_root());
-        // `MerkleNode` has no `PartialEq`, so the paths compare as (side, sibling)
+        // `MerkleNode` has no `PartialEq`, so the paths compare as (side,
+        // sibling)
         let nodes = |path: MerklePath<Fr, 40>| {
             path.map(|node| (matches!(node, MerkleNode::Left(_)), *node.item()))
         };

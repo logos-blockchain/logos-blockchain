@@ -311,8 +311,8 @@ mod tests {
 
     /// The slot activation coefficient of a block every 30 seconds, the time
     /// step of the specification.
-    const SLOT_ACTIVATION_COEFF: NonNegativeRatio =
-        NonNegativeRatio::new(1, NonZero::new(30).unwrap());
+    const SLOT_ACTIVATION_COEFF: ProperFraction =
+        ProperFraction::new(1, NonZero::new(30).unwrap()).unwrap();
 
     /// The parameters of the block rewards specification.
     const PARAMETERS: BlockRewardsParameters = BlockRewardsParameters {
@@ -351,15 +351,16 @@ mod tests {
         );
     }
 
-    // A block every 20 seconds releases two thirds as much, and weighs its pooled
-    // fees one and a half times as much, as a block every 30 seconds.
+    // A block every 20 seconds releases two thirds as much, and weighs its
+    // pooled fees one and a half times as much, as a block every 30
+    // seconds.
     #[test]
     fn the_values_of_a_block_follow_the_block_time() {
         let config = BlockRewardsConfig::new(
             PARAMETERS,
             MAX_SUPPLY,
             SLOT_DURATION,
-            NonNegativeRatio::new(1, NonZero::new(20).unwrap()),
+            ProperFraction::new(1, NonZero::new(20).unwrap()).unwrap(),
         )
         .unwrap();
         assert_eq!(config.fee_average_numerator(), 15_768);
@@ -372,8 +373,8 @@ mod tests {
         );
     }
 
-    // `I_min` adds `D_0,target · I_min / α_d` to the release's weight, `A_SCALE`
-    // when it is `I_max`.
+    // `I_min` adds `D_0,target · I_min / α_d` to the release's weight,
+    // `A_SCALE` when it is `I_max`.
     #[test]
     fn the_minimum_emission_rate_offsets_the_weight() {
         let config = BlockRewardsConfig::new(

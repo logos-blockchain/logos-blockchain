@@ -387,6 +387,9 @@ where
         Ok(rx.await??)
     }
 
+    /// Returns the wallet's notes that are unspent at `tip`, or at the current
+    /// tip when `tip` is `None`, and in the aged snapshot of `epoch`, the epoch
+    /// the caller leads in.
     pub async fn get_leader_aged_notes(
         &self,
         tip: Option<HeaderId>,

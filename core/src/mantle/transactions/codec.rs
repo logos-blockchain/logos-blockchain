@@ -223,8 +223,8 @@ mod tests {
         // required for validation — empty proof is well-formed.
         let config_proof = ChannelMultiSigProof::empty();
 
-        // Encode and decode roundtrip test (no hardcoded test vector since signatures
-        // are deterministic)
+        // Encode and decode roundtrip test (no hardcoded test vector since
+        // signatures are deterministic)
         let op_proofs = OpProofs::from([
             OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(sig)),
             OpProof::ChannelMultiSigProof(config_proof),
@@ -473,7 +473,8 @@ mod tests {
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
-        // New channel → empty proof (no signatures required for just-in-time create).
+        // New channel → empty proof (no signatures required for just-in-time
+        // create).
         let config_proof = ChannelMultiSigProof::empty();
         let op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(config_proof)]);
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
@@ -646,7 +647,8 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let op_sig = signing_key.sign_payload(tx_hash.as_signing_bytes());
         // Create a signed tx and encode it to get the actual size.
-        // ChannelConfig creates the channel here, so its proof has no signatures.
+        // ChannelConfig creates the channel here, so its proof has no
+        // signatures.
         let config_proof = ChannelMultiSigProof::empty();
         let op_proofs = OpProofs::from([
             OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(op_sig)),
@@ -750,7 +752,8 @@ mod tests {
         let predicted_size = minimum_signed_transaction_size(&mantle_tx.op_refs(), &gas_context);
 
         // Create a signed tx and encode it to get the actual size.
-        // ChannelConfig creates the channel here, so its proof has no signatures.
+        // ChannelConfig creates the channel here, so its proof has no
+        // signatures.
         let tx_hash = mantle_tx.hash();
         let op_ed25519_sig = signing_key1.sign_payload(tx_hash.as_signing_bytes());
         let config_proof = ChannelMultiSigProof::empty();
@@ -804,7 +807,8 @@ mod tests {
 
     #[test]
     fn test_decode_reject_oversized_inscription() {
-        // Create a malicious input with inscription_len = MAX_INSCRIPTION_SIZE + 1
+        // Create a malicious input with inscription_len = MAX_INSCRIPTION_SIZE
+        // + 1
         let mut malicious_input = Vec::new();
 
         // ChannelId (32 bytes)
@@ -858,8 +862,8 @@ mod tests {
     #[test]
     fn test_decode_accept_max_op_count() {
         // Test that op_count = MAX_OP_COUNT is accepted
-        // (though it will fail later due to missing op data, which is fine for this
-        // test)
+        // (though it will fail later due to missing op data, which is fine for
+        // this test)
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
@@ -874,7 +878,8 @@ mod tests {
 
     #[test]
     fn test_decode_accept_max_inscription_size() {
-        // Test that we can decode an inscription at exactly MAX_INSCRIPTION_SIZE
+        // Test that we can decode an inscription at exactly
+        // MAX_INSCRIPTION_SIZE
         let mut valid_input = Vec::new();
 
         // ChannelId (32 bytes)

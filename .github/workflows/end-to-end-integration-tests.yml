@@ -122,7 +122,7 @@ jobs:
           USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
         with:
           command: nextest
-          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features mantle_sdp --test test_mantle_sdp_ops --test test_mantle_sdp_blend --no-fail-fast
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features mantle-sdp --test test_mantle_sdp_ops --test test_mantle_sdp_blend --no-fail-fast
 
       - *check_peer_success
 
@@ -148,7 +148,7 @@ jobs:
           USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
         with:
           command: nextest
-          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features tip_poll_self_heal --test test_cryptarchia_tip_poll_self_heal --no-fail-fast
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features tip-poll-self-heal --test test_cryptarchia_tip_poll_self_heal --no-fail-fast
 
       - *check_peer_success
 

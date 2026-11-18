@@ -127,8 +127,8 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
 
     /// Returns the first element, or `None` if the vector is empty.
     #[must_use]
-    // TODO: This function should not return an `Option` when `MIN >= 1`, but at the
-    // moment this is not possible in the current Rust version.
+    // TODO: This function should not return an `Option` when `MIN >= 1`, but at
+    // the moment this is not possible in the current Rust version.
     pub fn first(&self) -> Option<&T> {
         self.as_inner().first()
     }
@@ -178,8 +178,8 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
     /// [`BoundedError::TooFewItems`] when removing the element would violate
     /// `MIN`.
     pub fn try_remove(&mut self, index: usize) -> Result<T, BoundedError> {
-        // This check also guards against an empty vec, `index >= 0` and `self.len() =
-        // 0` will return and error
+        // This check also guards against an empty vec, `index >= 0` and
+        // `self.len() = 0` will return and error
         if index >= self.len() {
             return Err(BoundedError::IndexOutOfBounds {
                 index,
@@ -818,8 +818,8 @@ mod tests {
 
         let source = Source::try_from(vec![10u16, 20, 30, 40]).unwrap();
 
-        // The explicit type annotation proves at compile time that map preserves
-        // the source bounds while changing the inner type.
+        // The explicit type annotation proves at compile time that map
+        // preserves the source bounds while changing the inner type.
         let mapped: Mapped = source.map_ref(|&value| MyNewType(u32::from(value)));
 
         assert_eq!(Mapped::MIN, Source::MIN);

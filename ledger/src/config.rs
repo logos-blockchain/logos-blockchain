@@ -81,7 +81,7 @@ impl Config {
     }
 
     /// Full denominator of the per-epoch payout rate:
-    /// `rate_den * target_claim_per_block * expected_blocks_per_epoch`.
+    /// `rate_den * target_claims_per_block * expected_blocks_per_epoch`.
     ///
     /// Widened to `u128`: the first two factors are bounded to `u64` by
     /// [`RewardPoWConfig::validate`] at config-load time, and the third is a
@@ -219,17 +219,16 @@ pub struct RewardPoWConfig {
     /// Must be above [`Self::ema_smoothing_factor`]: `P - F` is a divisor in
     /// [`Self::reward_target_floor`].
     pub ema_smoothing_precision: NonZeroU64,
-    /// Target reward claims per block the controller aims for.
-    pub target_claims_per_block: u64,
+    /// `TARGET_CLAIMS_PER_BLOCK`: the reward claims per block the controller
+    /// aims for, and a factor of the payout-rate denominator, since an epoch
+    /// is expected to carry that many claims in each of its blocks. The
+    /// remaining factor, the expected number of blocks per epoch, is derived
+    /// from the consensus schedule — see [`Config::expected_blocks_per_epoch`].
+    pub target_claims_per_block: NonZeroU64,
     /// Numerator of the per-epoch payout rate. `0` disables claiming.
     pub rate_num: u64,
     /// Denominator scale of the per-epoch payout rate.
     pub rate_den: NonZeroU64,
-    /// Expected number of reward claims per block, a factor of the payout-rate
-    /// denominator. The remaining factor, the expected number of blocks per
-    /// epoch, is derived from the consensus schedule — see
-    /// [`Config::expected_blocks_per_epoch`].
-    pub target_claim_per_block: NonZeroU64,
     /// `POW_SHARE`: numerator of the share of each block's collected fees
     /// diverted to the `PoW` reward pool. `0` disables the credit.
     /// Must not exceed [`Self::share_den`].
@@ -249,10 +248,9 @@ struct RewardPoWConfigFields {
     minimum_difficulty: ModulusShift,
     ema_smoothing_factor: u64,
     ema_smoothing_precision: NonZeroU64,
-    target_claims_per_block: u64,
+    target_claims_per_block: NonZeroU64,
     rate_num: u64,
     rate_den: NonZeroU64,
-    target_claim_per_block: NonZeroU64,
     pow_share: u64,
     share_den: NonZeroU64,
     slot_window: NonZeroU64,
@@ -269,7 +267,6 @@ impl TryFrom<RewardPoWConfigFields> for RewardPoWConfig {
             target_claims_per_block: fields.target_claims_per_block,
             rate_num: fields.rate_num,
             rate_den: fields.rate_den,
-            target_claim_per_block: fields.target_claim_per_block,
             pow_share: fields.pow_share,
             share_den: fields.share_den,
             slot_window: fields.slot_window,
@@ -286,11 +283,11 @@ pub enum RewardPoWConfigError {
     EmaSmoothingFactorNotBelowPrecision { factor: u64, precision: NonZeroU64 },
     #[error(
         "claim rate scale overflows u64: rate_den ({rate_den}) * \
-         target_claim_per_block ({target_claim_per_block})"
+         target_claims_per_block ({target_claims_per_block})"
     )]
     ClaimRateScaleOverflow {
         rate_den: NonZeroU64,
-        target_claim_per_block: NonZeroU64,
+        target_claims_per_block: NonZeroU64,
     },
     #[error("PoW fee share ({pow_share}) must not exceed its denominator ({share_den})")]
     PowShareExceedsDenominator {
@@ -387,7 +384,7 @@ impl RewardPoWConfig {
     }
 
     /// The configured factors of the payout-rate denominator,
-    /// `rate_den * target_claim_per_block`, or
+    /// `rate_den * target_claims_per_block`, or
     /// [`RewardPoWConfigError::ClaimRateScaleOverflow`] if they overflow
     /// `u64`. The remaining factor, `expected_blocks_per_epoch`, is derived
     /// from the consensus schedule and applied by
@@ -396,16 +393,16 @@ impl RewardPoWConfig {
         let product = self
             .rate_den
             .get()
-            .checked_mul(self.target_claim_per_block.get())
+            .checked_mul(self.target_claims_per_block.get())
             .ok_or(RewardPoWConfigError::ClaimRateScaleOverflow {
                 rate_den: self.rate_den,
-                target_claim_per_block: self.target_claim_per_block,
+                target_claims_per_block: self.target_claims_per_block,
             })?;
         Ok(NonZeroU64::new(product).expect("product of non-zero values is non-zero"))
     }
 
     /// The configured factors of the payout-rate denominator:
-    /// `rate_den * target_claim_per_block`.
+    /// `rate_den * target_claims_per_block`.
     ///
     /// The product is guaranteed not to overflow by [`Self::validate`], which
     /// runs on deserialization.
@@ -436,7 +433,7 @@ impl RewardPoWConfig {
 }
 
 /// The encoding of the fixture below, one field per group.
-const REWARD_POW_CONFIG_HEX: &str = "20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2600000000000000 2700000000000000 2800000000000000 2900000000000000";
+const REWARD_POW_CONFIG_HEX: &str = "20000000 2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000 2700000000000000 2800000000000000 2900000000000000";
 
 codec_fixtures!(
     RewardPoWConfig,
@@ -445,10 +442,9 @@ codec_fixtures!(
         minimum_difficulty: ModulusShift::new::<32>(),
         ema_smoothing_factor: 33,
         ema_smoothing_precision: NonZeroU64::new(34).unwrap(),
-        target_claims_per_block: 35,
+        target_claims_per_block: NonZeroU64::new(35).unwrap(),
         rate_num: 36,
         rate_den: NonZeroU64::new(37).unwrap(),
-        target_claim_per_block: NonZeroU64::new(38).unwrap(),
         pow_share: 39,
         share_den: NonZeroU64::new(40).unwrap(),
         slot_window: NonZeroU64::new(41).unwrap(),
@@ -763,7 +759,7 @@ impl BlockRewardsConfig {
         parameters: BlockRewardsParameters,
         max_supply: Value,
         slot_duration: NonZeroU64,
-        slot_activation_coeff: NonNegativeRatio,
+        slot_activation_coeff: ProperFraction,
     ) -> Option<Self> {
         let (
             Some(stake_target),
@@ -775,12 +771,12 @@ impl BlockRewardsConfig {
             fraction_of_supply(parameters.stake_target, max_supply),
             emission_factor_scale(&parameters, max_supply),
             min_emission_offset(&parameters, max_supply),
-            fee_average_numerator(&parameters, slot_duration, slot_activation_coeff),
+            fee_average_numerator(&parameters, slot_duration, slot_activation_coeff.get()),
             max_emission_per_block(
                 parameters.max_emission_rate,
                 max_supply,
                 slot_duration,
-                slot_activation_coeff,
+                slot_activation_coeff.get(),
             ),
         )
         else {
@@ -1054,7 +1050,7 @@ mod tests {
     };
     use lb_cryptarchia_engine::EpochConfig;
     pub use lb_groth16::ModulusShift;
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use crate::{
         config::{
@@ -1072,10 +1068,9 @@ mod tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
@@ -1168,15 +1163,15 @@ mod tests {
 
     #[test]
     fn reward_config_rejects_claim_rate_scale_overflow() {
-        // rate_den * target_claim_per_block would exceed u64::MAX.
+        // rate_den * target_claims_per_block would exceed u64::MAX.
         let mut config = disabled_reward_config();
         config.rate_den = NonZeroU64::MAX;
-        config.target_claim_per_block = NonZeroU64::new(2).unwrap();
+        config.target_claims_per_block = NonZeroU64::new(2).unwrap();
         assert_eq!(
             config.validate(),
             Err(RewardPoWConfigError::ClaimRateScaleOverflow {
                 rate_den: config.rate_den,
-                target_claim_per_block: config.target_claim_per_block,
+                target_claims_per_block: config.target_claims_per_block,
             })
         );
     }
@@ -1207,7 +1202,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "Spells out a whole era config.")]
     fn epoch_snapshots() {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
@@ -1216,7 +1210,7 @@ mod tests {
         };
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(5).unwrap(),
-            NonNegativeRatio::new(1, 2.try_into().unwrap()),
+            ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -1232,7 +1226,6 @@ mod tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 2.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -1240,7 +1233,8 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -1248,10 +1242,7 @@ mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
@@ -1260,43 +1251,27 @@ mod tests {
             channel_withdraw_delay: 86_400.into(),
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: crate::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
                 crate::config::BlockRewardsParameters {
-                    max_emission_rate: lb_utils::math::ProperFraction::new(
-                        1,
-                        100.try_into().unwrap(),
-                    )
-                    .unwrap(),
+                    max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
                     min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
-                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
-                        .unwrap(),
+                    stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
                     pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                     stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
                     pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                     pooled_fees_window: 120.try_into().unwrap(),
-                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
-                        .unwrap(),
+                    blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
                 },
                 10_000_000_000_000_000_000,
                 1.try_into().unwrap(),
-                NonNegativeRatio::new(1, 30.try_into().unwrap()),
+                ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
@@ -1328,7 +1303,6 @@ mod tests {
         );
     }
 
-    #[expect(clippy::too_many_lines, reason = "Spells out a whole era config.")]
     fn epoch_zero_test_config() -> super::Config {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
@@ -1337,7 +1311,7 @@ mod tests {
         };
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(5).unwrap(),
-            NonNegativeRatio::new(1, 2.try_into().unwrap()),
+            ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -1352,7 +1326,6 @@ mod tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 2.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -1360,7 +1333,8 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -1368,10 +1342,7 @@ mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
@@ -1380,43 +1351,27 @@ mod tests {
             channel_withdraw_delay: 86_400.into(),
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: crate::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
                 crate::config::BlockRewardsParameters {
-                    max_emission_rate: lb_utils::math::ProperFraction::new(
-                        1,
-                        100.try_into().unwrap(),
-                    )
-                    .unwrap(),
+                    max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
                     min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
-                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
-                        .unwrap(),
+                    stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
                     pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                     stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
                     pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                     pooled_fees_window: 120.try_into().unwrap(),
-                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
-                        .unwrap(),
+                    blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
                 },
                 10_000_000_000_000_000_000,
                 1.try_into().unwrap(),
-                NonNegativeRatio::new(1, 30.try_into().unwrap()),
+                ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
@@ -1454,8 +1409,8 @@ mod tests {
     fn claim_rate_denominator_folds_in_the_derived_block_count() {
         let mut config = epoch_zero_test_config();
         config.pow_config.reward.rate_den = NonZeroU64::new(10).unwrap();
-        config.pow_config.reward.target_claim_per_block = NonZeroU64::new(3).unwrap();
-        // rate_den * target_claim_per_block * expected_blocks_per_epoch.
+        config.pow_config.reward.target_claims_per_block = NonZeroU64::new(3).unwrap();
+        // rate_den * target_claims_per_block * expected_blocks_per_epoch.
         assert_eq!(
             config.claim_rate_denominator(),
             NonZeroU128::new(10 * 3 * 50).unwrap()
@@ -1463,7 +1418,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "Spells out a whole era config.")]
     fn slot_to_epoch() {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
@@ -1472,7 +1426,7 @@ mod tests {
         };
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(5).unwrap(),
-            NonNegativeRatio::new(1, 2.try_into().unwrap()),
+            ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -1488,7 +1442,6 @@ mod tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 2.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -1496,7 +1449,8 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -1504,10 +1458,7 @@ mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
@@ -1516,43 +1467,27 @@ mod tests {
             channel_withdraw_delay: 86_400.into(),
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: crate::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
                 crate::config::BlockRewardsParameters {
-                    max_emission_rate: lb_utils::math::ProperFraction::new(
-                        1,
-                        100.try_into().unwrap(),
-                    )
-                    .unwrap(),
+                    max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
                     min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
-                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
-                        .unwrap(),
+                    stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
                     pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                     stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
                     pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                     pooled_fees_window: 120.try_into().unwrap(),
-                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
-                        .unwrap(),
+                    blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
                 },
                 10_000_000_000_000_000_000,
                 1.try_into().unwrap(),
-                NonNegativeRatio::new(1, 30.try_into().unwrap()),
+                ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: crate::cryptarchia::tests::GAS_PROFILE,

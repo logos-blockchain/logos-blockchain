@@ -15,8 +15,8 @@ impl PartialEq for Box<dyn OnEvent> {
     fn eq(&self, other: &Self) -> bool {
         // OnEvent derives from Debug, so we can compare them by their debug
         // representation, which is sufficient for testing purposes. This way we
-        // can avoid implementing additional trait for comparing trait objects, which is
-        // more error prone.
+        // can avoid implementing additional trait for comparing trait objects,
+        // which is more error prone.
         let lhs = format!("{self:?}");
         let rhs = format!("{other:?}");
         lhs == rhs
@@ -211,16 +211,16 @@ pub enum BinaryCompatDialBackError {
 }
 
 pub fn autonat_failed<'a>() -> TestEvent<'a> {
-    // SAFETY: layout and alignment of `BinaryCompatAutonatEvent` is compatible with
-    // `autonat::v2::client::Event`
+    // SAFETY: layout and alignment of `BinaryCompatAutonatEvent` is compatible
+    // with `autonat::v2::client::Event`
     TestEvent::AutonatClientFailed(unsafe {
         &*(&raw const *AUTONAT_FAILED).cast::<autonat::v2::client::Event>()
     })
 }
 
 pub fn autonat_failed_address_mismatch<'a>() -> TestEvent<'a> {
-    // SAFETY: layout and alignment of `BinaryCompatAutonatEvent` is compatible with
-    // `autonat::v2::client::Event`
+    // SAFETY: layout and alignment of `BinaryCompatAutonatEvent` is compatible
+    // with `autonat::v2::client::Event`
     TestEvent::AutonatClientFailed(unsafe {
         &*(&raw const *AUTONAT_FAILED_1).cast::<autonat::v2::client::Event>()
     })

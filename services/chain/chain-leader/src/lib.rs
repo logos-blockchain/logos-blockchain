@@ -390,7 +390,8 @@ where
         .await?;
 
         // Wait until the chain becomes Online mode.
-        // We should not propose blocks while the chain is in Bootstrapping mode.
+        // We should not propose blocks while the chain is in Bootstrapping
+        // mode.
         info!(target: LOG_TARGET, "Waiting for chain to become online");
         cryptarchia_api
             .wait_until_chain_becomes_online()
@@ -475,6 +476,16 @@ where
                             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
                             continue;
                         };
+                        tracing::debug!(
+                            target: LOG_TARGET,
+                            event = "leader_eligible_notes",
+                            path = "block_production",
+                            slot = ?slot,
+                            epoch = ?epoch,
+                            note_count = eligible_aged.len(),
+                            total_value = eligible_aged.iter().map(|note| note.note.note.value).sum::<u64>(),
+                            "Eligible notes for block production"
+                        );
 
                         // The block-proposal proof must prove the winning note is still
                         // unspent, so it needs the latest tip ledger state (fetched per slot).
@@ -732,8 +743,8 @@ where
         )
         .await;
 
-        // The PoL proves the reward note of the block, whose value is the reward
-        // of the transactions the block ends up holding.
+        // The PoL proves the reward note of the block, whose value is the
+        // reward of the transactions the block ends up holding.
         let reward_value = block_leader_reward(header_state, txs.as_slice(), era_schedule)?;
         let reward = wallet_api
             .new_leader_reward(reward_value, reward_public_key)
@@ -752,8 +763,8 @@ where
                 reward.value,
             )
             .await?;
-        // The PoL is bound to the block ID, blocks carry no signature. The block ID
-        // covers the entropy contribution, set before proving.
+        // The PoL is bound to the block ID, blocks carry no signature. The
+        // block ID covers the entropy contribution, set before proving.
         let msg = block_msg(
             &parent,
             slot,
@@ -835,9 +846,10 @@ where
     ) {
         match msg {
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
-                // Spawn a dedicated, off-main-loop task that scans winning slots
-                // for this subscriber and streams them in, with the bounded
-                // channel providing backpressure.
+                // Spawn a dedicated, off-main-loop task that scans winning
+                // slots for this subscriber and streams them
+                // in, with the bounded channel providing
+                // backpressure.
                 let (epoch_handoff_sender, epoch_handoff_receiver) =
                     mpsc::channel(WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE);
                 spawn(
@@ -965,9 +977,10 @@ mod tests {
     #[tokio::test]
     async fn block_tx_selection_stops_at_leading_oversized_transaction() {
         // A transaction larger than the whole block can never fit. Selection
-        // stops at it rather than skipping past to later transactions, which may
-        // depend on it. (In practice such transactions are filtered out before
-        // reaching here, but the prefix invariant must hold regardless.)
+        // stops at it rather than skipping past to later transactions, which
+        // may depend on it. (In practice such transactions are filtered
+        // out before reaching here, but the prefix invariant must hold
+        // regardless.)
         let txs = stream::iter(vec![TestTx { size: MAX_SIZE + 1 }, TestTx { size: 1 }]);
 
         let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;

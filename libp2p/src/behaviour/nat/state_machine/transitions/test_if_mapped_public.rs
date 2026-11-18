@@ -83,7 +83,8 @@ mod tests {
         let mut state_machine = StateMachine::new(tx);
         state_machine.inner = Some(TestIfMappedPublic::for_test(ADDR.clone(), ADDR.clone()));
         state_machine.on_test_event(external_address_confirmed_address_mismatch());
-        // Transitions to MappedPublic with local_address=ADDR, external_address=ADDR_1
+        // Transitions to MappedPublic with local_address=ADDR,
+        // external_address=ADDR_1
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
             &MappedPublic::for_test_with_addrs(ADDR.clone(), ADDR_1.clone())

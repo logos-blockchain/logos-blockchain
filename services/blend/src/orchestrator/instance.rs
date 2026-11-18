@@ -455,7 +455,8 @@ mod tests {
                 .unwrap();
             assert!(matches!(instance, Instance::BroadcastAfterCore { .. }));
 
-            // BroadcastAfterCore -> Broadcast, after the transition period expires.
+            // BroadcastAfterCore -> Broadcast, after the transition period
+            // expires.
             let instance = instance
                 .handle_epoch_event::<u8>(
                     EpochEvent::TransitionPeriodExpired,
@@ -538,7 +539,6 @@ mod tests {
                     ServiceResourcesHandle {
                         ref status_updater, ..
                     },
-                ..
             } = self;
             status_updater.notify_ready();
 
@@ -576,7 +576,6 @@ mod tests {
                     ServiceResourcesHandle {
                         ref status_updater, ..
                     },
-                ..
             } = self;
             status_updater.notify_ready();
 
@@ -614,7 +613,6 @@ mod tests {
                     ServiceResourcesHandle {
                         ref status_updater, ..
                     },
-                ..
             } = self;
             status_updater.notify_ready();
 

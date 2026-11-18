@@ -92,8 +92,8 @@ fn build_blend_data(
     let locators = Locators::from(Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?);
     let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
     // The zk_id is derived from the quota secret key itself, which the Proof of
-    // Quota proves, and the service note is under the public key of the notes of
-    // the same key, which the wallet spends.
+    // Quota proves, and the service note is under the public key of the notes
+    // of the same key, which the wallet spends.
     let zk_id = kdf_public_key(blend_key.as_fr());
 
     // Declaration ID is not required for the genesis ceremony, but it is still

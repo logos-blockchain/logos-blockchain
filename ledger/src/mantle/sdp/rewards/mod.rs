@@ -74,8 +74,8 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     #[must_use]
     fn add_income(&self, income: Value) -> Self;
 
-    // The income earned in the current epoch, which `blend_rewards_pending` also
-    // holds.
+    // The income earned in the current epoch, which `blend_rewards_pending`
+    // also holds.
     fn pending_income(&self) -> Value;
 }
 

@@ -257,22 +257,23 @@ impl LedgerState {
         // First, update the next epoch nonce using the ledger state
         // that was updated by the previous slot (block).
         // TODO: Refactor: Guarantee that `next_epoch_state` is always updated
-        // whenever `LedgerState` is updated before Lottery Constants Finalization
-        // period starts.
+        // whenever `LedgerState` is updated before Lottery Constants
+        // Finalization period starts.
         let next_epoch_state = self
             .next_epoch_state
             .clone()
             .update_from_ledger(&self, sdp, pow, eras);
 
         // There are 3 cases to consider:
-        // 1. We are in the same epoch as the parent state: Update the next epoch state
-        // 2. We are in the next epoch: Use the next epoch state as the current epoch
-        //    state and reset next epoch state
-        // 3. We are in the next-next or later epoch (which mean that some epochs had no
-        //    block): Use the parent state as the epoch state and reset next epoch
-        //    state. Total stake should be adjusted with zero block density for skipped
-        //    epochs. Storage Market is updated with 0 storage gas used for skipped
-        //    epochs.
+        // 1. We are in the same epoch as the parent state: Update the next
+        //    epoch state
+        // 2. We are in the next epoch: Use the next epoch state as the current
+        //    epoch state and reset next epoch state
+        // 3. We are in the next-next or later epoch (which mean that some
+        //    epochs had no block): Use the parent state as the epoch state and
+        //    reset next epoch state. Total stake should be adjusted with zero
+        //    block density for skipped epochs. Storage Market is updated with 0
+        //    storage gas used for skipped epochs.
         if current_epoch == new_epoch {
             // case 1)
             Ok(Self {
@@ -303,10 +304,11 @@ impl LedgerState {
                 "epoch transition"
             );
             let block_density = BlockDensity::new(new_epoch, eras);
-            // TODO: Refactor: Have the unified update logic for all fields in `EpochState`.
-            // `epoch` and `utxos` are updated by `EpochState::update_from_ledger`,
-            // but `total_stake` and lottery values are updated here.
-            // This can be error-prone.
+            // TODO: Refactor: Have the unified update logic for all fields in
+            // `EpochState`. `epoch` and `utxos` are updated by
+            // `EpochState::update_from_ledger`, but `total_stake`
+            // and lottery values are updated here. This can be
+            // error-prone.
             let epoch_state = EpochState {
                 total_stake,
                 lottery_0,
@@ -462,8 +464,7 @@ impl LedgerState {
         let avg_numerator = (q_denominator.get() - q_numerator)
             * u128::from(block_execution_gas_consumed.into_inner())
             + q_numerator * u128::from(self.average_execution_gas.into_inner());
-        let new_average_execution_gas: Gas =
-            ((avg_numerator / q_denominator.get()) as Value).into();
+        let new_average_execution_gas: Gas = ((avg_numerator / q_denominator) as Value).into();
 
         // Then update the `execution_base_fee` using the new average:
         // `b[s + 1] = b[s]·(1 + φ·(G_avg[s] - G_target) / G_target)`.
@@ -518,8 +519,8 @@ impl LedgerState {
         pow: &PowState,
         eras: &EraScheduledConfig,
     ) -> Result<Self, LedgerError<Id>> {
-        // First, synthesize epoch state for `slot` before update the ledger state.
-        // Then, update the nonce. Finally, mark the occupied
+        // First, synthesize epoch state for `slot` before update the ledger
+        // state. Then, update the nonce. Finally, mark the occupied
         // slots since this function is called for a new block.
         Ok(self
             .update_epoch_state(slot, sdp, pow, eras)?
@@ -656,8 +657,8 @@ impl LedgerState {
         distributed: impl IntoIterator<Item = Value>,
         declared_amounts: impl IntoIterator<Item = Value>,
     ) -> Result<Value, LedgerError<Id>> {
-        // Initial Epoch State item 3: D is the total tokens distributed at genesis, the
-        // amounts of the SDP_DECLARE Operations included.
+        // Initial Epoch State item 3: D is the total tokens distributed at
+        // genesis, the amounts of the SDP_DECLARE Operations included.
         distributed
             .into_iter()
             .chain(declared_amounts)
@@ -842,8 +843,9 @@ impl LedgerState {
             .clone())
     }
 
-    // Mantle Ledger Initialization: the commitments of the initial notes, created
-    // from the distribution inscription, are appended to the empty ledger set.
+    // Mantle Ledger Initialization: the commitments of the initial notes,
+    // created from the distribution inscription, are appended to the empty
+    // ledger set.
     #[must_use]
     pub fn from_genesis_notes(
         initial_notes: &[notes::Note],
@@ -955,7 +957,7 @@ fn update_storage_market(
     let (beta_numerator, beta_denominator) = ratio_parts(market.ema_smoothing_factor);
     let new_ema: Gas = (((beta_numerator * total_storage_gas
         + (beta_denominator.get() - beta_numerator) * previous_ema)
-        / beta_denominator.get()) as Value)
+        / beta_denominator) as Value)
         .into();
     let new_ema_unsigned = u128::from(new_ema.into_inner());
     // Hold the price while the effective target is zero (genesis / sustained
@@ -1029,7 +1031,7 @@ pub mod tests {
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, kdf_public_key,
     };
-    use lb_utils::math::PositiveF64;
+    use lb_utils::math::PositiveRatio;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
 
@@ -1039,10 +1041,7 @@ pub mod tests {
         config::BlockRewardsParameters,
         mantle::{
             pow::tx_density::ClosedEpochLoad,
-            sdp::{
-                ServiceRewardsParameters,
-                rewards::{self},
-            },
+            sdp::{ServiceRewardsParameters, rewards},
         },
         test_utils::{FORK_DIGEST, schedule, single_era},
     };
@@ -1243,7 +1242,8 @@ pub mod tests {
         }
     }
 
-    // The reward value of the block of `txs` on `parent`, for its header to carry.
+    // The reward value of the block of `txs` on `parent`, for its header to
+    // carry.
     pub fn computed_reward_value(
         ledger: &Ledger<HeaderId>,
         parent: HeaderId,
@@ -1270,7 +1270,6 @@ pub mod tests {
             ServiceType::BlendNetwork,
             ServiceParameters {
                 inactivity_period: 2.try_into().unwrap(),
-                epoch: 0.into(),
             },
         );
 
@@ -1281,7 +1280,7 @@ pub mod tests {
         };
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -1296,7 +1295,8 @@ pub mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -1304,10 +1304,7 @@ pub mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: lb_core::sdp::MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: lb_core::sdp::MinStake { threshold: 1 },
             },
             // `alpha = 1/2`, `T_tx = 10`, `k = 4`, with a baseline that is a
             // perfect square so the reference load lands on it exactly.
@@ -1338,7 +1335,7 @@ pub mod tests {
                 },
                 10_000_000_000_000_000_000,
                 1.try_into().unwrap(),
-                NonNegativeRatio::new(1, 30.try_into().unwrap()),
+                ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -1424,10 +1421,9 @@ pub mod tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
@@ -1479,9 +1475,9 @@ pub mod tests {
         utxo_proof: notes::Note,
         utxo_add: notes::Note,
     ) -> HeaderId {
-        // we still don't have transactions, so the only way to add a commitment to
-        // spendable utxos and test epoch snapshotting is by doing this
-        // manually
+        // we still don't have transactions, so the only way to add a commitment
+        // to spendable utxos and test epoch snapshotting is by doing
+        // this manually
         update_ledger_amended(ledger, parent, slot, utxo_proof, |state| {
             add_utxo(state, utxo_add)
         })
@@ -1606,11 +1602,11 @@ pub mod tests {
 
     #[test]
     fn storage_price_held_when_effective_target_is_zero() {
-        // Failure case for the missing guard: with zero usage and a zero EMA the
-        // effective target is 0, so the price must be HELD at P_STR(0). Without
-        // the `effective_target == 0` guard, `8*0 <= 7*0` takes the clamp-down
-        // branch and ratchets the price down 12.5% (1000 -> 875) every
-        // zero-usage epoch.
+        // Failure case for the missing guard: with zero usage and a zero EMA
+        // the effective target is 0, so the price must be HELD at
+        // P_STR(0). Without the `effective_target == 0` guard, `8*0 <=
+        // 7*0` takes the clamp-down branch and ratchets the price down
+        // 12.5% (1000 -> 875) every zero-usage epoch.
         let market = config().storage_market;
         let price: GasPrice = 1000.into();
         let (new_price, new_ema) = update_storage_market(price, 0.into(), 0.into(), &market);
@@ -1620,9 +1616,9 @@ pub mod tests {
         );
         assert_eq!(new_ema, Gas::from(0));
 
-        // Sanity: once there is a real (non-zero) EMA, the price still adjusts —
-        // the guard only fires at a zero target. Zero usage against a non-zero
-        // EMA clamps down as before.
+        // Sanity: once there is a real (non-zero) EMA, the price still adjusts
+        // — the guard only fires at a zero target. Zero usage against a
+        // non-zero EMA clamps down as before.
         let (clamped, _) = update_storage_market(price, 0.into(), 800.into(), &market);
         assert_eq!(clamped, GasPrice::from(875), "non-zero target still clamps");
     }
@@ -1682,8 +1678,8 @@ pub mod tests {
         // Epoch jump: epoch 0 -> 2
         // Jump to the slot that is not the 1st slot of epoch 2
         let h_4 = update_ledger(&mut ledger, h_3, 222, leader_utxos[3]).unwrap();
-        // nonce for epoch 2 should be taken at the end of slot 160, but in our case
-        // the last block is at slot 90 because of epoch jumps
+        // nonce for epoch 2 should be taken at the end of slot 160, but in our
+        // case the last block is at slot 90 because of epoch jumps
         assert_eq!(
             ledger.states[&h_4].cryptarchia_ledger.epoch_state.nonce,
             ledger.states[&h_3].cryptarchia_ledger.nonce,
@@ -1961,8 +1957,8 @@ pub mod tests {
 
         // Advance to epoch 5 (one-by-one).
         // With inactivity_period=2, the declaration goes inactive at epoch 5.
-        // It shouldn't be in the snapshot, but should still exist in the live SDP
-        // ledger because the user has not yet withdrawn it.
+        // It shouldn't be in the snapshot, but should still exist in the live
+        // SDP ledger because the user has not yet withdrawn it.
         let mut ledger = ledger0.clone();
         let mut head = head0;
         for epoch in 1..=5u64 {
@@ -2045,8 +2041,8 @@ pub mod tests {
         );
 
         // Epoch 0 -> 1 transition --------------------
-        // slot 100 triggers the transition and also counts in epoch 1's window [100,
-        // 159]
+        // slot 100 triggers the transition and also counts in epoch 1's window
+        // [100, 159]
         let h5 = update_ledger(&mut ledger, h4, 100, utxo).unwrap();
         let ts1 = inference.total_stake_inference::<PRECISION>(ts_genesis, 3);
         assert_eq!(ledger.states[&h5].cryptarchia_ledger.epoch_state.epoch, 1);
@@ -2199,8 +2195,9 @@ pub mod tests {
             .unwrap();
         let state = state.append_leader_reward::<()>(reward_commitment).unwrap();
 
-        // Stake 10_000 is far below target, so A_t = 1: no payout, the maximum release
-        // 95_129_375_951, two fifths of it plus the tips to the leader.
+        // Stake 10_000 is far below target, so A_t = 1: no payout, the maximum
+        // release 95_129_375_951, two fifths of it plus the tips to the
+        // leader.
         assert_eq!(blend_share, 57_077_625_571);
         assert_eq!(leader_reward, 38_051_750_387);
         let expected = CommitmentMmr::new()
@@ -2236,8 +2233,8 @@ pub mod tests {
             ZkPublicKey::new(Fr::from(4u64)),
         );
 
-        // The share of the epoch closes at the first block of the next one, and pays
-        // the notes at the first block of the one after.
+        // The share of the epoch closes at the first block of the next one, and
+        // pays the notes at the first block of the one after.
         let state = state.pay_service_rewards::<()>(&[]).unwrap();
         assert_eq!(state.block_rewards.blend_rewards_closed(), 57_077_625_571);
         let reserve = state.block_rewards.rewards_reserve();
@@ -2307,8 +2304,8 @@ pub mod tests {
             genesis_root
         );
 
-        // Epoch 2 freezes the start of epoch 1: the slot 1 note, not the note of
-        // the first slot of epoch 1.
+        // Epoch 2 freezes the start of epoch 1: the slot 1 note, not the note
+        // of the first slot of epoch 1.
         let h_2_0 = update_ledger(&mut ledger, h_1_0, 2 * epoch_length, leader).unwrap();
         assert_eq!(
             ledger.states[&h_2_0]
@@ -2413,7 +2410,7 @@ pub mod tests {
         let era_1 = Config {
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(4).unwrap(),
-                NonNegativeRatio::new(1, 5.try_into().unwrap()),
+                ProperFraction::new(1, 5.try_into().unwrap()).unwrap(),
                 0.5f64.try_into().expect("1/2 > 0"),
                 12,
                 4,
@@ -2620,9 +2617,9 @@ pub mod tests {
         // Build a proof with the synthesized epoch state
         let proof = generate_proof(&synthesized_ledger_state, &utxo, slot);
 
-        // The proof was built from the epoch 2's state synthesized above, so it is
-        // verified successfully only if `leader_public` synthesizes the same
-        // state when jumping from epoch 0 to epoch 2.
+        // The proof was built from the epoch 2's state synthesized above, so it
+        // is verified successfully only if `leader_public` synthesizes
+        // the same state when jumping from epoch 0 to epoch 2.
         assert!(
             proof.verify(
                 &ledger_state_1
@@ -2876,8 +2873,9 @@ pub mod tests {
 
     #[test]
     fn execution_market_targets_half_the_gas_limit() {
-        // 3,200,000 minus 62,202, the fixed costs of a block measured in the Gas Cost
-        // Determination, paid by the block rather than by the Operations.
+        // 3,200,000 minus 62,202, the fixed costs of a block measured in the
+        // Gas Cost Determination, paid by the block rather than by the
+        // Operations.
         let market = config().execution_market;
         assert_eq!(Gas::from(market.max_gas_per_block), Gas::new(3_137_798));
         assert_eq!(market.max_gas_per_block.target(), Gas::new(1_568_899));
@@ -2902,8 +2900,9 @@ pub mod tests {
             .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), &pow_state(), &eras)
             .unwrap();
 
-        // The accumulated 600 must reach the price update: with a starting price
-        // of 113 and EMA 300 that yields (128, 450) after ceiling division.
+        // The accumulated 600 must reach the price update: with a starting
+        // price of 113 and EMA 300 that yields (128, 450) after ceiling
+        // division.
         assert_eq!(rotated.storage_gas_price, 128.into());
         assert_eq!(rotated.storage_gas_ema, 450.into());
         // The counter resets for the new epoch.

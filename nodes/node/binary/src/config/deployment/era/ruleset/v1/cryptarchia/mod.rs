@@ -4,7 +4,6 @@ use core::{
 };
 
 use lb_binary_codec::canonical::BinaryEncode;
-use lb_chain_service::Epoch;
 use lb_core::{
     block::{Block, BlockLimits, BlockNumber, Proposal},
     mantle::gas::{Gas, GasProfile},
@@ -20,7 +19,7 @@ use lb_ledger::cryptarchia::STAKE_INFERENCE_PRECISION;
 use lb_libp2p::cryptarchia_sync::max_blocks_response_bincode_size;
 use lb_pow_service::single_claim_tx_size;
 use lb_utils::{
-    math::{NonNegativeF64, NonNegativeRatio},
+    math::{NonNegativeF64, NonNegativeRatio, ProperFraction},
     net::MAX_WIRE_MESSAGE_SIZE,
 };
 use lb_wallet_service::SPEND_ROOT_DEPTH;
@@ -319,17 +318,17 @@ impl Settings {
 /// the expected density it divides by is not zero.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, BinaryEncode)]
 #[serde(try_from = "NonNegativeRatio", into = "NonNegativeRatio")]
-pub struct SlotActivationCoeff(NonNegativeRatio);
+pub struct SlotActivationCoeff(ProperFraction);
 
 impl SlotActivationCoeff {
     #[must_use]
-    pub const fn get(self) -> NonNegativeRatio {
+    pub const fn get(self) -> ProperFraction {
         self.0
     }
 }
 
 impl Deref for SlotActivationCoeff {
-    type Target = NonNegativeRatio;
+    type Target = ProperFraction;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -344,23 +343,24 @@ impl TryFrom<NonNegativeRatio> for SlotActivationCoeff {
             numerator,
             denominator,
         } = coeff;
-        if numerator < denominator.get()
-            && (coeff.as_f64() * STAKE_INFERENCE_PRECISION as f64).trunc() >= 1.0
-        {
-            Ok(Self(coeff))
-        } else {
-            Err(format!(
+        match ProperFraction::new(numerator, denominator) {
+            Some(fraction)
+                if (coeff.as_f64() * STAKE_INFERENCE_PRECISION as f64).trunc() >= 1.0 =>
+            {
+                Ok(Self(fraction))
+            }
+            _ => Err(format!(
                 "The slot activation coefficient {numerator}/{denominator} must be below 1, and \
                  at least 1/{STAKE_INFERENCE_PRECISION}, the precision the total stake \
                  inference measures it with."
-            ))
+            )),
         }
     }
 }
 
 impl From<SlotActivationCoeff> for NonNegativeRatio {
     fn from(coeff: SlotActivationCoeff) -> Self {
-        coeff.0
+        coeff.0.get()
     }
 }
 
@@ -402,7 +402,6 @@ impl SdpConfig {
 #[derive(Serialize, Deserialize, Debug, Clone, BinaryEncode)]
 pub struct ServiceParameters {
     pub inactivity_period: InactivityPeriod,
-    pub epoch: Epoch,
 }
 
 // The same as `lb_ledger::config::PoWConfig`.

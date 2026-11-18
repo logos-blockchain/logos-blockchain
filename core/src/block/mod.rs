@@ -623,8 +623,8 @@ mod tests {
     struct TestMantleTx<const SIZE: usize>;
 
     impl<const SIZE: usize> Hashable for TestMantleTx<SIZE> {
-        //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-        // the closure.
+        //noinspection RsTypeCheck: The type is correct, but the linter is
+        // confused by the closure.
         const HASHER: hashable::Hasher<Self> = |_tx| TxHash::from([0u8; 32]);
         type Hash = TxHash;
 

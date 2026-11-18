@@ -16,6 +16,7 @@
 
 use std::{
     collections::BTreeMap,
+    convert::Infallible,
     error::Error,
     fmt,
     ops::Bound,
@@ -338,10 +339,6 @@ impl fmt::Debug for MemKv {
             .finish_non_exhaustive()
     }
 }
-
-/// [`MemKv`] never fails.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Infallible {}
 
 impl MemKv {
     #[must_use]

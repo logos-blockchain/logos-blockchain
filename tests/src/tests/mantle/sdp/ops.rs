@@ -115,7 +115,8 @@ async fn sdp_ops_e2e() {
         .expect("declaration should appear after submission");
     assert_eq!(declaration_created.provider_id, provider_id);
 
-    // Submit a withdraw tx as soon as the change of the declaration can fund it.
+    // Submit a withdraw tx as soon as the change of the declaration can fund
+    // it.
     wait_for_spend_depth(&node0, inclusion_timeout).await;
     withdraw_and_wait_for_removal(&node0, declaration_id, inclusion_timeout, slots_per_epoch).await;
 }

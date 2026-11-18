@@ -28,7 +28,7 @@ trait SDPDeclareValidationExt {
         &self,
         declarations: &Declarations,
         provider_index: &ProviderIndex,
-        min_stake: &MinStake,
+        min_stake: MinStake,
     ) -> Result<(), SdpError>;
 
     fn execute(
@@ -42,7 +42,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         &self,
         declarations: &Declarations,
         provider_index: &ProviderIndex,
-        min_stake: &MinStake,
+        min_stake: MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
         if declarations.contains_key(&self.id()) {
@@ -72,7 +72,8 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             .provider_index
             .insert_mut(self.provider_id, declaration_id);
 
-        // Spend the inputs from the ledger set and add the service note to the SDP set
+        // Spend the inputs from the ledger set and add the service note to the
+        // SDP set
         let ledger = context
             .note_sets
             .ledger()
@@ -183,7 +184,7 @@ impl VerifiableOperation<StandardMode>
             operation,
             context.declarations,
             context.provider_index,
-            context.min_stake,
+            *context.min_stake,
         )?;
 
         // Validate the inputs against the ledger note set
@@ -195,8 +196,8 @@ impl VerifiableOperation<StandardMode>
         )?;
 
         // Defer the proof verification so that the caller can batch it.
-        // Ed25519 verification is done by `preverify`. The declaration creates no
-        // output in the ledger set: its excess is the stake.
+        // Ed25519 verification is done by `preverify`. The declaration creates
+        // no output in the ledger set: its excess is the stake.
         Ok(defer_zk_transfer(
             &self.proof().zk_proof,
             &operation.inputs,
@@ -220,12 +221,12 @@ impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverif
             operation,
             context.declarations,
             context.provider_index,
-            context.min_stake,
+            *context.min_stake,
         )?;
 
-        // Genesis Validation Exemptions 1 and 3: a declaration must have no inputs, so
-        // there is no spendability to check, and neither its ZkTransfer nor its
-        // signature is verified.
+        // Genesis Validation Exemptions 1 and 3: a declaration must have no
+        // inputs, so there is no spendability to check, and neither its
+        // ZkTransfer nor its signature is verified.
         if !operation.inputs.is_empty() {
             return Err(SdpError::GenesisDeclarationWithInputs);
         }
@@ -383,10 +384,7 @@ mod tests {
                     tx_hash_view: &tx_hash_view(),
                     declarations,
                     provider_index: &ProviderIndex::new_sync(),
-                    min_stake: &MinStake {
-                        threshold,
-                        timestamp: 0,
-                    },
+                    min_stake: &MinStake { threshold },
                 },
             )
         }
@@ -754,10 +752,7 @@ mod tests {
             .verify(&SDPDeclareGenesisValidationContext {
                 declarations,
                 provider_index,
-                min_stake: &MinStake {
-                    threshold,
-                    timestamp: 0,
-                },
+                min_stake: &MinStake { threshold },
             })
         }
 
@@ -776,8 +771,8 @@ mod tests {
             );
         }
 
-        // Genesis Validation Exemptions 3: a nullifier given at Genesis could not be
-        // tied to a note.
+        // Genesis Validation Exemptions 3: a nullifier given at Genesis could
+        // not be tied to a note.
         #[test]
         fn genesis_verify_rejects_a_declaration_with_inputs() {
             let operation = SDPDeclareOp {
