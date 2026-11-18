@@ -16,7 +16,7 @@ Feature: Fees
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 1           | 1000         |
-      | 2             | 1           | 10000        |
+      | 2             | 2           | 10000        |
     And I have a cluster with capacity of 1 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name        | connected_to |
@@ -26,7 +26,8 @@ Feature: Fees
     Then gas prices on node "NODE_1" at the genesis block equal the genesis gas prices
     When I fund a transaction paying 10 LGO from node "NODE_1" wallet to wallet "WALLET_PAYMENT" as "FUNDED_PAYMENT"
     Then transaction "FUNDED_PAYMENT" is included on node "NODE_1" in 120 seconds
-    # The node funds from the change of the payment, which it spends 4 blocks deep
+    # The node funds from its other note and, at a high enough execution price,
+    # the change of the payment, which it spends 4 blocks deep
     When I record node "NODE_1" height as "PAYMENT_HEIGHT"
     Then node "NODE_1" reaches 4 blocks beyond recorded height "PAYMENT_HEIGHT" in 120 seconds
     When I fund an inscription transaction from wallet "WALLET_INSCRIPTION" via node "NODE_1" as "FUNDED_INSCRIPTION"
