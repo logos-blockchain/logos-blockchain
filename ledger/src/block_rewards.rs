@@ -345,17 +345,19 @@ mod tests {
     }
 
     #[test]
-    fn an_era_shrinking_the_window_drops_blocks_and_growing_it_starts_over() {
-        // A window of 3 blocks keeps the last three of four.
-        let window = window_of([1, 2, 3, 4], 3);
-        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [2, 3, 4]);
-        // Shrunk to 2 by the next block's era, it keeps the last block and that
-        // block.
-        let window = window.with_block(5, NonZero::new(2).unwrap());
-        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [4, 5]);
-        // Grown to 3, it holds that block only.
-        let window = window.with_block(6, NonZero::new(3).unwrap());
-        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [6]);
+    fn an_era_shrinking_the_window_drops_its_oldest_blocks() {
+        let window = window_of([1, 2, 3], 3);
+        // Shrunk to 2, the window keeps its last block and the new one.
+        let window = window.with_block(4, NonZero::new(2).unwrap());
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [3, 4]);
+    }
+
+    #[test]
+    fn an_era_growing_the_window_resets_it() {
+        let window = window_of([1, 2], 2);
+        // Grown to 3, the window holds the new block only.
+        let window = window.with_block(3, NonZero::new(3).unwrap());
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [3]);
     }
 
     #[test]
