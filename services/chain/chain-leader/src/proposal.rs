@@ -84,7 +84,8 @@ mod tests {
         let key = UnsecuredZkKey::new(Fr::from(7u64));
         let nullifier_key = key.nullifier_key();
         let note = notes::Note::new(1_000, Fr::from(11u64), key.to_public_key());
-        let ledger = LedgerState::from_notes([note], &config, 0);
+        let ledger =
+            LedgerState::from_notes([note], &config, &crate::leadership::genesis_parameters());
         let (_, aged_path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
             .unwrap();

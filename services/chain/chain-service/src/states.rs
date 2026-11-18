@@ -180,7 +180,7 @@ mod tests {
     };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, EmissionRatio, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -291,12 +291,25 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                lb_ledger::config::BlockRewardsParameters {
+                    max_emission_rate: lb_utils::math::ProperFraction::new(
+                        1,
+                        100.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
+                        .unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
+                        .unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                NonNegativeRatio::new(1, 30.try_into().unwrap()),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -408,7 +421,11 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
+            lb_ledger::LedgerState::from_notes(
+                [],
+                &ledger_config,
+                &crate::tests::genesis_parameters(),
+            ),
             single_era(ledger_config),
         )
         .unwrap();
@@ -522,12 +539,25 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                lb_ledger::config::BlockRewardsParameters {
+                    max_emission_rate: lb_utils::math::ProperFraction::new(
+                        1,
+                        100.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
+                        .unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
+                        .unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                NonNegativeRatio::new(1, 30.try_into().unwrap()),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -579,7 +609,11 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new_with_lib_state(
                 lib_id,
-                lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
+                lb_ledger::LedgerState::from_notes(
+                    [],
+                    &ledger_config,
+                    &crate::tests::genesis_parameters(),
+                ),
                 single_era(ledger_config.clone()),
                 &crate::LibInfo::of(engine.lib_branch()),
             )
