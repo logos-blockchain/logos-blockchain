@@ -29,12 +29,13 @@ use lb_core::{
     mantle::{
         GenesisParameters, Value, VerificationError,
         batch::DeferredProofs,
+        channel::Channels,
         gas::{Gas, GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::{NoteSetError, NoteSets, TxNoteState},
         notes::{self, NoteCommitment},
         ops::{
-            SignedOp,
+            OpRef, SignedOp,
             channel::{deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext},
             pow::{ClaimPoWRewardExecutionContext, PowReward},
             program::ProgramRegisterExecutionContext,
@@ -94,6 +95,61 @@ type CountedTxOutcome = (
     Vec<TxEvent>,
     DeferredProofs,
 );
+
+// The Execution Gas of the Operations of a transaction, priced as they are
+// admitted and held to the gas a transaction can have.
+struct OperationsGas {
+    profile: GasProfile,
+    limit: Gas,
+    // The gas of the Operations admitted, without their root extensions.
+    operations: Gas,
+    // The state the Operations are priced against, moved by those admitted.
+    state: TxGasState<Channels>,
+}
+
+impl OperationsGas {
+    // The Operations are priced against the channels as the transaction found
+    // them.
+    fn new(profile: GasProfile, limit: Gas, channels: Channels) -> Self {
+        Self {
+            profile,
+            limit,
+            operations: Gas::new(0),
+            state: TxGasState::new(channels),
+        }
+    }
+
+    // Prices `operation` against the state the Operations before moved, and
+    // admits it only if the transaction has the gas for it and for the root
+    // extensions so far, its own with them: verifying it extends the roots its
+    // proofs name over the commitments buffered so far, work that must be paid
+    // for before it is done.
+    fn admit<Id>(&mut self, operation: OpRef<'_>) -> Result<(), LedgerError<Id>> {
+        self.operations = self
+            .operations
+            .checked_add(operation.execution_gas(&self.profile, &self.state)?)?;
+        self.state.apply(operation);
+        let gas = self.total()?;
+        if gas > self.limit {
+            return Err(LedgerError::TooMuchTransactionExecutionGas {
+                gas,
+                limit: self.limit,
+            });
+        }
+        Ok(())
+    }
+
+    // The gas of the Operations admitted, with the root extensions their proofs
+    // share paid once.
+    fn total(&self) -> Result<Gas, GasOverflow> {
+        self.operations
+            .checked_add(self.state.root_extensions_gas(&self.profile)?)
+    }
+
+    fn changed_note_sets(&self) -> usize {
+        self.state.changed_note_sets()
+    }
+}
 
 // Mantle Validation step 2: the excess of TRANSFER, CHANNEL_DEPOSIT and
 // SDP_WITHDRAW adds to a checked uint64 balance.
@@ -1457,36 +1513,23 @@ impl LedgerState {
         if !config.accepted_fork_digests.accepts(&fork_digest) {
             return Err(LedgerError::UnacceptedForkDigest(fork_digest));
         }
-        let max_gas = Gas::from(config.execution_market.max_gas_per_block);
         // The buffers and roots the Operations share, empty for every Mantle
         // Transaction and dropped with it.
         let mut tx_notes = TxNoteState::new();
         let mut verified_operations = tx.into_verified_operations();
 
         let mut balance: Balance = 0;
-        let mut execution_gas = Gas::new(0);
-        // The Operations are priced against the channels as the transaction
-        // found them, moved by the Operations before.
-        let mut gas_state = TxGasState::new(self.mantle_ledger.channels().clone());
+        let mut gas = OperationsGas::new(
+            config.gas_profile,
+            config.execution_market.max_gas_per_block.into(),
+            self.mantle_ledger.channels().clone(),
+        );
         let mut tx_events = Vec::new();
         let mut deferred_proofs = DeferredProofs::new();
 
-        // Each operation is priced against the state the operations before
-        // moved, before it is verified: verifying it extends the roots its
-        // proofs name over the commitments buffered so far, which is work the
-        // transaction must have the gas for before it is done.
+        // Each Operation is admitted before it is verified.
         while let Some(operation) = verified_operations.peek_operation() {
-            execution_gas = execution_gas
-                .checked_add(operation.execution_gas(&config.gas_profile, &gas_state)?)?;
-            gas_state.apply(operation);
-            let admitted =
-                execution_gas.checked_add(gas_state.root_extensions_gas(&config.gas_profile)?)?;
-            if admitted > max_gas {
-                return Err(LedgerError::TooMuchTransactionExecutionGas {
-                    gas: admitted,
-                    limit: max_gas,
-                });
-            }
+            gas.admit(operation)?;
 
             let helper = MantleOperationVerificationHelper::new(
                 &self.mantle_ledger,
@@ -1515,15 +1558,11 @@ impl LedgerState {
             )?;
         }
 
-        // The root extensions the proofs share are paid once, across the Operations.
-        let execution_gas =
-            execution_gas.checked_add(gas_state.root_extensions_gas(&config.gas_profile)?)?;
-
         Ok((
             self,
             balance,
-            execution_gas,
-            gas_state.changed_note_sets(),
+            gas.total()?,
+            gas.changed_note_sets(),
             tx_events,
             deferred_proofs,
         ))
@@ -1556,7 +1595,6 @@ mod tests {
         block::genesis::GenesisBlockBuilder,
         mantle::{
             GenesisTime, Op, OpProof, SignedOps,
-            channel::Channels,
             gas::TxGasCalculator as _,
             note_set::{
                 CommitmentMmr, NoteSet, NoteSetIndex, NoteSetUpdate, TxBuffer, TxNoteState,
