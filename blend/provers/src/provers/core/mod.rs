@@ -78,11 +78,13 @@ where
 
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         let start = Instant::now();
-        // The stream is built over `quota.values_range_from(starting_key_index)`, so
-        // it runs out at exactly the point a separate counter would have: one proof
-        // per key index the epoch's quota still holds. Letting it be the only bound
-        // keeps the two from ever disagreeing, and leaves nothing to spend before
-        // the `await` that a cancelled caller could take with it.
+        // The stream is built over
+        // `quota.values_range_from(starting_key_index)`, so it runs out
+        // at exactly the point a separate counter would have: one proof
+        // per key index the epoch's quota still holds. Letting it be the only
+        // bound keeps the two from ever disagreeing, and leaves nothing
+        // to spend before the `await` that a cancelled caller could
+        // take with it.
         let Some(proof) = self.proofs_stream.next().await else {
             tracing::warn!(target: LOG_TARGET, "Core quota exhausted for this epoch. No proof is generated.");
             return None;

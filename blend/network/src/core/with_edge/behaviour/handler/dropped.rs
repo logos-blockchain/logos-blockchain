@@ -36,9 +36,10 @@ impl From<DroppedState> for ConnectionState {
 }
 
 impl StateTrait for DroppedState {
-    // If an error message is to be emitted, it returns `Poll::Ready`, consuming it.
-    // After an error is consumed or if no error is to be consumed, the state
-    // machine will indefinitely return `Poll::Pending` every time it is polled.
+    // If an error message is to be emitted, it returns `Poll::Ready`, consuming
+    // it. After an error is consumed or if no error is to be consumed, the
+    // state machine will indefinitely return `Poll::Pending` every time it
+    // is polled.
     fn poll(self, _cx: &mut Context<'_>) -> PollResult<ConnectionState> {
         let ErrorState::NotConsumed(error) = self.error else {
             return (Poll::Pending, self.into());

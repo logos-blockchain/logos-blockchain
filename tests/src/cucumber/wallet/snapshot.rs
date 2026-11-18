@@ -510,8 +510,7 @@ fn scanner_group_node_names(world: &CucumberWorld, group_id: &str) -> Vec<String
         .fork_groups
         .groups()
         .get(group_id)
-        .map(|nodes| nodes.iter().cloned().collect())
-        .unwrap_or_default()
+        .map_or_default(|nodes| nodes.iter().cloned().collect())
 }
 
 fn read_wallet_snapshot_if_present(

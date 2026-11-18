@@ -148,9 +148,10 @@ impl PreverifiableOperation<StandardMode>
     type Error = Error;
 
     fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        // Even if the signer weakness is also checked as part of the `.verify()`
-        // function below, we still explicitly check it here, in case something changes
-        // within the `.verify()` implementation.
+        // Even if the signer weakness is also checked as part of the
+        // `.verify()` function below, we still explicitly check it
+        // here, in case something changes within the `.verify()`
+        // implementation.
         if self.operation().signer.is_weak() {
             return Err(Error::InvalidSigner);
         }
@@ -175,8 +176,8 @@ impl VerifiableOperation<StandardMode>
     fn verify(&self, context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
         let operation = self.operation();
 
-        // Check if the channel exist otherwise the inscription is valid only if and
-        // only if parent == ZERO
+        // Check if the channel exist otherwise the inscription is valid only if
+        // and only if parent == ZERO
         if let Some(channel) = context
             .channels
             .channels
@@ -210,7 +211,8 @@ impl VerifiableOperation<StandardMode>
             });
         }
 
-        // No deferred proof verification because it's cheap and done by `preverify`.
+        // No deferred proof verification because it's cheap and done by
+        // `preverify`.
         Ok(())
     }
 }
@@ -246,8 +248,8 @@ impl<Mode: VerificationMode> ExecutableOperation
                 posting_timeout: 0.into(),
             });
 
-        // Update the channel sequencer, its starting slot, the tip message and the tip
-        // slot
+        // Update the channel sequencer, its starting slot, the tip message and
+        // the tip slot
         let (new_sequencer, new_starting_slot) = channel.round_robin(context.block_slot);
         context.channels.channels = context.channels.channels.insert(
             operation.channel_id,

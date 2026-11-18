@@ -371,8 +371,8 @@ where
             };
 
             layers.extend(other_layers);
-            // Filter and tracing layers must wrap logger sinks so target filters
-            // apply to file/stdout output as intended.
+            // Filter and tracing layers must wrap logger sinks so target
+            // filters apply to file/stdout output as intended.
             layers.extend(logger_layers);
 
             tracing_subscriber::registry()

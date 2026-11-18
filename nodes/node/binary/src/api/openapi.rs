@@ -150,8 +150,7 @@ mod tests {
         let doc = document();
         let registered: BTreeSet<String> = doc["components"]["schemas"]
             .as_object()
-            .map(|schemas| schemas.keys().cloned().collect())
-            .unwrap_or_default();
+            .map_or_default(|schemas| schemas.keys().cloned().collect());
 
         let mut referenced = BTreeSet::new();
         collect_refs(&doc, &mut referenced);

@@ -6,8 +6,9 @@ use lb_testing_framework::{
 
 #[tokio::test]
 async fn smoke_two_validators_run_180s() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // `LOGOS_BLOCKCHAIN_NODE_BIN` can point to a prebuilt node binary; otherwise
-    // the testing framework builds one before starting local nodes.
+    // `LOGOS_BLOCKCHAIN_NODE_BIN` can point to a prebuilt node binary;
+    // otherwise the testing framework builds one before starting local
+    // nodes.
     let _init_result = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();

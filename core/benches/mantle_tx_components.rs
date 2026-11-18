@@ -105,8 +105,8 @@ fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
     bencher
         .with_inputs(|| make_inscription_tx(size))
         .bench_values(|tx| {
-            // Encoding is included here to compare fairly with the Poseidon2 hash function,
-            // which includes it.
+            // Encoding is included here to compare fairly with the Poseidon2
+            // hash function, which includes it.
             let encoded = tx.encode();
             let digest = blake2b(&[encoded.as_ref()]);
             let frs: Vec<Fr> = digest

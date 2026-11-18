@@ -262,7 +262,7 @@ impl PowState {
 #[must_use]
 pub fn compute_epoch_pow_reward(pow_reward_pool: PowReward, config: &Config) -> PowReward {
     let reward = u128::from(pow_reward_pool) * u128::from(config.pow_config.reward.rate_num)
-        / config.claim_rate_denominator().get();
+        / config.claim_rate_denominator();
     PowReward::try_from(reward).unwrap_or(PowReward::MAX)
 }
 

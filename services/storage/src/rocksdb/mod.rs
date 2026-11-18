@@ -391,24 +391,26 @@ impl StorageBackend for RocksBackend {
     ) -> Result<Vec<Bytes>, <Self as StorageBackend>::Error> {
         let mut values = Vec::new();
 
-        // NOTE: RocksDB has `prefix_iterator`, which sets `set_prefix_same_as_start`
-        // to `true`. However, it works only if prefix_extractor is non-null for the
-        // column family.
+        // NOTE: RocksDB has `prefix_iterator`, which sets
+        // `set_prefix_same_as_start` to `true`. However, it works only
+        // if prefix_extractor is non-null for the column family.
         // https://docs.rs/rocksdb/latest/rocksdb/struct.ReadOptions.html#method.set_prefix_same_as_start
         //
         // Since the column family is Optional in our
         // `RocksBackendSettings` and we don't configure any prefix extractor,
-        // the `prefix_iterator` works like a regular iterator, which doesn't check
-        // any upper bound.
+        // the `prefix_iterator` works like a regular iterator, which doesn't
+        // check any upper bound.
         //
         // Thus, we use the regular iterator instead for clarity, and check the
         // upper bound manually.
 
-        // Prepare the optional start and end keys by appending them to the prefix.
+        // Prepare the optional start and end keys by appending them to the
+        // prefix.
         let start_key = start_key.map(|k| key_bytes_raw(prefix, k));
         let end_key = end_key.map(|k| key_bytes_raw(prefix, k));
 
-        // Create an iterator starting from the prefix or the start key if provided.
+        // Create an iterator starting from the prefix or the start key if
+        // provided.
         let iter = self.rocks.iterator(IteratorMode::From(
             start_key.as_ref().map_or(prefix, |from| from.as_slice()),
             Direction::Forward,

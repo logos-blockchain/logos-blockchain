@@ -528,7 +528,8 @@ mod tests {
     fn a_deployment_that_changes_the_era_of_the_tip_is_refused() {
         let two_eras = two_eras();
         let era_1 = two_eras.era_schedule().get(Era::new(1)).unwrap();
-        // A tip in era 1, a slot the default deployment gives to the genesis era.
+        // A tip in era 1, a slot the default deployment gives to the genesis
+        // era.
         let tip_era = TipEra {
             slot: era_1.first_slot,
             fork_digest: era_1.parameters.fork_digest,

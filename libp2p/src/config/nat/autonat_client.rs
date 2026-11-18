@@ -32,8 +32,8 @@ impl Settings {
     pub fn to_libp2p_config(&self) -> Config {
         let mut config = Config::default();
 
-        // Apply only the settings that were specified, leaving libp2p defaults for the
-        // rest
+        // Apply only the settings that were specified, leaving libp2p defaults
+        // for the rest
         if let Some(max_candidates) = self.max_candidates {
             config = config.with_max_candidates(max_candidates);
         }

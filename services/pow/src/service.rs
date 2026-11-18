@@ -560,8 +560,8 @@ where
         let mut current_era_settings = settings.era_schedule.at_slot(current_slot_tick.slot);
         // A claim is published over Blend, which holds it to the payload body
         // of the era in force, so how many claims a transaction carries follows
-        // the era too. Finding it probes the encoding, so it is found once each time
-        // the service enters an era rather than for every claim.
+        // the era too. Finding it probes the encoding, so it is found once each
+        // time the service enters an era rather than for every claim.
         let mut max_claims_in_payload =
             max_claims_by_payload_size(current_era_settings.parameters.max_claim_tx_size);
 
@@ -2588,7 +2588,8 @@ mod tests {
 
     #[test]
     fn a_ticket_keeps_the_reward_window_of_its_era() {
-        // Era 0 has a window of 100 slots, and era 1, from slot 100, a window of
+        // Era 0 has a window of 100 slots, and era 1, from slot 100, a window
+        // of
         // 10. At slot 150, a ticket anchored at slot 60, in era 0, is claimable
         // until slot 160, while one anchored at slot 120, in era 1, expired at
         // slot 130.

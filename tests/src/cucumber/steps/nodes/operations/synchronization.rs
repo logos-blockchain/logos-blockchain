@@ -76,8 +76,8 @@ async fn catch_up_known_wallet_tracking_after_chain_sync(
     }
 
     let started_at = Instant::now();
-    // The wallet scanner timeout is moderate here because the contract is that the
-    // majority nodes have been synced prior just to this step.
+    // The wallet scanner timeout is moderate here because the contract is that
+    // the majority nodes have been synced prior just to this step.
     world
         .wait_for_wallet_scanner_catch_up(Duration::from_secs(30))
         .await?;

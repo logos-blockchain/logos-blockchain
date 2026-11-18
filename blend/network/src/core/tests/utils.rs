@@ -118,7 +118,8 @@ where
         BehaviourConstructor: FnOnce(&ed25519::Keypair) -> Behaviour,
     {
         let peer_id = PeerId::from(PublicKey::from(identity.public()));
-        // Use TCP and Yamus to be compatible with [`Swarm::new_ephemeral_tokio`].
+        // Use TCP and Yamus to be compatible with
+        // [`Swarm::new_ephemeral_tokio`].
         let transport = MemoryTransport::default()
             .or_transport(tcp::tokio::Transport::default())
             .upgrade(Version::V1)

@@ -165,9 +165,9 @@ pub fn select_transactions(
     }
 
     // Transactions that never became applicable are genuinely invalid against
-    // this block's ledger state and can be evicted from the mempool. If assembly
-    // stopped at the gas limit, unprocessed transactions are not invalid and
-    // must remain in the mempool.
+    // this block's ledger state and can be evicted from the mempool. If
+    // assembly stopped at the gas limit, unprocessed transactions are not
+    // invalid and must remain in the mempool.
     if !matches!(assembly_state, AssemblyState::GasCapacityReached) {
         invalid_tx_hashes.extend(pending.iter().map(Hashable::hash));
     }

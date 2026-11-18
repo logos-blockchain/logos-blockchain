@@ -212,8 +212,8 @@ impl ConnectionHandler {
     }
 
     const fn drop_notice(&mut self) {
-        // Set as `Some` instead of `consume()` if not `None` to avoid re-entrancy
-        // attacks.
+        // Set as `Some` instead of `consume()` if not `None` to avoid
+        // re-entrancy attacks.
         self.upgrade_notice = Some(UpgradeNotice::new_settled());
     }
 
@@ -518,9 +518,10 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 protocol: stream,
                 ..
             }) => {
-                // If `close_substreams` has already run, the behaviour considers
-                // this connection closed. Overwriting the Dropped state with an
-                // open stream here would resurrect the substream and keep the
+                // If `close_substreams` has already run, the behaviour
+                // considers this connection closed. Overwriting
+                // the Dropped state with an open stream here
+                // would resurrect the substream and keep the
                 // connection alive from libp2p's perspective, even though the
                 // behaviour has stopped tracking it.
                 if matches!(self.inbound_substream, Some(InboundSubstreamState::Dropped)) {
@@ -549,7 +550,8 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
                 }
             }
             ConnectionEvent::DialUpgradeError(e) => {
-                // This error is handled in the swarm, so we just log it at `DEBUG` level here.
+                // This error is handled in the swarm, so we just log it at
+                // `DEBUG` level here.
                 tracing::debug!(target: LOG_TARGET, "DialUpgradeError for connection {:?}: {:?}", self.connection_details, e);
                 self.close_substreams();
             }

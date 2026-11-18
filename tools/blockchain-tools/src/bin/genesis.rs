@@ -326,8 +326,8 @@ fn split_eras_into_files(config: &mut Value, output: &Path) -> Result<()> {
     }
     let eras_by_first_epoch = {
         // Eras are numbered in the order they start, whatever order the config
-        // lists them in, so they are collected and sorted by starting epoch (globally
-        // unique).
+        // lists them in, so they are collected and sorted by starting epoch
+        // (globally unique).
         let mut unordered_eras_by_first_epoch = eras
             .iter_mut()
             .map(|(first_epoch, era)| {

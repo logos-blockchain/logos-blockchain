@@ -216,9 +216,9 @@ where
             panic!("Non-ephemeral signing key must be an Ed25519 key");
         };
 
-        // Wait until the chain becomes Online mode before subscribing to memberships.
-        // Chain service provides the correct epoch state only after the chain becomes
-        // Online.
+        // Wait until the chain becomes Online mode before subscribing to
+        // memberships. Chain service provides the correct epoch state
+        // only after the chain becomes Online.
         let chain_api =
             CryptarchiaServiceApi::<<EdgeService as EdgeServiceComponents>::ChainService>::from_overwatch_handle(
                 overwatch_handle,

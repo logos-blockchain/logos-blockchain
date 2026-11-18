@@ -135,8 +135,8 @@ impl TimeServiceEraSettings {
     /// era. `None` if they do not fit in a `u64`.
     #[must_use]
     pub fn transition_period_in_slots_of(&self, next_era: &Self) -> Option<u64> {
-        // In nanoseconds, so that slots of any length, sub-second ones included,
-        // are measured exactly.
+        // In nanoseconds, so that slots of any length, sub-second ones
+        // included, are measured exactly.
         let transition_period_in_nanos = self
             .timing
             .slot_duration

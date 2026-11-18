@@ -3,6 +3,11 @@
 //! Zero-copy packet structures using `zerocopy` crate for parsing.
 //! All multibyte fields use network byte order via `U16NE`/`U32NE` types.
 
+#![expect(
+    clippy::empty_enums,
+    reason = "zerocopy's `FromBytes` derive generates an empty marker enum per struct field. Remove when updating to a version that fixes this."
+)]
+
 pub mod announce;
 pub mod map;
 

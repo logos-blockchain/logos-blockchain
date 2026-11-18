@@ -993,8 +993,7 @@ async fn validate_submission_fee_horizon(
         .map_err(|source| StepError::StepFail {
             message: format!("submission fee-horizon consensus query failed: {source}"),
         })?;
-    let current_epoch =
-        consensus.cryptarchia_info.slot.into_inner() / world.chain.slots_per_epoch.get();
+    let current_epoch = consensus.cryptarchia_info.slot.into_inner() / world.chain.slots_per_epoch;
     validate_submission_epoch(current_epoch, Some(policy))
 }
 
@@ -1008,7 +1007,7 @@ pub(crate) async fn validate_fee_horizon_after_wallet_batch(
     prepared_count: usize,
 ) -> Result<(), StepError> {
     let (_, _, consensus) = sanitize_best_node_info(world, wallet_name, None).await?;
-    let current_epoch = consensus.slot.into_inner() / world.chain.slots_per_epoch.get();
+    let current_epoch = consensus.slot.into_inner() / world.chain.slots_per_epoch;
     let valid_through_epoch = u64::from(policy.horizon.valid_through_epoch.into_inner());
     if current_epoch > valid_through_epoch {
         return Err(StepError::FeeHorizonExceededAfterWalletBatch {

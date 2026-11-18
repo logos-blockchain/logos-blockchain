@@ -226,7 +226,8 @@ async fn verify_service_note_id_value(
 
     // Preflight guard: fail early when the provided note does not belong to the
     // declaration ZK key according to the wallet view at `node_address`.
-    // TODO: Also verify minimum stake amount once that threshold is exposed here.
+    // TODO: Also verify minimum stake amount once that threshold is exposed
+    // here.
     if !notes.contains_key(&service_note_id) {
         bail!(
             "Service note ID '{service_note_id:?}' was not found in wallet notes for provided Blend ZK ID",

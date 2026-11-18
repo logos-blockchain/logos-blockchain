@@ -132,7 +132,7 @@ impl RoundClock {
     pub fn current_round(&self) -> Round {
         let elapsed = Instant::now().saturating_duration_since(self.start_time);
         Round(self.first_round.0.saturating_add(u128::from(
-            elapsed.as_secs() / self.round_duration_in_seconds.get(),
+            elapsed.as_secs() / self.round_duration_in_seconds,
         )))
     }
 
