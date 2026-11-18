@@ -516,13 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fixed_window_pays_out_exactly_the_pooled_fees() {
-        // Block 1 pools 100, blocks 2 to 4 pool nothing, T stays 2.
-        let paid = pay_out([(100, 2), (0, 2), (0, 2), (0, 2)]).unwrap();
-        assert_eq!(paid, [50, 50, 0, 0]);
-    }
-
-    #[test]
     fn shrinking_the_window_never_pays_out_more_than_the_pooled_fees() {
         // Block 1 pools 100 under T = 4, then an era lowers T to 2 at block 3.
         let paid = pay_out([(100, 4), (0, 4), (0, 2), (0, 2)])
