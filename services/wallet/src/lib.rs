@@ -524,7 +524,7 @@ where
             &kms,
         )
         .await?;
-        state.restore_reward_notes(Self::read_reward_notes(&storage).await?);
+        Self::restore_reward_notes(&mut state, &storage).await?;
         let voucher_master_key_id = settings.voucher_master_key_id;
 
         Self::backfill_missing_blocks(
@@ -1394,6 +1394,26 @@ where
             .map_err(WalletServiceError::PersistedState)
     }
 
+    // The reward notes are dropped only here, against the LIB state loaded from
+    // storage: the LIB state saved at runtime may not be on disk yet, and a
+    // note dropped before it is would be lost on a crash. A failure to drop
+    // them only leaves them in storage, known again on the next restart.
+    async fn restore_reward_notes(
+        state: &mut ServiceState<'_>,
+        storage: &StorageApi<Tx>,
+    ) -> Result<(), WalletServiceError> {
+        if state.restore_reward_notes(Self::read_reward_notes(storage).await?)
+            && let Err(err) = Self::write_reward_notes(state, storage).await
+        {
+            warn!(
+                target: LOG_TARGET,
+                err = %err,
+                "Failed to drop the reward notes the LIB holds; they stay in storage"
+            );
+        }
+        Ok(())
+    }
+
     async fn read_reward_notes(storage: &StorageApi<Tx>) -> Result<KnownNotes, WalletServiceError> {
         storage
             .load(Bytes::from_static(REWARD_NOTES_KEY))
@@ -1775,21 +1795,6 @@ where
 
         let new_immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
         state.advance_lib(lib_update.new_lib, new_immutable_blocks_count);
-        Self::forget_reward_notes_at_lib(state, storage).await;
-    }
-
-    // A reward note left in storage is only known again on a restart, so a
-    // failure to forget it is not one of the LIB update.
-    async fn forget_reward_notes_at_lib(state: &mut ServiceState<'_>, storage: &StorageApi<Tx>) {
-        if state.forget_reward_notes_at_lib()
-            && let Err(err) = Self::write_reward_notes(state, storage).await
-        {
-            warn!(
-                target: LOG_TARGET,
-                err = %err,
-                "Failed to forget the reward notes the LIB holds; they stay in storage"
-            );
-        }
     }
 
     #[expect(

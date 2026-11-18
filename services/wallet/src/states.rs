@@ -261,28 +261,23 @@ impl<'u> ServiceState<'u> {
         &self.reward_notes
     }
 
-    // The reward notes written before a restart, known again.
-    pub fn restore_reward_notes(&mut self, notes: KnownNotes) {
+    // The reward notes written before a restart, known again, and tells whether
+    // it dropped any. It must run while the LIB is the one loaded from storage:
+    // a note that LIB holds is on disk with it, so the reward notes can drop it.
+    // A note the LIB only holds once it is already spent stays.
+    pub fn restore_reward_notes(&mut self, mut notes: KnownNotes) -> bool {
+        let count = notes.len();
+        if let Ok(lib_state) = self.wallet.wallet_state_at(self.lib) {
+            notes.retain(|commitment, _| !lib_state.notes.contains_key(commitment));
+        }
         self.add_known_notes(notes.values().copied());
         self.reward_notes = notes;
+        self.reward_notes.len() != count
     }
 
     pub fn add_reward_note(&mut self, note: KnownNote) {
         self.add_known_notes([note]);
         self.reward_notes.insert(note.note.commitment(), note);
-    }
-
-    // Forgets the reward notes the LIB holds, which the LIB wallet state
-    // persists from then on, and tells whether there were any. A note the LIB
-    // only holds once it is already spent stays.
-    pub fn forget_reward_notes_at_lib(&mut self) -> bool {
-        let Ok(lib_state) = self.wallet.wallet_state_at(self.lib) else {
-            return false;
-        };
-        let count = self.reward_notes.len();
-        self.reward_notes
-            .retain(|commitment, _| !lib_state.notes.contains_key(commitment));
-        self.reward_notes.len() != count
     }
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
@@ -632,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn reward_notes_are_kept_until_the_lib_holds_them() {
+    fn reward_notes_are_kept_until_a_restart_finds_the_lib_holds_them() {
         use std::sync::Arc;
 
         use lb_services_utils::overwatch::RecoveryData;
@@ -672,7 +667,6 @@ mod tests {
         .unwrap();
 
         state.add_reward_note(pending);
-        assert!(!state.forget_reward_notes_at_lib());
         assert_eq!(
             state.reward_notes(),
             &HashMap::from([(pending.note.commitment(), pending)])
@@ -685,12 +679,11 @@ mod tests {
         );
 
         // restored after a restart, the notes are known again, and the one the
-        // LIB holds is forgotten
-        state.restore_reward_notes(HashMap::from([
+        // LIB holds is dropped
+        assert!(state.restore_reward_notes(HashMap::from([
             (on_chain.note.commitment(), on_chain),
             (pending.note.commitment(), pending),
-        ]));
-        assert!(state.forget_reward_notes_at_lib());
+        ])));
         assert_eq!(
             state.reward_notes(),
             &HashMap::from([(pending.note.commitment(), pending)])
