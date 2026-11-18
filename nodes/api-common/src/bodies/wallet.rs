@@ -185,12 +185,21 @@ pub mod transfer_funds {
 
     const LOG_TARGET: &str = api::http::wallet::TRANSFER_FUNDS;
 
+    /// Unknown fields are rejected, so a misspelled field fails the request
+    /// instead of being silently ignored.
     #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
     pub struct WalletTransferFundsRequestBody {
+        /// Block whose ledger state funds the transfer. Defaults to the
+        /// current chain tip.
         pub tip: Option<HeaderId>,
+        /// Key that receives the change output, if any.
         pub change_public_key: ZkPublicKey,
+        /// Keys whose notes may be spent to fund the transfer.
         pub funding_public_keys: Vec<ZkPublicKey>,
+        /// Key that receives `amount`.
         pub recipient_public_key: ZkPublicKey,
+        /// Value sent to `recipient_public_key`.
         pub amount: Value,
     }
 
@@ -221,6 +230,42 @@ pub mod transfer_funds {
             });
 
             (StatusCode::CREATED, json).into_response()
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use serde_json::{Value as JsonValue, json};
+
+        use super::*;
+
+        fn valid_request_json() -> JsonValue {
+            serde_json::to_value(WalletTransferFundsRequestBody {
+                tip: None,
+                change_public_key: ZkPublicKey::zero(),
+                funding_public_keys: vec![ZkPublicKey::zero()],
+                recipient_public_key: ZkPublicKey::zero(),
+                amount: 1000,
+            })
+            .unwrap()
+        }
+
+        #[test]
+        fn request_body_accepts_its_own_fields() {
+            serde_json::from_value::<WalletTransferFundsRequestBody>(valid_request_json()).unwrap();
+        }
+
+        #[test]
+        fn request_body_rejects_unknown_fields() {
+            let mut request = valid_request_json();
+            request["value"] = json!(1000);
+
+            let error = serde_json::from_value::<WalletTransferFundsRequestBody>(request).err();
+
+            assert!(
+                error.is_some_and(|error| error.to_string().contains("unknown field `value`")),
+                "an unknown field must be rejected, not silently ignored"
+            );
         }
     }
 }
