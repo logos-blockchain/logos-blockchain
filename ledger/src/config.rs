@@ -702,8 +702,9 @@ pub struct BlockRewardsConfig {
     /// release is in full, and the scale of the release's weight `A_t` in a
     /// reward.
     emission_factor_scale: NonZeroU64,
-    /// `T`: the blocks whose pooled fees the window averages. A window that
-    /// grows at an era counts the blocks it lacks as pooling nothing.
+    /// `T`: the blocks whose pooled fees the window averages. An era that
+    /// shrinks it drops the oldest blocks, and one that grows it starts the
+    /// window over empty.
     pooled_fees_window: NonZeroU16,
     /// `FEE_AVG_NUMERATOR`: how much each unit of the fees pooled over the
     /// window adds to the release's weight. It carries `1/T`, so an era

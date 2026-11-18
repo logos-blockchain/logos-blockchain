@@ -2,6 +2,7 @@ use core::num::{NonZeroI128, NonZeroU16, NonZeroU128};
 use std::collections::VecDeque;
 
 use lb_core::mantle::Value;
+use lb_log_targets::ledger;
 use lb_utils::{
     bounded::{BoundedError, ResizableRuntimeBoundedVecDeque, RuntimeBounded},
     math::NonNegativeRatio,
@@ -13,6 +14,8 @@ use crate::config::{BlockRewardsConfig, EmissionRatio};
 pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
 /// `B_0`, the rewards reserve at genesis.
 pub const REWARDS_RESERVE_GENESIS: Value = 1_000_000_000_000_000_000;
+
+const LOG_TARGET: &str = ledger::ROOT;
 
 #[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
 pub enum BlockRewardsError {
@@ -46,16 +49,32 @@ impl PooledFeesWindow {
         Self(ResizableRuntimeBoundedVecDeque::empty(blocks.get()))
     }
 
-    /// The window once a block of an era of `blocks` pooled `pooled_fees`: a
-    /// window the era shrinks drops its oldest blocks, then the block enters
-    /// last, and the oldest leaves a full window.
+    /// The window once a block of an era of `blocks` pooled `pooled_fees`: the
+    /// block enters last, and the oldest leaves a full window. An era that
+    /// shrinks the window drops its oldest blocks. An era that grows it starts
+    /// it over empty, as at genesis, so that no older fee is paid again at the
+    /// new size. What they did not pay out stays in the pool.
     #[must_use]
-    pub fn with_block(mut self, pooled_fees: Value, blocks: NonZeroU16) -> Self {
-        self.0
+    pub fn with_block(self, pooled_fees: Value, blocks: NonZeroU16) -> Self {
+        let mut window = if blocks.get() > self.0.max_len() {
+            let dropped_fees: Value = self.iter().sum();
+            tracing::info!(
+                target: LOG_TARGET,
+                old_window = self.0.max_len(),
+                new_window = blocks.get(),
+                dropped_fees,
+                "pooled fees window grown by an era starts over"
+            );
+            Self::empty(blocks)
+        } else {
+            self
+        };
+        window
+            .0
             .try_set_max_len(blocks.get())
             .expect("a window holds any number of blocks down to none");
-        self.0.push_back_evicting(pooled_fees);
-        self
+        window.0.push_back_evicting(pooled_fees);
+        window
     }
 
     /// The pooled fees of the last block.
@@ -326,18 +345,17 @@ mod tests {
     }
 
     #[test]
-    fn an_era_resizing_the_window_drops_or_awaits_blocks() {
-        // A window of 2 blocks keeps the last two of three.
-        let window = window_of([1, 2, 3], 2);
-        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [2, 3]);
-        // Shrunk to 1 by the next block's era, it keeps that block only.
-        let window = window.with_block(4, NonZero::new(1).unwrap());
-        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [4]);
-        // Grown to 3, it keeps every block until it holds three.
-        let window = window
-            .with_block(5, NonZero::new(3).unwrap())
-            .with_block(6, NonZero::new(3).unwrap());
-        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [4, 5, 6]);
+    fn an_era_shrinking_the_window_drops_blocks_and_growing_it_starts_over() {
+        // A window of 3 blocks keeps the last three of four.
+        let window = window_of([1, 2, 3, 4], 3);
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [2, 3, 4]);
+        // Shrunk to 2 by the next block's era, it keeps the last block and that
+        // block.
+        let window = window.with_block(5, NonZero::new(2).unwrap());
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [4, 5]);
+        // Grown to 3, it holds that block only.
+        let window = window.with_block(6, NonZero::new(3).unwrap());
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [6]);
     }
 
     #[test]
@@ -493,5 +511,66 @@ mod tests {
         assert_eq!(closed.blend_rewards_closed(), 9_562_000_000);
         assert_eq!(closed.rewards_reserve(), state.rewards_reserve());
         assert_eq!(closed.rewards_pool(), state.rewards_pool());
+    }
+
+    #[test]
+    fn a_fixed_window_pays_out_exactly_the_pooled_fees() {
+        // Block 1 pools 100, blocks 2 to 4 pool nothing, T stays 2.
+        let paid = pay_out([(100, 2), (0, 2), (0, 2), (0, 2)]).unwrap();
+        assert_eq!(paid, [50, 50, 0, 0]);
+    }
+
+    #[test]
+    fn shrinking_the_window_never_pays_out_more_than_the_pooled_fees() {
+        // Block 1 pools 100 under T = 4, then an era lowers T to 2 at block 3.
+        let paid = pay_out([(100, 4), (0, 4), (0, 2), (0, 2)])
+            .unwrap_or_else(|(block, err)| panic!("block {block} is invalid: {err}"));
+        assert!(
+            paid.iter().sum::<Value>() <= 100,
+            "paid {paid:?} out of 100"
+        );
+    }
+
+    #[test]
+    fn growing_the_window_never_pays_out_more_than_the_pooled_fees() {
+        // Block 1 pools 100 under T = 2, then an era raises T to 4. The window
+        // starts over, and the 50 block 1 did not pay out stays in the pool.
+        let paid = pay_out([(100, 2), (0, 4), (0, 4), (0, 4)])
+            .unwrap_or_else(|(block, err)| panic!("block {block} is invalid: {err}"));
+        assert_eq!(paid, [50, 0, 0, 0]);
+    }
+
+    /// The payout of each block pooling `fees` under a window of `blocks`, or
+    /// the first block whose reward fails. Stake is above target, so no reserve
+    /// is released and a block's reward is its payout from the pool.
+    fn pay_out<const N: usize>(
+        blocks: [(Value, u16); N],
+    ) -> Result<[Value; N], (usize, BlockRewardsError)> {
+        let mut rewards = BlockRewards::genesis(NonZero::new(blocks[0].1).unwrap());
+        let mut paid = [0; N];
+        for (block, (payout, (fees, window))) in (1..).zip(paid.iter_mut().zip(blocks)) {
+            let (next, shares) = rewards
+                .distribute_block_reward(
+                    fees,
+                    4_000_000_000_000_000_000,
+                    &config_with_window(window),
+                )
+                .map_err(|err| (block, err))?;
+            *payout = shares.leader + shares.blend;
+            rewards = next;
+        }
+        Ok(paid)
+    }
+
+    fn config_with_window(blocks: u16) -> BlockRewardsConfig {
+        BlockRewardsConfig::new(
+            STAKE_AT_TARGET,
+            NonZero::new(120_000_000_000_000_000).unwrap(),
+            NonZero::new(blocks).unwrap(),
+            10_512,
+            EmissionRatio::new(62_500_000_000_000, NonZero::new(657).unwrap()),
+            ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
+        )
+        .unwrap()
     }
 }
