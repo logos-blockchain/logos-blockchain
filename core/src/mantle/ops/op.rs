@@ -20,6 +20,7 @@ use crate::{
                 config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
                 withdraw::ChannelWithdrawOp,
             },
+            inscribe::InscribeOp,
             internal::{OpDe, OpSer},
             pow::ClaimPowRewardOp,
             program::ProgramRegisterOp,
@@ -70,6 +71,7 @@ pub enum Op {
     Transfer(TransferOp),
     ClaimPowReward(ClaimPowRewardOp),
     ProgramRegister(ProgramRegisterOp),
+    Inscribe(InscribeOp),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.
@@ -156,6 +158,8 @@ impl BinaryDecode for Op {
                 .map(|(rest, op)| (rest, Self::ClaimPowReward(op))),
             ProgramRegisterOp::CODE => ProgramRegisterOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ProgramRegister(op))),
+            InscribeOp::CODE => InscribeOp::decode(input, max_op_data_size)
+                .map(|(rest, op)| (rest, Self::Inscribe(op))),
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
     }
@@ -192,6 +196,7 @@ impl Op {
             Self::Transfer(op) => sample_proof_for(op),
             Self::ClaimPowReward(op) => sample_proof_for(op),
             Self::ProgramRegister(op) => sample_proof_for(op),
+            Self::Inscribe(op) => sample_proof_for(op),
         }
     }
 }
@@ -219,6 +224,7 @@ impl_from_operation! {
     Transfer => TransferOp,
     ClaimPowReward => ClaimPowRewardOp,
     ProgramRegister => ProgramRegisterOp,
+    Inscribe => InscribeOp,
 }
 
 #[cfg(test)]
@@ -301,6 +307,7 @@ mod tests {
             Op::Transfer(_) => matches!(op_proof, OpProof::ZkTransfer(_)),
             Op::ClaimPowReward(_) => matches!(op_proof, OpProof::None(_)),
             Op::ProgramRegister(_) => matches!(op_proof, OpProof::None(_)),
+            Op::Inscribe(_) => matches!(op_proof, OpProof::None(_)),
         }
     }
 
@@ -429,6 +436,7 @@ mod tests {
                 config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
                 withdraw::ChannelWithdrawOp,
             },
+            inscribe::InscribeOp,
             pow::ClaimPowRewardOp,
             program::ProgramRegisterOp,
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
@@ -437,6 +445,7 @@ mod tests {
         let table = [
             TransferOp::CODE,
             ProgramRegisterOp::CODE,
+            InscribeOp::CODE,
             ChannelConfigOp::CODE,
             InscriptionOp::CODE,
             DepositOp::CODE,
@@ -448,7 +457,9 @@ mod tests {
         ];
         assert_eq!(
             table,
-            [0x00, 0x01, 0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x30]
+            [
+                0x00, 0x01, 0x02, 0x10, 0x11, 0x12, 0x13, 0x20, 0x21, 0x22, 0x30
+            ]
         );
         for opcode in 0..=u8::MAX {
             let unknown = Op::decode(&[opcode], &u32::MAX).err()

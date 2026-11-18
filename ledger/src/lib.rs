@@ -1394,6 +1394,10 @@ impl LedgerState {
                 self.mantle_ledger = self.mantle_ledger.update_programs(result.programs);
                 tx_events.extend(events);
             }
+            // The ledger carries an inscription and does not read it.
+            SignedOp::Inscribe(signed_operation) => {
+                check_op_data_size(signed_operation.operation().inscription.len(), config)?;
+            }
         }
 
         Ok((self, balance, tx_events))
@@ -3154,6 +3158,43 @@ mod tests {
                 .err(),
             refused
         );
+    }
+
+    #[test]
+    fn an_inscribe_changes_no_state_and_is_held_to_the_data_limit_of_the_era() {
+        use lb_core::mantle::ops::{NoOpProof, inscribe::InscribeOp};
+
+        let test_config = Config {
+            max_op_data_size: 4,
+            ..config()
+        };
+        let eras = single_era(test_config.clone());
+        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let inscribe = |size| {
+            let op = Op::Inscribe(InscribeOp {
+                inscription: Inscription::new_unchecked(vec![7; size]),
+            });
+            SignedOps::from_parts(
+                Ops::new(FORK_DIGEST, TxList::new_unchecked(vec![op])),
+                OpProofs::new_unchecked(vec![OpProof::None(NoOpProof)]),
+            )
+            .unwrap()
+            .preverify()
+        };
+
+        let (applied, _, _, events, _) = state
+            .clone()
+            .try_apply_tx_operations::<_, HeaderId>(&eras, inscribe(4).unwrap())
+            .unwrap();
+        assert_eq!(applied, state);
+        assert_eq!(events, []);
+        assert_eq!(
+            state
+                .try_apply_tx_operations::<_, HeaderId>(&eras, inscribe(5).unwrap())
+                .err(),
+            Some(LedgerError::OpDataTooLarge { size: 5, max: 4 })
+        );
+        assert!(inscribe(0).is_err());
     }
 
     #[test]

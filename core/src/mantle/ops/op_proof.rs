@@ -43,6 +43,7 @@ impl OpProof {
             Op::Transfer(op) => decode_proof_for(op, input),
             Op::ClaimPowReward(op) => decode_proof_for(op, input),
             Op::ProgramRegister(op) => decode_proof_for(op, input),
+            Op::Inscribe(op) => decode_proof_for(op, input),
         }
     }
 }

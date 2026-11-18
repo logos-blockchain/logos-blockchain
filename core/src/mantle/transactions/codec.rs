@@ -54,7 +54,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
                     COMPRESSED_PROOF_SIZE
                 }
 
-                OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_) => 0, // no proof
+                OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_) | OpRef::Inscribe(_) => 0, /* no proof */
             };
             thresholds.apply(*op);
             (thresholds, total + proof_size)

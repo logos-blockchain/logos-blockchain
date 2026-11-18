@@ -1,4 +1,5 @@
 pub mod channel;
+pub mod inscribe;
 pub(crate) mod internal;
 pub mod op;
 pub mod op_proof;

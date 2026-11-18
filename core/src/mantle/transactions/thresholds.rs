@@ -189,7 +189,7 @@ impl<C: ChannelSource> TxGasState<C> {
                 self.change(NoteSetKey::Sdp);
             }
             OpRef::SDPWithdraw(_) => self.change(NoteSetKey::Sdp),
-            OpRef::SDPActive(_) | OpRef::ProgramRegister(_) => {}
+            OpRef::SDPActive(_) | OpRef::ProgramRegister(_) | OpRef::Inscribe(_) => {}
         }
     }
 }

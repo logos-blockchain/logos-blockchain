@@ -1310,7 +1310,8 @@ where
             | OpRef::ChannelWithdraw(_)
             | OpRef::Transfer(_)
             | OpRef::ClaimPowReward(_)
-            | OpRef::ProgramRegister(_) => return Ok(None),
+            | OpRef::ProgramRegister(_)
+            | OpRef::Inscribe(_) => return Ok(None),
         };
         Self::sign_ed25519(tx_hash, signer, kms).await.map(Some)
     }
@@ -2365,7 +2366,7 @@ const fn op_proof(
             OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::new(zk_proof, signature)),
         ),
         (OpRef::SDPActive(_), None, Some(signature)) => Ok(OpProof::Ed25519Sig(signature)),
-        (OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_), None, None) => {
+        (OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_) | OpRef::Inscribe(_), None, None) => {
             Ok(OpProof::None(NoOpProof))
         }
         _ => Err(WalletServiceError::OpProofParts),

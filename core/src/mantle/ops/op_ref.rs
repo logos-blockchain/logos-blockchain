@@ -10,6 +10,7 @@ use crate::mantle::{
             config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
             withdraw::ChannelWithdrawOp,
         },
+        inscribe::InscribeOp,
         internal::OpSer,
         pow::ClaimPowRewardOp,
         program::ProgramRegisterOp,
@@ -30,6 +31,7 @@ pub enum OpRef<'a> {
     Transfer(&'a TransferOp),
     ClaimPowReward(&'a ClaimPowRewardOp),
     ProgramRegister(&'a ProgramRegisterOp),
+    Inscribe(&'a InscribeOp),
 }
 
 const fn code_of<T>(_op: &T) -> u8
@@ -58,6 +60,7 @@ impl OpRef<'_> {
             Self::Transfer(op) => op.execution_gas(profile, context),
             Self::ClaimPowReward(op) => op.execution_gas(profile, context),
             Self::ProgramRegister(op) => op.execution_gas(profile, context),
+            Self::Inscribe(op) => op.execution_gas(profile, context),
         }
     }
 
@@ -74,6 +77,7 @@ impl OpRef<'_> {
             Self::Transfer(_) => "Transfer",
             Self::ClaimPowReward(_) => "ClaimPowReward",
             Self::ProgramRegister(_) => "ProgramRegister",
+            Self::Inscribe(_) => "Inscribe",
         }
     }
 
@@ -89,6 +93,7 @@ impl OpRef<'_> {
             Self::Transfer(op) => code_of(*op),
             Self::ClaimPowReward(op) => code_of(*op),
             Self::ProgramRegister(op) => code_of(*op),
+            Self::Inscribe(op) => code_of(*op),
         }
     }
 }
@@ -106,6 +111,7 @@ impl BinaryEncode for OpRef<'_> {
             Self::Transfer(op) => op.encoded_length(),
             Self::ClaimPowReward(op) => op.encoded_length(),
             Self::ProgramRegister(op) => op.encoded_length(),
+            Self::Inscribe(op) => op.encoded_length(),
         };
         self.code().encoded_length().checked_add(payload).unwrap()
     }
@@ -123,6 +129,7 @@ impl BinaryEncode for OpRef<'_> {
             Self::Transfer(op) => op.encode_into(out),
             Self::ClaimPowReward(op) => op.encode_into(out),
             Self::ProgramRegister(op) => op.encode_into(out),
+            Self::Inscribe(op) => op.encode_into(out),
         }
     }
 }
@@ -154,6 +161,7 @@ impl_owned_ref_conversions! {
         TransferOp => Transfer,
         ClaimPowRewardOp => ClaimPowReward,
         ProgramRegisterOp => ProgramRegister,
+        InscribeOp => Inscribe,
 }
 
 impl Serialize for OpRef<'_> {

@@ -12,6 +12,7 @@ use crate::mantle::{
             },
             withdraw::{ChannelWithdrawOp, WithdrawValidationContext},
         },
+        inscribe::InscribeOp,
         pow::{ClaimPoWRewardVerificationContext, ClaimPowRewardOp},
         program::ProgramRegisterOp,
         sdp::{
@@ -44,6 +45,7 @@ pub enum SignedOp<State: VerificationState, Mode: VerificationMode> {
     Transfer(SignedOperation<TransferOp, State, Mode>),
     ClaimPowReward(SignedOperation<ClaimPowRewardOp, State, Mode>),
     ProgramRegister(SignedOperation<ProgramRegisterOp, State, Mode>),
+    Inscribe(SignedOperation<InscribeOp, State, Mode>),
 }
 
 impl<State: VerificationState, Mode: VerificationMode> SignedOp<State, Mode> {
@@ -60,6 +62,7 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOp<State, Mode> {
             Self::Transfer(signed_operation) => signed_operation.operation().into(),
             Self::ClaimPowReward(signed_operation) => signed_operation.operation().into(),
             Self::ProgramRegister(signed_operation) => signed_operation.operation().into(),
+            Self::Inscribe(signed_operation) => signed_operation.operation().into(),
         }
     }
 
@@ -76,6 +79,7 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOp<State, Mode> {
             Self::Transfer(signed_operation) => signed_operation.proof().into(),
             Self::ClaimPowReward(signed_operation) => signed_operation.proof().into(),
             Self::ProgramRegister(signed_operation) => signed_operation.proof().into(),
+            Self::Inscribe(signed_operation) => signed_operation.proof().into(),
         }
     }
 
@@ -101,6 +105,7 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOp<State, Mode> {
             Self::Transfer(signed_operation) => signed_operation.into_state_trusted().into(),
             Self::ClaimPowReward(signed_operation) => signed_operation.into_state_trusted().into(),
             Self::ProgramRegister(signed_operation) => signed_operation.into_state_trusted().into(),
+            Self::Inscribe(signed_operation) => signed_operation.into_state_trusted().into(),
         }
     }
 }
@@ -157,6 +162,10 @@ impl SignedOp<Unverified, StandardMode> {
                 .into_preverified(&())
                 .map(SignedOp::from)
                 .map_err(VerificationError::ProgramRegisterError),
+            Self::Inscribe(op) => op
+                .into_preverified(&())
+                .map(SignedOp::from)
+                .map_err(VerificationError::InscribeError),
         }
     }
 }
@@ -320,6 +329,10 @@ impl SignedOp<Preverified, StandardMode> {
                 .into_verified(&())
                 .map(Into::into)
                 .map_err(map_verify_failure),
+            Self::Inscribe(op) => op
+                .into_verified(&())
+                .map(Into::into)
+                .map_err(map_verify_failure),
         }
     }
 }
@@ -349,6 +362,7 @@ impl_from_signed_operation! {
     TransferOp => Transfer,
     ClaimPowRewardOp => ClaimPowReward,
     ProgramRegisterOp => ProgramRegister,
+    InscribeOp => Inscribe,
 }
 
 macro_rules! impl_try_from_op_and_proof {
@@ -386,6 +400,7 @@ impl_try_from_op_and_proof! {
     Transfer => TransferOp,
     ClaimPowReward => ClaimPowRewardOp,
     ProgramRegister => ProgramRegisterOp,
+    Inscribe => InscribeOp,
 }
 
 #[cfg(test)]

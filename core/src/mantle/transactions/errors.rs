@@ -38,6 +38,8 @@ pub enum VerificationError {
     TransferVerificationError(#[from] crate::mantle::ops::transfer::TransferError),
     #[error("ProgramRegister verification error: {0}")]
     ProgramRegisterError(#[from] crate::mantle::ops::program::ProgramRegisterError),
+    #[error("Inscribe verification error: {0}")]
+    InscribeError(#[from] crate::mantle::ops::inscribe::InscribeError),
     #[error("SDP verification error: {0}")]
     SDPVerificationError(#[from] SdpError),
     #[error("ClaimPoWReward verification error: {0}")]
