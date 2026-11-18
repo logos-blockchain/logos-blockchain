@@ -6,8 +6,9 @@ use lb_core::{
     events::{Event, Events, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        Op, OpProof, SignedOps,
+        Note, Op, OpProof, SignedOps,
         gas::GasCost,
+        notes::NoteCommitment,
         ops::{
             ChannelInscribeProof, StepProof,
             channel::{
@@ -299,43 +300,50 @@ async fn channel_note_round_trip() {
 
     // The deposited note is spent once the wallet adopted it and its block is
     // deep enough.
-    let paid = 2;
+    let first_paid = 2;
+    let ChannelStepResponseBody {
+        step: first_step,
+        proof: first_proof,
+        outputs: first_outputs,
+        ..
+    } = channel_user_step(
+        &validator.client,
+        channel_id,
+        funding_pk,
+        vec![],
+        first_paid,
+    )
+    .await;
+    assert!(matches!(first_step, Step::User(_)));
+    assert_eq!(
+        first_outputs
+            .iter()
+            .map(|note| note.value)
+            .collect::<Vec<_>>(),
+        vec![first_paid, deposit_amount - first_paid]
+    );
+
+    // A step of the next mini-block is proven behind the notes the first one
+    // creates, and spends them before they are on chain.
+    let paid = 4;
     let ChannelStepResponseBody {
         step,
         proof,
         outputs,
         ..
-    } = timeout(Duration::from_mins(2), async {
-        loop {
-            let response = reqwest::Client::new()
-                .post(api_url(&validator.client, "channel/step"))
-                .json(&ChannelStepRequestBody {
-                    tip: None,
-                    channel_id,
-                    payments: vec![ChannelPayment {
-                        public_key: funding_pk,
-                        value: paid,
-                    }],
-                    program_deposit: None,
-                    inscription: Inscription::new_unchecked(b"user step".to_vec()),
-                    change_public_key: funding_pk,
-                    holder_public_keys: vec![funding_pk],
-                })
-                .send()
-                .await
-                .expect("request should not fail");
-            if response.status().is_success() {
-                return response
-                    .json::<ChannelStepResponseBody>()
-                    .await
-                    .expect("step response should be valid JSON");
-            }
-            sleep(Duration::from_millis(500)).await;
-        }
-    })
-    .await
-    .expect("timed out waiting for the deposited note to be spendable");
-    assert!(matches!(step, Step::User(_)));
+    } = channel_user_step(
+        &validator.client,
+        channel_id,
+        funding_pk,
+        first_outputs.iter().map(Note::commitment).collect(),
+        paid,
+    )
+    .await;
+    assert_eq!(
+        step.inputs().len(),
+        2,
+        "the second step should spend both notes of the first"
+    );
     assert_eq!(
         outputs.iter().map(|note| note.value).collect::<Vec<_>>(),
         vec![paid, deposit_amount - paid]
@@ -349,7 +357,8 @@ async fn channel_note_round_trip() {
             parent,
             signer: signing_key.public_key().into_unverified(),
             mini_blocks: MiniBlocks::from([
-                MiniBlock::try_from(vec![step]).expect("one step fits a mini-block")
+                MiniBlock::try_from(vec![first_step]).expect("one step fits a mini-block"),
+                MiniBlock::try_from(vec![step]).expect("one step fits a mini-block"),
             ]),
         }))
         .expect("inscription op should fit");
@@ -373,7 +382,10 @@ async fn channel_note_round_trip() {
     let op_proofs = OpProofs::from([
         OpProof::ChannelInscribe(ChannelInscribeProof::new(
             signing_key.sign_payload(tx_hash.as_signing_bytes()),
-            vec![StepProof::ZkTransfer(proof)],
+            vec![
+                StepProof::ZkTransfer(first_proof),
+                StepProof::ZkTransfer(proof),
+            ],
         )),
         transfer_proof.expect("funding at non-zero gas prices should add a transfer"),
     ]);
@@ -446,6 +458,49 @@ async fn channel_note_round_trip() {
         Duration::from_mins(3),
     )
     .await;
+}
+
+// A user step paying `paid` to `funding_pk` from its channel notes, behind the
+// `appended` commitments. Retried until the wallet can spend the notes: one
+// is refused until the wallet adopted it and its block is deep enough.
+async fn channel_user_step(
+    node: &NodeHttpClient,
+    channel_id: ChannelId,
+    funding_pk: ZkPublicKey,
+    appended: Vec<NoteCommitment>,
+    paid: u64,
+) -> ChannelStepResponseBody {
+    timeout(Duration::from_mins(2), async {
+        loop {
+            let response = reqwest::Client::new()
+                .post(api_url(node, "channel/step"))
+                .json(&ChannelStepRequestBody {
+                    tip: None,
+                    channel_id,
+                    appended: appended.clone(),
+                    payments: vec![ChannelPayment {
+                        public_key: funding_pk,
+                        value: paid,
+                    }],
+                    program_deposit: None,
+                    inscription: Inscription::new_unchecked(b"user step".to_vec()),
+                    change_public_key: funding_pk,
+                    holder_public_keys: vec![funding_pk],
+                })
+                .send()
+                .await
+                .expect("request should not fail");
+            if response.status().is_success() {
+                return response
+                    .json::<ChannelStepResponseBody>()
+                    .await
+                    .expect("step response should be valid JSON");
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the channel notes to be spendable")
 }
 
 // Creates a channel with an inscription the node's wallet funds from

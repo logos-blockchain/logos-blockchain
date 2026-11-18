@@ -1110,6 +1110,7 @@ where
         );
         let request = ChannelStepRequest {
             channel_id: req.channel_id,
+            appended: req.appended,
             payments: req
                 .payments
                 .into_iter()

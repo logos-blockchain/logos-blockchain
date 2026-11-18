@@ -62,9 +62,15 @@ pub const DEFAULT_FEE_MARGIN_PERCENT: u64 = 13;
 
 /// A spend of the notes of `holder_pks` in `note_set` that creates `outputs`
 /// and leaves `excess`, the rest going back to `change_pk`.
+///
+/// `appended` are the commitments the transaction appends to the set before
+/// the spend, in order. The spend is proven against the root of the set
+/// extended with them, and may consume the ones the wallet knows the opening
+/// of.
 #[derive(Clone, Debug)]
 pub struct NoteSetSpend {
     pub note_set: NoteSetIndex,
+    pub appended: Vec<NoteCommitment>,
     pub outputs: Vec<Note>,
     pub excess: Value,
     pub change_pk: ZkPublicKey,
@@ -458,22 +464,52 @@ impl WalletState {
     pub fn note_set_spend(
         &self,
         spend: NoteSetSpend,
+        known: &KnownNotes,
         excluded: &HashSet<NoteNullifier>,
     ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
         let NoteSetSpend {
             note_set,
+            appended,
             mut outputs,
             excess,
             change_pk,
             change_nonce,
-            holder_pks: pks,
+            holder_pks,
         } = spend;
         let value = outputs
             .iter()
             .try_fold(excess, |total, note| total.checked_add(note.value))
             .ok_or(GasOverflow)?;
-        let candidates = self.spend_candidates(note_set, pks, excluded);
-        let (inputs, total) = covering_prefix(candidates.iter(), value)?;
+        // The notes of the set the wallet owns, then the ones the transaction
+        // creates before the spend that the wallet knows the opening of.
+        let mut candidates: Vec<(Note, NoteNullifier)> = self
+            .spend_candidates(note_set, &holder_pks, excluded)
+            .into_iter()
+            .map(|owned| (owned.note, owned.nullifier))
+            .collect();
+        candidates.extend(
+            appended
+                .iter()
+                .filter(|commitment| !self.notes.contains_key(commitment))
+                .filter_map(|commitment| known.get(commitment))
+                .filter(|known_note| {
+                    known_note.note_set == note_set
+                        && holder_pks.contains(&known_note.note.public_key)
+                        && !excluded.contains(&known_note.nullifier)
+                })
+                .map(|known_note| (known_note.note, known_note.nullifier)),
+        );
+        // Consume large valued notes first to ensure we converge.
+        candidates.sort_by_key(|(note, _)| core::cmp::Reverse(note.value));
+        let mut inputs = Vec::new();
+        let mut total: Value = 0;
+        for (note, nullifier) in candidates.into_iter().take(MAX_INPUTS) {
+            if total >= value {
+                break;
+            }
+            total = total.checked_add(note.value).ok_or(GasOverflow)?;
+            inputs.push((note, nullifier));
+        }
         let Some(rest) = total.checked_sub(value) else {
             return Err(WalletError::InsufficientFunds { available: total });
         };
@@ -481,9 +517,9 @@ impl WalletState {
             outputs.push(Note::new(rest, change_nonce, change_pk));
         }
         let nullifiers =
-            InputNullifiers::try_from_iter(inputs.iter().map(|owned| owned.nullifier))?;
+            InputNullifiers::try_from_iter(inputs.iter().map(|(_, nullifier)| *nullifier))?;
         let opening = ZkTransferOpening {
-            inputs: inputs.iter().map(|owned| owned.note).collect(),
+            inputs: inputs.into_iter().map(|(note, _)| note).collect(),
             outputs,
         };
         Ok((nullifiers, opening, self.root_of(note_set)))

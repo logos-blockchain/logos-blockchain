@@ -66,6 +66,14 @@ pub struct ChannelWithdrawResponseBody {
 pub struct ChannelStepRequestBody {
     pub tip: Option<HeaderId>,
     pub channel_id: ChannelId,
+    /// The commitments the channel's buffer holds when the mini-block of the
+    /// step starts, in order: the outputs of the earlier channel operations
+    /// of the transaction and of the earlier mini-blocks of the inscription,
+    /// as the sequencer fixed them. The step is proven at that position and
+    /// may spend the ones the wallet knows the opening of. Leave it empty for
+    /// a mini-block that starts on an empty buffer.
+    #[serde(default)]
+    pub appended: Vec<NoteCommitment>,
     /// The channel notes the step creates.
     pub payments: Vec<ChannelPayment>,
     /// Makes the step a program deposit.
@@ -92,7 +100,7 @@ pub struct ProgramDepositBody {
 }
 
 /// The step and its proof, for the sequencer of the channel to inscribe in
-/// a mini-block that starts on an empty buffer.
+/// a mini-block that starts behind the `appended` commitments of the request.
 #[derive(Serialize, Deserialize)]
 pub struct ChannelStepResponseBody {
     pub tip: HeaderId,

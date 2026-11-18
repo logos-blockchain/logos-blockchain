@@ -398,9 +398,11 @@ impl<'u> ServiceState<'u> {
         tip: HeaderId,
         spend: NoteSetSpend,
     ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
-        self.wallet
-            .spend_state(tip)?
-            .note_set_spend(spend, &self.pending_notes.nullifiers())
+        self.wallet.spend_state(tip)?.note_set_spend(
+            spend,
+            self.wallet.known_notes(),
+            &self.pending_notes.nullifiers(),
+        )
     }
 
     pub fn reserve_pending_notes(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {

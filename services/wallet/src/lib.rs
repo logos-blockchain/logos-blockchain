@@ -171,6 +171,12 @@ pub enum WalletServiceError {
 #[derive(Debug)]
 pub struct ChannelStepRequest {
     pub channel_id: ChannelId,
+    /// The commitments the buffer of the channel's note set holds when the
+    /// mini-block of the step starts, in order: the outputs of the earlier
+    /// channel operations of the transaction and of the earlier mini-blocks
+    /// of the inscription. Empty for a mini-block that starts on an empty
+    /// buffer.
+    pub appended: Vec<NoteCommitment>,
     /// The channel notes the step creates, by holder key.
     pub payments: Vec<(ZkPublicKey, Value)>,
     /// Makes the step a program deposit.
@@ -1484,6 +1490,7 @@ where
     ) -> Result<ChannelStep, WalletServiceError> {
         let ChannelStepRequest {
             channel_id,
+            appended,
             payments,
             program_deposit,
             inscription,
@@ -1500,6 +1507,7 @@ where
             tip,
             NoteSetSpend {
                 note_set,
+                appended: appended.clone(),
                 outputs: paid,
                 excess: program_deposit.as_ref().map_or(0, |deposit| deposit.value),
                 change_pk,
@@ -1537,6 +1545,7 @@ where
             &state.wallet().spend_state(tip)?,
             state.wallet().known_notes(),
             note_set,
+            &appended,
             step.inputs(),
             &opening,
             msg,

@@ -92,12 +92,13 @@ pub fn op_witness_at(
 }
 
 // The witness of a channel step spending `nullifiers` of `note_set`, proven
-// against the root of `state`: the step of a mini-block that starts on an
-// empty buffer.
+// against the root of `state` extended with `appended`: the commitments the
+// buffer of the set holds when the mini-block of the step starts.
 pub fn step_witness(
     state: &WalletState,
     known: &KnownNotes,
     note_set: NoteSetIndex,
+    appended: &[NoteCommitment],
     nullifiers: &[NoteNullifier],
     opening: &ZkTransferOpening,
     msg: Fr,
@@ -107,7 +108,8 @@ pub fn step_witness(
         nullifiers,
         commitment_merkle_root: state.root_of(note_set),
     };
-    op_witness(state, known, &Appended::new(), 0, opening, spend, msg)
+    let appended = Appended::from([(note_set, appended.to_vec())]);
+    op_witness(state, known, &appended, 0, opening, spend, msg)
 }
 
 fn witnesses_of(
@@ -583,12 +585,14 @@ mod tests {
             .note_set_spend(
                 NoteSetSpend {
                     note_set: channel,
+                    appended: vec![],
                     outputs: vec![paid],
                     excess: 100,
                     change_pk: pk(1),
                     change_nonce: Fr::from(5u64),
                     holder_pks: vec![pk(1)],
                 },
+                &known,
                 &HashSet::new(),
             )
             .unwrap();
@@ -606,6 +610,7 @@ mod tests {
             &state,
             &known,
             channel,
+            &[],
             &nullifiers,
             &opening,
             Fr::from(77u64),
@@ -619,15 +624,116 @@ mod tests {
             state.note_set_spend(
                 NoteSetSpend {
                     note_set: channel,
+                    appended: vec![],
                     outputs: vec![Note::new(1_001, Fr::from(6u64), pk(2))],
                     excess: 0,
                     change_pk: pk(1),
                     change_nonce: Fr::from(7u64),
                     holder_pks: vec![pk(1)],
                 },
+                &known,
                 &HashSet::new(),
             ),
             Err(WalletError::InsufficientFunds { available: 1_000 })
+        );
+    }
+
+    // A step of a later mini-block is proven against the root extended with
+    // the notes the transaction creates before it, and can spend the ones the
+    // wallet knows the opening of.
+    #[test]
+    fn step_witness_covers_the_notes_appended_before_its_mini_block() {
+        let channel = NoteSetIndex::Channel(ChannelId::from([2; 32]));
+        let on_chain = Note::new(300, Fr::from(1u64), pk(1));
+        // created by an earlier mini-block: one paid to the wallet, one not
+        let buffered = Note::new(700, Fr::from(2u64), pk(1));
+        let foreign = Note::new(900, Fr::from(3u64), pk(2));
+        let known = known(&[
+            (on_chain, channel, nullifier(1)),
+            (buffered, channel, nullifier(2)),
+        ]);
+        let state = WalletState::from_genesis(&known, &[], &[], Epoch::new(0))
+            .unwrap()
+            .apply_block(
+                &known,
+                &crate::WalletBlock {
+                    id: [1; 32].into(),
+                    parent: [0; 32].into(),
+                    epoch: Epoch::new(0),
+                    updates: vec![lb_core::mantle::note_set::NoteSetUpdate {
+                        note_set: channel,
+                        nullifiers: vec![],
+                        commitments: vec![on_chain.commitment()],
+                    }],
+                    revealed: vec![],
+                },
+            )
+            .unwrap();
+        let root = state.commitments[&channel].frontier_root();
+        let extended = |appended: &[NoteCommitment]| {
+            appended
+                .iter()
+                .fold(state.commitments[&channel].clone(), |mmr, commitment| {
+                    mmr.push_with_paths(*commitment, &mut []).unwrap().0
+                })
+                .frontier_root()
+        };
+        let spend = |value, appended: &[NoteCommitment]| {
+            state.note_set_spend(
+                NoteSetSpend {
+                    note_set: channel,
+                    appended: appended.to_vec(),
+                    outputs: vec![Note::new(value, Fr::from(4u64), pk(2))],
+                    excess: 0,
+                    change_pk: pk(1),
+                    change_nonce: Fr::from(5u64),
+                    holder_pks: vec![pk(1)],
+                },
+                &known,
+                &HashSet::new(),
+            )
+        };
+        let witness_root = |appended: &[NoteCommitment],
+                            nullifiers: &[NoteNullifier],
+                            opening: &ZkTransferOpening| {
+            step_witness(
+                &state,
+                &known,
+                channel,
+                appended,
+                nullifiers,
+                opening,
+                Fr::from(77u64),
+            )
+            .unwrap()
+            .witness
+            .tx_commitment_root()
+        };
+
+        // the note on chain, behind a note of somebody else
+        let appended = [foreign.commitment()];
+        let (nullifiers, opening, named_root) = spend(300, &appended).unwrap();
+        assert_eq!(opening.inputs, vec![on_chain]);
+        assert_eq!(named_root, root, "the step names the root on chain");
+        assert_eq!(
+            witness_root(&appended, &nullifiers, &opening),
+            extended(&appended)
+        );
+
+        // the note an earlier mini-block paid to the wallet, with the one on chain
+        let appended = [foreign.commitment(), buffered.commitment()];
+        let (nullifiers, opening, named_root) = spend(1_000, &appended).unwrap();
+        assert_eq!(opening.inputs, vec![buffered, on_chain]);
+        assert_eq!(named_root, root);
+        assert_eq!(
+            witness_root(&appended, &nullifiers, &opening),
+            extended(&appended)
+        );
+
+        // a known note is not spendable before the transaction creates it
+        assert_eq!(
+            spend(1_000, &[]),
+            Err(WalletError::InsufficientFunds { available: 300 })
         );
     }
 
