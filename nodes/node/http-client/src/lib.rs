@@ -25,8 +25,8 @@ use lb_http_api_common::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{
-            ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
-            ChannelWithdrawResponseBody,
+            ChannelDepositRequestBody, ChannelPrepareDepositResponseBody, ChannelStepRequestBody,
+            ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
@@ -34,17 +34,17 @@ use lb_http_api_common::{
             balance::WalletBalanceResponseBody,
             fund::{WalletFundRequestBody, WalletFundResponseBody},
             import::WalletImportNoteRequestBody,
-            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+            transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
-        CHANNEL_STEP, CHANNEL_WITHDRAW, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
-        LEADER_AGED_NOTES, MANTLE_GAS_PRICES, MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION,
-        MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION,
-        TIME_INFO,
-        wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
+        CHANNEL_PREPARE_DEPOSIT, CHANNEL_STEP, CHANNEL_WITHDRAW, CRYPTARCHIA_INFO,
+        CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES, MANTLE_LIMITS,
+        MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX,
+        NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_PREPARE_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
@@ -508,6 +508,23 @@ impl CommonHttpClient {
         self.get::<(), TimeInfo>(request_url, None).await
     }
 
+    /// Prepare a signed deposit without submitting it.
+    ///
+    /// Durably save the whole reply before publishing its `transaction` with
+    /// [`Self::post_transaction`]. Retry submission with that saved
+    /// transaction.
+    pub async fn prepare_channel_deposit(
+        &self,
+        base_url: Url,
+        body: ChannelDepositRequestBody,
+    ) -> Result<ChannelPrepareDepositResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_PREPARE_DEPOSIT.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
     /// Get channel state for a specific channel id.
     pub async fn channel_state(
         &self,
@@ -764,14 +781,18 @@ impl CommonHttpClient {
             .await
     }
 
-    /// Post a request to transfer funds.
-    pub async fn transfer_funds(
+    /// Prepare a signed transfer without submitting it.
+    ///
+    /// Durably save the whole reply before publishing its `transaction` with
+    /// [`Self::post_transaction`]. Retry submission with that saved
+    /// transaction.
+    pub async fn prepare_transfer_funds(
         &self,
         base_url: Url,
         body: WalletTransferFundsRequestBody,
-    ) -> Result<WalletTransferFundsResponseBody, Error> {
+    ) -> Result<WalletPrepareTransferResponseBody, Error> {
         let request_url = base_url
-            .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .join(TRANSACTIONS_PREPARE_TRANSFER_FUNDS.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

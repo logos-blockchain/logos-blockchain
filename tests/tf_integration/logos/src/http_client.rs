@@ -29,7 +29,7 @@ use lb_http_api_common::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
             fund::{WalletFundRequestBody, WalletFundResponseBody},
-            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+            transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
     },
     paths::{
@@ -265,15 +265,23 @@ impl NodeHttpClient {
         .await
     }
 
+    /// Prepare and submit a transfer for integration tests.
+    ///
+    /// This helper keeps the complete prepared reply in memory between the
+    /// two HTTP requests, then returns it after submission succeeds.
     pub async fn transfer_funds(
         &self,
         body: WalletTransferFundsRequestBody,
-    ) -> Result<WalletTransferFundsResponseBody, Error> {
-        self.with_timeout(
-            "Transfer funds request",
-            self.http_client.transfer_funds(self.base_url.clone(), body),
-        )
-        .await
+    ) -> Result<WalletPrepareTransferResponseBody, Error> {
+        let response = self
+            .with_timeout(
+                "Prepare transfer funds request",
+                self.http_client
+                    .prepare_transfer_funds(self.base_url.clone(), body),
+            )
+            .await?;
+        self.submit_transaction(&response.transaction).await?;
+        Ok(response)
     }
 
     pub async fn fund_tx(

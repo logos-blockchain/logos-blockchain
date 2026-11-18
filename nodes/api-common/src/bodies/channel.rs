@@ -1,8 +1,9 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, Value,
+        Note, SignedOps, Value,
         gas::GasCost,
+        ledger::verification_mode::StandardMode,
         notes::{NoteCommitment, ProgramId},
         ops::{
             ZkTransferProof,
@@ -12,7 +13,7 @@ use lb_core::{
                 inscribe::{Inscription, Step, serde_inscription},
             },
         },
-        transactions::hash::TxHash,
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use lb_groth16::{Fr, serde::serde_fr};
@@ -32,9 +33,15 @@ pub struct ChannelDepositRequestBody {
     pub max_tx_fee: GasCost,
 }
 
+/// A signed channel deposit that has not been submitted.
+///
+/// Persist this whole response before publishing `transaction` through
+/// `/mempool/add/tx`. If submission needs retrying, submit the same saved
+/// transaction again.
 #[derive(Serialize, Deserialize)]
-pub struct ChannelDepositResponseBody {
+pub struct ChannelPrepareDepositResponseBody<Tx = SignedOps<Unverified, StandardMode>> {
     pub hash: TxHash,
+    pub transaction: Tx,
     /// The note paid to the holder in the channel. A holder whose wallet is not
     /// this node's imports it to withdraw it.
     pub holder_note: Note,

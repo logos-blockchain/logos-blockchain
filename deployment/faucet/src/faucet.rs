@@ -8,7 +8,7 @@ use std::{
 use lb_common_http_client::{CommonHttpClient, Error as HttpError};
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody,
-    transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_wallet::SPEND_ROOT_DEPTH;
@@ -138,7 +138,7 @@ impl Faucet {
         &self,
         recipient_pk: ZkPublicKey,
         wallet: &WalletBalanceResponseBody,
-    ) -> Result<WalletTransferFundsResponseBody, TransferFailure> {
+    ) -> Result<WalletPrepareTransferResponseBody, TransferFailure> {
         let current_balance = wallet.balance;
 
         let amount_to_send = std::cmp::min(current_balance, self.drip_amount);
@@ -161,13 +161,24 @@ impl Faucet {
             amount: amount_to_send,
         };
 
+        let response = self
+            .http_client
+            .prepare_transfer_funds(self.base_url.clone(), body)
+            .await
+            .map_err(|e| TransferFailure {
+                may_be_submitted: false,
+                reason: format!("Faucet transfer preparation failed: {e}"),
+            })?;
+
         self.http_client
-            .transfer_funds(self.base_url.clone(), body)
+            .post_transaction(self.base_url.clone(), response.transaction.clone())
             .await
             .map_err(|e| TransferFailure {
                 may_be_submitted: may_be_submitted(&e),
                 reason: format!("Faucet transfer failed: {e}"),
-            })
+            })?;
+
+        Ok(response)
     }
 
     /// Waits until the faucet balance differs from `balance_before` at the

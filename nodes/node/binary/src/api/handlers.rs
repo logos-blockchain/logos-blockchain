@@ -45,13 +45,13 @@ use lb_http_api_common::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{
-            ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
+            ChannelDepositRequestBody, ChannelPrepareDepositResponseBody, ChannelStepRequestBody,
             ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
-            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+            transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
     },
     paths,
@@ -1149,30 +1149,22 @@ where
     })
 }
 
+/// Builds and signs a deposit without submitting it. Save the whole response
+/// before publishing `transaction` through `/mempool/add/tx`.
 #[utoipa::path(
     post,
-    path = paths::CHANNEL_DEPOSIT,
+    path = paths::CHANNEL_PREPARE_DEPOSIT,
     responses(
-        (status = 200, description = "Submit a channel deposit"),
+        (status = 200, description = "Signed channel deposit and holder opening; not submitted"),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
-pub async fn channel_deposit<WalletService, StorageAdapter, RuntimeServiceId>(
+pub async fn prepare_channel_deposit<WalletService, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(req): Json<ChannelDepositRequestBody>,
 ) -> Response
 where
     WalletService: WalletServiceData,
-    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-            RuntimeServiceId,
-            Item = ValidatedTx,
-            Key = <ValidatedTx as Hashable>::Hash,
-            BlockId = HeaderId,
-        > + Send
-        + Sync
-        + Clone
-        + 'static,
-    StorageAdapter::Error: Debug,
     RuntimeServiceId: Debug
         + Clone
         + Display
@@ -1181,20 +1173,7 @@ where
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<WalletService>
-        + AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + AsServiceId<
-            TxMempoolService<
-                MempoolNetworkAdapter<
-                    ValidatedTx,
-                    <ValidatedTx as Hashable>::Hash,
-                    RuntimeServiceId,
-                >,
-                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
-                StorageAdapter,
-                NtpTimeBackend,
-                RuntimeServiceId,
-            >,
-        >,
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     make_request_and_return_response!(async {
         let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
@@ -1204,7 +1183,7 @@ where
         let owner = *req
             .funding_public_keys
             .first()
-            .ok_or_else(|| overwatch::DynError::from("no funding public key"))?;
+            .ok_or_else(|| DynError::from("no funding public key"))?;
         let lb_wallet_service::TipResponse {
             tip: split_tip,
             response: (split_builder, exact),
@@ -1226,7 +1205,7 @@ where
                 fr_from_mod_bytes(&rand::random::<[u8; 32]>()),
                 req.holder_public_key,
             );
-            // the wallet adopts the holder note when it owns the holder key
+            // The wallet adopts the holder note when it owns the holder key.
             if wallet
                 .get_known_addresses()
                 .await?
@@ -1270,7 +1249,7 @@ where
             response: funded_tx_builder,
         } = wallet
             .fund_tx(
-                // the split names the spend root of this tip
+                // The split names the spend root of this tip.
                 Some(split_tip),
                 tx_builder.clone(),
                 req.change_public_key,
@@ -1286,21 +1265,10 @@ where
             .collect();
         check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
 
-        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
-        let tx_hash = signed_tx.hash();
-
-        mempool::add_tx::<
-            Libp2pNetworkBackend,
-            MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
-            StorageAdapter,
-            ValidatedTx,
-            NtpTimeBackend,
-            RuntimeServiceId,
-        >(&handle, signed_tx, Hashable::hash)
-        .await?;
-
-        Ok::<_, overwatch::DynError>(ChannelDepositResponseBody {
-            hash: tx_hash,
+        let transaction = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        Ok::<_, DynError>(ChannelPrepareDepositResponseBody {
+            hash: transaction.hash(),
+            transaction,
             holder_note,
         })
     })
@@ -2295,102 +2263,49 @@ pub mod wallet {
         }
     }
 
+    /// Builds and signs a transfer without submitting it. Save the whole
+    /// response before publishing `transaction` through `/mempool/add/tx`.
     #[utoipa::path(
-    post,
-    path = paths::wallet::TRANSACTIONS_TRANSFER_FUNDS,
-    responses(
-        (status = 200, description = "Make transfer"),
-        (status = 500, description = "Internal server error", body = ErrorBody),
-    )
+        post,
+        path = paths::wallet::TRANSACTIONS_PREPARE_TRANSFER_FUNDS,
+        responses(
+            (status = 200, description = "Signed transfer and recipient opening; not submitted"),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
     )]
-    pub async fn post_transactions_transfer_funds<WalletService, StorageAdapter, RuntimeServiceId>(
+    pub async fn prepare_transfer_funds<WalletService, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
         Json(body): Json<WalletTransferFundsRequestBody>,
     ) -> Response
     where
         WalletService: WalletServiceData + 'static,
-        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
-                RuntimeServiceId,
-                Item = ValidatedTx,
-                Key = <ValidatedTx as Hashable>::Hash,
-                BlockId = HeaderId,
-            > + Send
-            + Sync
-            + Clone
-            + 'static,
-        StorageAdapter::Error: Debug,
-        RuntimeServiceId: Debug
-            + Clone
-            + Send
-            + Sync
-            + Display
-            + 'static
-            + AsServiceId<StorageService<RuntimeServiceId>>
-            + AsServiceId<WalletService>
-            + AsServiceId<
-                TxMempoolService<
-                    MempoolNetworkAdapter<
-                        ValidatedTx,
-                        <ValidatedTx as Hashable>::Hash,
-                        RuntimeServiceId,
-                    >,
-                    Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
-                    StorageAdapter,
-                    NtpTimeBackend,
-                    RuntimeServiceId,
-                >,
-            >,
+        RuntimeServiceId:
+            Debug + Clone + Send + Sync + Display + 'static + AsServiceId<WalletService>,
     {
-        let wallet_api = {
-            let wallet_relay = match get_relay::<WalletService, _>(&handle).await {
-                Ok(relay) => relay,
-                Err(error) => return error.into_response(),
-            };
-            WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
-        };
-
-        let transfer_funds = wallet_api
-            .transfer_funds(
-                body.tip,
-                body.change_public_key,
-                body.funding_public_keys,
-                body.recipient_public_key,
-                body.amount,
-            )
-            .await;
-
-        match transfer_funds {
-            Ok(lb_wallet_service::TipResponse {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                get_relay::<WalletService, _>(&handle).await?,
+            );
+            let lb_wallet_service::TipResponse {
                 response: (transaction, recipient_note),
                 ..
-            }) => {
-                let hash = transaction.hash();
-                // Submit to mempool
-                if let Err(e) = mempool::add_tx::<
-                    Libp2pNetworkBackend,
-                    MempoolNetworkAdapter<
-                        ValidatedTx,
-                        <ValidatedTx as Hashable>::Hash,
-                        RuntimeServiceId,
-                    >,
-                    StorageAdapter,
-                    ValidatedTx,
-                    NtpTimeBackend,
-                    RuntimeServiceId,
-                >(&handle, transaction, Hashable::hash)
+            } = wallet
+                .transfer_funds(
+                    body.tip,
+                    body.change_public_key,
+                    body.funding_public_keys,
+                    body.recipient_public_key,
+                    body.amount,
+                )
                 .await
-                {
-                    return ApiError::Internal(e).into_response();
-                }
+                .map_err(ApiError::internal)?;
 
-                WalletTransferFundsResponseBody {
-                    hash,
-                    recipient_note,
-                }
-                .into_response()
-            }
-            Err(error) => ApiError::internal(error).into_response(),
-        }
+            Ok::<_, ApiError>(WalletPrepareTransferResponseBody {
+                hash: transaction.hash(),
+                transaction,
+                recipient_note,
+            })
+        })
     }
 
     #[utoipa::path(
