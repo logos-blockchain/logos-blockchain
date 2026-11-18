@@ -1033,9 +1033,9 @@ pub fn next_epoch(
 ) -> LedgerState {
     let leader = crate::block::leadership();
     let (state, _) = state
-        .try_apply_header::<_, HeaderId>(
+        .try_apply_header::<HeaderId>(
             Slot::from(epoch * crate::fixture::parameters(config).epoch_length()),
-            &leader,
+            &leader.entropy(),
             &UncleSlots::default(),
             config,
         )

@@ -14,7 +14,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
-        traits::SignedMantleTx,
+        traits::{SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
 };
@@ -52,7 +52,7 @@ impl<Cryptarchia, Mempool> IbdBlockProcessor<Block<Cryptarchia::Tx>>
     for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + StorageSize + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {
