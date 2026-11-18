@@ -41,15 +41,17 @@ use crate::{
 
 const LOG_TARGET: &str = chain::leader::LEADERSHIP;
 
-// An aged note of the wallet winning the slot, with the public inputs it wins.
+// An aged note of the wallet winning the slot, with the public inputs it wins
+// and its wallet witness.
 #[derive(Debug)]
 pub struct WinningNote {
     pub note: AgedNote,
     pub public_inputs: LeaderPublic,
+    pub wallet_inputs: PolWalletInputsData,
 }
 
-// The first aged note winning `slot`, checked against C_LEAD and the latest
-// eligible root.
+// The first aged note winning `slot` whose witness can be built, checked
+// against C_LEAD and the latest eligible root.
 pub async fn find_winning_note<RuntimeServiceId>(
     aged: &[AgedNote],
     epoch_state: &EpochState,
@@ -65,21 +67,12 @@ pub async fn find_winning_note<RuntimeServiceId>(
             .await
         {
             Ok(true) => {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    "leader for slot {:?}, {:?}/{:?}",
-                    slot,
-                    note.note.note.value,
-                    epoch_state.total_stake()
-                );
-                return Some(WinningNote {
-                    note: AgedNote {
-                        note: note.note.clone(),
-                        aged_path: note.aged_path.clone(),
-                        key_id: note.key_id.clone(),
-                    },
-                    public_inputs,
-                });
+                // A winning note whose witness fails, such as one spent since
+                // the epoch snapshot, leaves the slot to the next winning note.
+                if let Some(winning) = with_witness(note, public_inputs, epoch_state, latest, slot)
+                {
+                    return Some(winning);
+                }
             }
             Ok(false) => non_winning_notes += 1,
             Err(e) => {
@@ -105,19 +98,56 @@ pub async fn find_winning_note<RuntimeServiceId>(
     None
 }
 
-// The wallet half of the PoL witness of the winning note, proven against the
-// aged note sets of the epoch and the `latest` note sets.
-pub fn leader_wallet_inputs(
-    winning: &WinningNote,
+// `note` winning with `public_inputs`, unless its witness fails.
+fn with_witness(
+    note: &AgedNote,
+    public_inputs: LeaderPublic,
+    epoch_state: &EpochState,
+    latest: &NoteSets,
+    slot: Slot,
+) -> Option<WinningNote> {
+    tracing::debug!(
+        target: LOG_TARGET,
+        "leader for slot {:?}, {:?}/{:?}",
+        slot,
+        note.note.note.value,
+        epoch_state.total_stake()
+    );
+    match leader_wallet_inputs(note, epoch_state, latest) {
+        Ok(wallet_inputs) => Some(WinningNote {
+            note: AgedNote {
+                note: note.note.clone(),
+                aged_path: note.aged_path.clone(),
+                key_id: note.key_id.clone(),
+            },
+            public_inputs,
+            wallet_inputs,
+        }),
+        Err(e) => {
+            metrics::consensus_proposals_create_failed("private_inputs");
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
+                note.note.note.commitment(),
+            );
+            None
+        }
+    }
+}
+
+// The wallet half of the PoL witness of an aged note, proven against the aged
+// note sets of the epoch and the `latest` note sets.
+fn leader_wallet_inputs(
+    aged: &AgedNote,
     epoch_state: &EpochState,
     latest: &NoteSets,
 ) -> Result<PolWalletInputsData, PrivateInputsError> {
-    let note = &winning.note.note;
+    let note = &aged.note;
     Ok(pol_wallet_inputs(
         &note.note,
         note.note_set,
         &note.nullifier,
-        &winning.note.aged_path,
+        &aged.aged_path,
         &epoch_state.note_sets,
         latest,
     )?)
@@ -479,6 +509,7 @@ mod pol_tests {
             gas::{Gas, GasProfile},
             note_set::{CommitmentMmr, NoteSetIndex},
             notes::derive_note_nullifier,
+            ops::channel::ChannelId,
         },
         proofs::leader_proof::{LeaderPrivate, check_winning},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -622,6 +653,68 @@ mod pol_tests {
             winners.is_empty(),
             "no winning slots should be emitted when starting past the epoch end",
         );
+    }
+
+    /// A winning note whose witness fails leaves the slot to the next winning
+    /// note.
+    #[tokio::test]
+    async fn a_winning_note_without_a_witness_leaves_the_slot_to_the_next() {
+        let (_, kms, eligible, note_sets, epoch_state) = scan_test_fixtures();
+        let good = &eligible[0];
+        let slot = slot_won_by(good, &epoch_state, &note_sets, &kms).await;
+        let aged = [in_unknown_set(good), clone_aged(good)];
+
+        let winning = find_winning_note(&aged, &epoch_state, &note_sets, slot, &kms)
+            .await
+            .expect("the second note wins the slot");
+        assert_eq!(winning.note.aged_path, good.aged_path);
+    }
+
+    /// No winning note leads a slot if none has a witness.
+    #[tokio::test]
+    async fn no_note_wins_a_slot_without_a_witness() {
+        let (_, kms, eligible, note_sets, epoch_state) = scan_test_fixtures();
+        let slot = slot_won_by(&eligible[0], &epoch_state, &note_sets, &kms).await;
+        let aged = [in_unknown_set(&eligible[0])];
+
+        let winning = find_winning_note(&aged, &epoch_state, &note_sets, slot, &kms).await;
+        assert!(winning.is_none());
+    }
+
+    /// The first slot `aged` wins.
+    async fn slot_won_by(
+        aged: &AgedNote,
+        epoch_state: &EpochState,
+        note_sets: &NoteSets,
+        kms: &DummyKms,
+    ) -> Slot {
+        for slot in 0..1000u64 {
+            let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), note_sets);
+            if kms
+                .check_winning_with_key(aged.key_id.clone(), &aged.note.note, &public_inputs)
+                .await
+                .unwrap()
+            {
+                return slot.into();
+            }
+        }
+        panic!("the note wins no slot of the first 1000");
+    }
+
+    /// `aged` in a channel set the chain doesn't hold: it still wins, but its
+    /// witness fails.
+    fn in_unknown_set(aged: &AgedNote) -> AgedNote {
+        let mut aged = clone_aged(aged);
+        aged.note.note_set = NoteSetIndex::Channel(ChannelId::from([7; 32]));
+        aged
+    }
+
+    fn clone_aged(aged: &AgedNote) -> AgedNote {
+        AgedNote {
+            note: aged.note.clone(),
+            aged_path: aged.aged_path.clone(),
+            key_id: aged.key_id.clone(),
+        }
     }
 
     /// A reward config with claiming disabled, standing in for a real
