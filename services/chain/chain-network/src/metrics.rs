@@ -43,7 +43,9 @@ pub fn consensus_observe_proposal_reconstruct_ok(duration: Duration) {
 
 pub fn consensus_observe_proposal_reconstruct_err(origin: &'static str, err: &Error) {
     let reason = match err {
-        Error::InvalidHeader(_) => "invalid_header",
+        Error::Cryptarchia(ApiError::InvalidHeader(_)) => "invalid_header",
+        Error::Cryptarchia(ApiError::InvalidSlot { .. }) => "invalid_slot",
+        Error::Cryptarchia(ApiError::InvalidLeaderProof) => "invalid_leader_proof",
         Error::UnresolvedReference { .. } => "missing_txs",
         Error::CollidingReference { .. } => "colliding_reference",
         Error::NoMatchingReconstruction => "body_root_mismatch",

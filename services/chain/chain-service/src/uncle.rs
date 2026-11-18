@@ -3,8 +3,9 @@
 use std::collections::HashSet;
 
 use lb_core::{
-    block::{Block, HeaderError, UncleHeaders},
+    block::{HeaderError, UncleHeaders},
     header::{Header, HeaderId},
+    proofs::leader_proof::LeaderProof as _,
 };
 use lb_cryptarchia_engine::Branch;
 
@@ -16,18 +17,20 @@ use crate::{Cryptarchia, Error};
 )]
 impl Cryptarchia {
     /// Verifies that the block carries at most as many uncles as the era of its
-    /// slot allows. Unlike the rules of [`Self::verify_uncles`], this one needs
-    /// no ledger state, so it is checked for every block, however it was built,
-    /// decoded or stored.
-    pub(crate) fn verify_uncle_count<Tx>(&self, block: &Block<Tx>) -> Result<(), Error> {
+    /// slot allows.
+    fn verify_uncle_count(
+        &self,
+        header: &Header,
+        uncle_headers: &UncleHeaders,
+    ) -> Result<(), Error> {
         let max_uncles = self
             .ledger
             .era_schedule()
-            .at_slot(block.header().slot())
+            .at_slot(header.slot())
             .parameters
             .consensus_config
             .max_uncles();
-        let uncle_count = block.uncle_headers().len();
+        let uncle_count = uncle_headers.len();
         if uncle_count > usize::from(max_uncles) {
             return Err(Error::TooManyUncles {
                 count: uncle_count,
@@ -41,18 +44,25 @@ impl Cryptarchia {
     /// extends.
     ///
     /// # Rules
+    /// - The block carries at most as many uncles as the era of its slot
+    ///   allows.
     /// - Each uncle's slot must be older than the block's slot.
     /// - Each uncle must be of the era of the block.
     /// - Each uncle must not be on the chain that the block extends.
     /// - Each uncle's parent must be on the chain the block extends, within the
     ///   uncle reference window.
     /// - Each uncle's header and `PoL` must be valid.
-    pub(crate) fn verify_uncles<Tx>(&self, block: &Block<Tx>) -> Result<(), Error> {
-        if block.uncle_headers().is_empty() {
+    pub(crate) fn verify_uncles(
+        &self,
+        header: &Header,
+        uncle_headers: &UncleHeaders,
+    ) -> Result<(), Error> {
+        if uncle_headers.is_empty() {
             return Ok(());
         }
 
-        let header = block.header();
+        self.verify_uncle_count(header, uncle_headers)?;
+
         let slot = header.slot();
         let parent = self
             .consensus
@@ -66,7 +76,7 @@ impl Cryptarchia {
         // Each uncle's slot must be older than the block's slot, and of the
         // block's era, which starts at its first slot.
         let era = self.ledger.era_schedule().at_slot(slot);
-        for uncle in block.uncle_headers().iter() {
+        for uncle in uncle_headers.iter() {
             if uncle.slot() >= slot {
                 return Err(Error::InvalidUncle {
                     uncle: uncle.id(),
@@ -88,10 +98,10 @@ impl Cryptarchia {
             .consensus_config
             .uncle_reference_window_in_slot();
         let window_start = slot.into_inner().saturating_sub(uncle_reference_window);
-        self.verify_uncles_ancestry(block.uncle_headers(), parent, window_start)?;
+        self.verify_uncles_ancestry(uncle_headers, parent, window_start)?;
 
         // Each uncle's header must be valid, and its `PoL` must be valid.
-        for uncle in block.uncle_headers().iter() {
+        for uncle in uncle_headers.iter() {
             lb_core::block::verify_header_alone(uncle)
                 .map_err(UncleError::from)
                 .and_then(|()| self.verify_uncle_pol(uncle))
@@ -155,17 +165,15 @@ impl Cryptarchia {
     fn verify_uncle_pol(&self, uncle: &Header) -> Result<(), UncleError> {
         // The proof of leadership must verify against the ledger state of the
         // uncle's parent, which must exist since the parent is on the chain.
-        let parent_state = self
+        let public_inputs = self
             .ledger
-            .state(&uncle.parent())
-            .expect("ledger state of a block on the chain must exist");
-        parent_state
-            .verify_proof_of_leadership::<_, HeaderId>(
-                uncle.slot(),
-                uncle,
-                self.ledger.era_schedule(),
-            )
-            .map_err(|_| UncleError::InvalidProof)
+            .leader_public(uncle.parent(), uncle.slot())
+            .map_err(|_| UncleError::InvalidProof)?;
+        // The proof is bound to the block ID of the uncle.
+        uncle
+            .verify(&public_inputs)
+            .then_some(())
+            .ok_or(UncleError::InvalidProof)
     }
 }
 
@@ -201,7 +209,7 @@ impl From<lb_core::block::Error> for UncleError {
 #[cfg(test)]
 mod tests {
     use lb_core::{
-        block::BlockTransactions,
+        block::{Block, BlockTransactions},
         header::ContentId,
         mantle::{
             Note, SignedOps, ledger::verification_mode::StandardMode,
@@ -213,13 +221,10 @@ mod tests {
     use lb_groth16::Fr;
 
     use super::*;
-    use crate::{
-        BlockOrigin,
-        tests::{
-            GENESIS_ID, chain_with_fork, chain_with_fork_on, genesis_cryptarchia_on, ledger_config,
-            ledger_config_with_max_uncles, ledger_config_with_uncle_reference_window, note,
-            schedule, single_era, try_build_block,
-        },
+    use crate::tests::{
+        GENESIS_ID, chain_with_fork, chain_with_fork_on, genesis_cryptarchia_on, ledger_config,
+        ledger_config_with_max_uncles, ledger_config_with_uncle_reference_window, note, schedule,
+        single_era, try_build_block,
     };
 
     #[test]
@@ -255,7 +260,7 @@ mod tests {
     #[test]
     fn zero_window_rejects_any_uncle() {
         // `W = 0` disables uncle references.
-        let (mut cryptarchia, _, u1, _, secret_key, note) = chain_with_fork_on(single_era(
+        let (cryptarchia, _, u1, _, secret_key, note) = chain_with_fork_on(single_era(
             ledger_config_with_uncle_reference_window(3.try_into().unwrap(), 0),
         ));
 
@@ -269,8 +274,7 @@ mod tests {
         )
         .unwrap();
 
-        let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -308,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_reject_uncle_not_strictly_older() {
-        let (mut cryptarchia, _, u1, ..) = chain_with_fork();
+        let (cryptarchia, _, u1, ..) = chain_with_fork();
 
         // The block is at the same slot as the uncle it references.
         let block = craft_block_with_uncles(
@@ -318,8 +322,7 @@ mod tests {
             u1.header().leader_proof(),
         );
 
-        let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -338,8 +341,7 @@ mod tests {
         // within its window, through `U1`'s parent `G` (slot 0), but `U1` is of
         // era 0.
         let config = ledger_config(1.try_into().unwrap());
-        let (mut cryptarchia, _, u1, ..) =
-            chain_with_fork_on(schedule(config.clone(), [(1, config)]));
+        let (cryptarchia, _, u1, ..) = chain_with_fork_on(schedule(config.clone(), [(1, config)]));
 
         let block = craft_block_with_uncles(
             cryptarchia.tip(),
@@ -348,8 +350,7 @@ mod tests {
             u1.header().leader_proof(),
         );
 
-        let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -363,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_reject_uncle_whose_parent_is_outside_window() {
-        let (mut cryptarchia, _, u1, ..) = chain_with_fork();
+        let (cryptarchia, _, u1, ..) = chain_with_fork();
 
         // The block is more than `uncle_reference_window` slots after the uncle's
         // parent, which puts the uncle's parent outside the window.
@@ -383,8 +384,7 @@ mod tests {
             u1.header().leader_proof(),
         );
 
-        let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn test_reject_uncle_on_the_chain() {
-        let (mut cryptarchia, b1, u1, ..) = chain_with_fork();
+        let (cryptarchia, b1, u1, ..) = chain_with_fork();
 
         // The block references its own parent `B1` as an uncle.
         let block = craft_block_with_uncles(
@@ -408,8 +408,7 @@ mod tests {
             u1.header().leader_proof(),
         );
 
-        let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -423,7 +422,7 @@ mod tests {
 
     #[test]
     fn reject_uncle_whose_parent_is_not_on_the_chain() {
-        let (mut cryptarchia, _, u1, ..) = chain_with_fork();
+        let (cryptarchia, _, u1, ..) = chain_with_fork();
 
         // An uncle whose parent is unknown to the chain.
         let header = Header::new(
@@ -439,8 +438,7 @@ mod tests {
             u1.header().leader_proof(),
         );
 
-        let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -454,7 +452,7 @@ mod tests {
 
     #[test]
     fn reject_uncle_with_invalid_pol() {
-        let (mut cryptarchia, _, u1, ..) = chain_with_fork();
+        let (cryptarchia, _, u1, ..) = chain_with_fork();
 
         // The uncle carries `U1`'s proof at a different slot, against which
         // the proof was not proven.
@@ -472,8 +470,7 @@ mod tests {
             u1.header().leader_proof(),
         );
 
-        let block_header_slot = block.header().slot();
-        let Err(err) = cryptarchia.try_apply_block(block, block_header_slot) else {
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
             panic!("expected the block to be rejected");
         };
         assert!(matches!(
@@ -487,7 +484,7 @@ mod tests {
 
     #[test]
     fn reject_block_with_more_uncles_than_its_era_allows() {
-        let (mut cryptarchia, [x1, x2, x3], secret_key, note) = era_1_fork();
+        let (cryptarchia, [x1, x2, x3], secret_key, note) = era_1_fork();
 
         // Two valid uncles, built under the bound of era 0 rather than of the
         // block's own era, which allows one.
@@ -501,19 +498,10 @@ mod tests {
         )
         .unwrap();
 
-        // Received from the network, and replayed from storage, where the
-        // other uncle rules are not checked again.
-        let block_header_slot = block.header().slot();
-        for origin in [BlockOrigin::Network, BlockOrigin::Storage] {
-            let Err(err) = cryptarchia.try_apply_block_with_state_retention(
-                block.clone(),
-                block_header_slot,
-                origin,
-            ) else {
-                panic!("expected the block to be rejected from {origin:?}");
-            };
-            assert!(matches!(err, Error::TooManyUncles { count: 2, max: 1 }));
-        }
+        let Err(err) = cryptarchia.verify_uncles(block.header(), block.uncle_headers()) else {
+            panic!("expected the block to be rejected");
+        };
+        assert!(matches!(err, Error::TooManyUncles { count: 2, max: 1 }));
     }
 
     #[test]
@@ -662,7 +650,7 @@ mod tests {
     }
 
     /// Crafts a block carrying the uncles, without a winning `PoL` for `slot`,
-    /// which is fine because uncles are verified before the block's own proof.
+    /// which is fine because the tests check the uncle rules alone.
     fn craft_block_with_uncles(
         parent: HeaderId,
         slot: Slot,

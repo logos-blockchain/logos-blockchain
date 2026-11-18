@@ -167,10 +167,12 @@ where
         let raw = RawBlock::<Tx>::deserialize(deserializer)?;
 
         // Serde reads blocks a node serves through its API, already checked
-        // against their era by that node, so it holds them to no era: their
-        // transactions to the most bytes an era's limit can be.
-        Self::reconstruct(raw.header, raw.uncle_headers, raw.transactions, u32::MAX)
-            .map_err(serde::de::Error::custom)
+        // against their era by that node, so it holds them to no era.
+        Ok(Self::reconstruct(
+            raw.header,
+            raw.uncle_headers,
+            raw.transactions,
+        ))
     }
 }
 
@@ -201,7 +203,8 @@ where
     }
 }
 
-// Decoding checks the block as `reconstruct` does.
+// Decoding only holds the block to the limits of its era, as [`Block`]
+// represents a block that is not verified yet.
 impl<Tx> BinaryDecode for Block<Tx>
 where
     Tx: BinaryDecode + Hashable<Hash = TxHash> + StorageSize,
@@ -219,9 +222,12 @@ where
         let (input, header) = Header::decode(input, &())?;
         let (input, uncle_headers) = UncleHeaders::decode(input, max_uncles)?;
         let (input, transactions) = BlockTransactions::<Tx>::decode(input, transactions_context)?;
-        let block = Self::reconstruct(header, uncle_headers, transactions, *max_transactions_size)
+        Self::validate_total_transactions_size(&transactions, *max_transactions_size)
             .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
-        Ok((input, block))
+        Ok((
+            input,
+            Self::reconstruct(header, uncle_headers, transactions),
+        ))
     }
 }
 
@@ -304,46 +310,24 @@ impl<Tx> Block<Tx> {
         };
 
         // 6. Size is ok
-        block.validate_total_transactions_size(max_transactions_size)?;
+        Self::validate_total_transactions_size(&block.transactions, max_transactions_size)?;
 
         Ok(block)
     }
 
-    /// A block rebuilt from its parts, checked as an era that allows its
-    /// transactions `max_transactions_size` bytes does.
-    pub fn reconstruct(
+    /// Assembles a block from its parts, without checking that they belong
+    /// together.
+    #[must_use]
+    pub const fn reconstruct(
         header: Header,
         uncle_headers: UncleHeaders,
         transactions: BlockTransactions<Tx>,
-        max_transactions_size: u32,
-    ) -> Result<Self, Error>
-    where
-        Tx: Hashable<Hash = TxHash> + StorageSize,
-    {
-        let block = Self {
+    ) -> Self {
+        Self {
             header,
             uncle_headers,
             transactions,
-        };
-        let block = block.into_verified(max_transactions_size)?;
-
-        Ok(block)
-    }
-
-    fn into_verified(self, max_transactions_size: u32) -> Result<Self, Error>
-    where
-        Tx: Hashable<Hash = TxHash> + StorageSize,
-    {
-        // 1. Checks that need the header alone
-        verify_header_alone(&self.header)?;
-
-        // 2. Size is ok
-        self.validate_total_transactions_size(max_transactions_size)?;
-
-        // 3. Body root matches the carried uncle headers and transactions
-        self.validate_body_root()?;
-
-        Ok(self)
+        }
     }
 
     /// Maximum canonical encoded size of a block whose era has `limits`: its
@@ -357,14 +341,17 @@ impl<Tx> Block<Tx> {
             + limits.max_transactions_size as usize
     }
 
-    fn validate_total_transactions_size(&self, max_transactions_size: u32) -> Result<usize, Error>
+    pub fn validate_total_transactions_size(
+        transactions: &[Tx],
+        max_transactions_size: u32,
+    ) -> Result<usize, Error>
     where
         Tx: Hashable<Hash = TxHash> + StorageSize,
     {
         let max = max_transactions_size as usize;
         let mut total = 0usize;
 
-        for item in &self.transactions {
+        for item in transactions {
             total = total
                 .checked_add(item.storage_size())
                 .ok_or(Error::ContentTooBig {
@@ -380,11 +367,15 @@ impl<Tx> Block<Tx> {
         Ok(total)
     }
 
-    fn validate_body_root(&self) -> Result<(), Error>
+    pub fn validate_body_root(
+        header: &Header,
+        uncle_headers: &UncleHeaders,
+        transactions: &[Tx],
+    ) -> Result<(), Error>
     where
         Tx: Hashable<Hash = TxHash>,
     {
-        if self.header.body_root() != &body_root(&self.uncle_headers, &self.transactions) {
+        if header.body_root() != &body_root(uncle_headers, transactions) {
             return Err(Error::BodyRootMismatch);
         }
 
@@ -733,7 +724,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reconstruct_rejects_genesis_slot() {
+    fn test_header_alone_rejects_genesis_slot() {
         let parent_block = [0u8; 32].into();
         let proof = create_proof();
 
@@ -756,15 +747,9 @@ mod tests {
             proof,
         );
 
-        let err = Block::reconstruct(
-            genesis_header,
-            UncleHeaders::empty(),
-            BlockTransactions::<Ops>::empty(),
-            TEST_MAX_TRANSACTIONS_SIZE,
-        )
-        .expect_err("genesis slot must be rejected by reconstruct path");
+        let err = verify_header_alone(&genesis_header).expect_err("genesis slot must be rejected");
 
-        assert!(matches!(err, Error::Header(HeaderError::GenesisSlot)));
+        assert!(matches!(err, HeaderError::GenesisSlot));
     }
 
     /// The maximum-size proposal of an era matches the era's size bound.
@@ -832,8 +817,8 @@ mod tests {
         )
         .unwrap();
 
-        block_with_uncles(uncles, proof)
-            .into_verified(TEST_MAX_TRANSACTIONS_SIZE)
+        let block = block_with_uncles(uncles, proof);
+        Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions)
             .expect("the carried headers are the ones the body root commits to");
     }
 
@@ -846,7 +831,7 @@ mod tests {
         block.uncle_headers = UncleHeaders::empty();
 
         assert!(matches!(
-            block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
+            Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -862,7 +847,7 @@ mod tests {
             UncleHeaders::try_new(vec![uncle_header(2, &proof)], TEST_MAX_UNCLES).unwrap();
 
         assert!(matches!(
-            block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
+            Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions),
             Err(Error::BodyRootMismatch)
         ));
     }
@@ -879,7 +864,7 @@ mod tests {
         block.uncle_headers = UncleHeaders::try_new(vec![second, first], TEST_MAX_UNCLES).unwrap();
 
         assert!(matches!(
-            block.into_verified(TEST_MAX_TRANSACTIONS_SIZE),
+            Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions),
             Err(Error::BodyRootMismatch)
         ));
     }
