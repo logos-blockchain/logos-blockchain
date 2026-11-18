@@ -205,7 +205,7 @@ pub(crate) fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
         accepted_fork_digests: era.accepted_fork_digests.clone(),
         execution_market: deployment.execution_market,
         storage_market: deployment.storage_market,
-        block_rewards: deployment.block_rewards,
+        block_rewards: era.block_rewards,
         gas_profile: deployment.gas_profile,
     }
 }
