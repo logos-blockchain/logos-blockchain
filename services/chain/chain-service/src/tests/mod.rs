@@ -21,7 +21,7 @@ use lb_core::{
         gas::{Gas, GasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex},
-        notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
+        notes::{OutputCommitments, derive_note_nullifier},
         ops::{
             ZkTransferProof,
             channel::{
@@ -41,8 +41,7 @@ use lb_core::{
     proofs::{
         channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
         leader_proof::{
-            Groth16LeaderProof, LeaderPrivate, LeaderProof, LeaderPublic, check_winning,
-            pol_wallet_inputs,
+            Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning, pol_wallet_inputs,
         },
     },
     sdp::ServiceParameters,
@@ -81,8 +80,8 @@ use tokio::{
 };
 
 use crate::{
-    BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
-    Error, OfflineGracePeriodConfig, TipEra,
+    BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
+    CryptarchiaConsensusState, Error, OfflineGracePeriodConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -194,11 +193,10 @@ async fn get_block_ids_from_memory_and_storage() {
             UncleHeaders::empty(),
         )
         .unwrap();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -248,11 +246,10 @@ async fn get_block_ids_from_memory_and_storage() {
             UncleHeaders::empty(),
         )
         .unwrap();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -357,17 +354,9 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     // Before the restart: `B1` and `B2` are verified and stored.
     let mut stored = genesis_cryptarchia(note);
     for block in [b1.clone(), b2] {
-        process_block(
-            &mut stored,
-            block,
-            b2_slot,
-            BlockOrigin::Network,
-            &relays,
-            &new_block_tx,
-            &lib_tx,
-        )
-        .await
-        .expect("the block should be valid before the restart");
+        verify_and_process_block(&mut stored, block, b2_slot, &relays, &new_block_tx, &lib_tx)
+            .await
+            .expect("the block should be valid before the restart");
     }
 
     // The store was finalized at `B1` before the restart.
@@ -405,108 +394,9 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         &relays,
         &new_block_tx,
         &lib_tx,
-        b2_slot,
     )
     .await;
     let initialized = initialized.expect("the chain should be recovered");
-    assert!(!initialized.fell_back_to_lib);
-    assert_eq!(initialized.cryptarchia.lib(), b1_id);
-    assert_eq!(initialized.cryptarchia.tip(), b2_id);
-}
-
-/// The chain must be recovered successfully from storage even if the current
-/// slot sampled at startup is behind the slot of the stored tip.
-///
-/// Build a chain `G -- B1 -- B2`, and recover it with `LIB = B1`, `tip = B2`
-/// and `current_slot = B2.slot - 1`.
-#[tokio::test(flavor = "multi_thread")]
-async fn recovery_chain_with_tip_ahead_of_current_slot() {
-    type Tx = SignedOps<Preverified, StandardMode>;
-
-    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
-    let (storage_tx, storage_rx) = mpsc::channel(10);
-    let _storage_svc = spawn_storage_service(storage_rx);
-    let (time_tx, _time_rx) = mpsc::channel(10);
-    let relays = CryptarchiaConsensusRelays::<Tx>::new(
-        OutboundRelay::new(broadcast_tx),
-        StorageApi::new(OutboundRelay::new(storage_tx)),
-        OutboundRelay::new(time_tx),
-    );
-    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
-    let (lib_tx, _lib_rx) = broadcast::channel(10);
-
-    // Before the restart: `B1` and `B2` are verified and stored.
-    let (secret_key, note) = note();
-    let mut stored = genesis_cryptarchia(note);
-    let mut blocks = Vec::new();
-    let mut slot = Slot::genesis().strict_add(1.into());
-    for _ in 0..2 {
-        let (block, _) = try_build_block(
-            &stored,
-            stored.tip(),
-            &note,
-            secret_key,
-            slot,
-            UncleHeaders::empty(),
-        )
-        .unwrap();
-        slot = block.header().slot().strict_add(1.into());
-        process_block(
-            &mut stored,
-            block.clone(),
-            block.header().slot(),
-            BlockOrigin::Network,
-            &relays,
-            &new_block_tx,
-            &lib_tx,
-        )
-        .await
-        .unwrap();
-        blocks.push(block);
-    }
-    let (b1, b2) = (&blocks[0], &blocks[1]);
-    let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
-    let current_slot = b2.header().slot().checked_sub(1.into()).unwrap();
-
-    // The store was finalized at `B1` before the restart.
-    write_lib_state_at(&stored, b1);
-    let recovery_state = CryptarchiaConsensusState {
-        tip: b2_id,
-        tip_era: TipEra {
-            slot: b2.header().slot(),
-            fork_digest: ForkDigest::from([0; 32]),
-        },
-        lib: b1_id,
-        lib_block_length: 1,
-        lib_block_slot: b1.header().slot(),
-        lib_block_uncle_slots: UncleSlots::default(),
-        genesis_id: GENESIS_ID.into(),
-        storage_blocks_to_remove: HashSet::new(),
-        last_engine_state: None,
-    };
-    let bootstrap_config = BootstrapConfig {
-        prolonged_bootstrap_period: std::time::Duration::ZERO,
-        force_bootstrap: true,
-        offline_grace_period: OfflineGracePeriodConfig::default(),
-    };
-    let initialized = CryptarchiaConsensus::<
-        Tx,
-        SystemTimeBackend,
-        MemKv,
-        TestRuntimeServiceId,
-    >::initialize_cryptarchia(
-        &recovery_state,
-        stored.ledger.store(),
-        &genesis_block_with(&[note]).into(),
-        &bootstrap_config,
-        Arc::clone(stored.ledger.era_schedule()),
-        &relays,
-        &new_block_tx,
-        &lib_tx,
-        current_slot,
-    )
-    .await
-    .expect("the chain should be recovered");
     assert!(!initialized.fell_back_to_lib);
     assert_eq!(initialized.cryptarchia.lib(), b1_id);
     assert_eq!(initialized.cryptarchia.tip(), b2_id);
@@ -520,11 +410,7 @@ fn future_block_is_rejected_only_from_network() {
     let block_slot = block.header().slot();
     let current_slot = block_slot.checked_sub(1.into()).unwrap();
 
-    let result = cryptarchia.clone().try_apply_block_with_state_retention(
-        block.clone(),
-        current_slot,
-        BlockOrigin::Network,
-    );
+    let result = cryptarchia.verify_block(block.clone(), current_slot);
     assert!(matches!(
         result,
         Err(Error::FutureBlock { block_slot: s, current_slot: c })
@@ -533,9 +419,80 @@ fn future_block_is_rejected_only_from_network() {
 
     let mut cryptarchia = cryptarchia;
     cryptarchia
-        .try_apply_block_with_state_retention(block.clone(), current_slot, BlockOrigin::Storage)
+        .try_apply_block_with_state_retention(&BlockWithVerifiedHeader::new_unchecked(
+            block.clone(),
+        ))
         .expect("a stored block should be replayed regardless of the current slot");
     assert_eq!(cryptarchia.tip(), block.header().id());
+}
+
+/// A block whose parent this node does not have is reported as missing its
+/// parent, so that it can be handled as an orphan.
+#[test]
+fn unknown_parent_is_reported_missing() {
+    let (fork_chain, b1, _, _, secret_key, note) = chain_with_fork();
+    let (b2, _) = try_build_block(
+        &fork_chain,
+        b1.header().id(),
+        &note,
+        secret_key,
+        b1.header().slot().strict_add(1.into()),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+
+    let result = genesis_cryptarchia(note).verify_block(b2.clone(), b2.header().slot());
+    assert!(matches!(
+        result,
+        Err(Error::ParentMissing { parent, .. }) if parent == b1.header().id()
+    ));
+}
+
+/// The header of a block that is already applied is reported as such, without
+/// being verified again.
+#[test]
+fn header_of_applied_block_is_reported_already_applied() {
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let slot = block.header().slot();
+    cryptarchia
+        .try_apply_block(block.clone(), slot)
+        .expect("the block should be applied");
+
+    let result =
+        cryptarchia.verify_header(block.header().clone(), block.uncle_headers().clone(), slot);
+    assert!(matches!(
+        result,
+        Err(Error::AlreadyApplied(id)) if id == block.header().id()
+    ));
+}
+
+/// A copy of a block carrying other transactions than its header commits to
+/// is rejected, even though its header is valid.
+#[test]
+fn transactions_not_committed_to_are_rejected() {
+    let (cryptarchia, block) = test_chain_with_next_block();
+    let (secret_key, note) = note();
+    let paths = commitment_paths(&[note]);
+    let header = cryptarchia
+        .verify_header(
+            block.header().clone(),
+            block.uncle_headers().clone(),
+            block.header().slot(),
+        )
+        .expect("the header is valid");
+
+    let result = BlockWithVerifiedHeader::new(
+        header,
+        BlockTransactions::<SignedOps<Preverified, StandardMode>>::try_new(
+            vec![burn_tx(&note, secret_key, &paths[0])],
+            u16::MAX,
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        result,
+        Err(lb_core::block::Error::BodyRootMismatch)
+    ));
 }
 
 /// Header traversal must continue from storage past a recovered LIB, instead of
@@ -575,11 +532,10 @@ async fn get_block_ids_past_recovered_lib() {
         )
         .unwrap();
         slot = block.header().slot().strict_add(1.into());
-        process_block(
+        verify_and_process_block(
             &mut stored,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -626,7 +582,6 @@ async fn get_block_ids_past_recovered_lib() {
         &relays,
         &new_block_tx,
         &lib_tx,
-        slot,
     )
     .await
     .expect("the chain should be recovered");
@@ -668,11 +623,10 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let initial_info = cryptarchia.info();
     let block_slot = block.header().slot();
 
-    let result = process_block(
+    let result = verify_and_process_block(
         &mut cryptarchia,
         block,
         block_slot,
-        BlockOrigin::Network,
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -777,11 +731,10 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
 
     let mut apply = async |block: Block<SignedOps<Preverified, StandardMode>>| {
         let slot = block.header().slot();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block,
             slot,
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -910,9 +863,7 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
             u16::MAX,
         )
         .unwrap(),
-        u32::MAX,
-    )
-    .expect("the body root does not cover the Operation proofs");
+    );
     assert_eq!(copy.header().id(), id);
 
     let Err(err) = cryptarchia.try_apply_block(copy, slot) else {
@@ -1040,9 +991,7 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
             u16::MAX,
         )
         .unwrap(),
-        u32::MAX,
-    )
-    .expect("the body root does not cover the Operation proofs");
+    );
     assert_eq!(copy.header().id(), id);
 
     let Err(err) = cryptarchia.try_apply_block(copy, slot) else {
@@ -1087,8 +1036,9 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     let slot = header.slot();
     let check = |header: &Header, current_slot: Slot| {
         cryptarchia
-            .verify_proposal_header(header, current_slot)
-            .map_err(|err| crate::api::apply_block_api_error(err, header.id()))
+            .verify_header(header.clone(), UncleHeaders::empty(), current_slot)
+            .map(|_| ())
+            .map_err(crate::api::ApiError::from)
     };
 
     check(header, slot).expect("the genuine header must pass");
@@ -1104,7 +1054,7 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     );
     assert!(matches!(
         check(&forged, slot),
-        Err(crate::api::ApiError::InvalidLeaderProof(id)) if id == forged.id()
+        Err(crate::api::ApiError::InvalidLeaderProof)
     ));
 
     let unknown_parent: HeaderId = [1; 32].into();
@@ -1128,6 +1078,19 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     ));
 }
 
+/// Verifies `block` at `current_slot`, as a block from the network is, and
+/// processes it.
+async fn verify_and_process_block(
+    cryptarchia: &mut Cryptarchia,
+    block: Block<SignedOps<Preverified, StandardMode>>,
+    current_slot: Slot,
+    relays: &CryptarchiaConsensusRelays<SignedOps<Preverified, StandardMode>>,
+    new_block_tx: &broadcast::Sender<crate::ProcessedBlockEvent>,
+    lib_tx: &broadcast::Sender<crate::LibUpdate>,
+) -> Result<crate::service::ProcessBlockOutcome<SignedOps<Preverified, StandardMode>>, Error> {
+    let block = cryptarchia.verify_block(block, current_slot)?;
+    process_block(cryptarchia, block, relays, new_block_tx, lib_tx).await
+}
 /// Creates a transfer tx with a fake sig.
 fn transfer_tx_with_fake_sig(
     note: &Note,
@@ -1523,7 +1486,7 @@ fn a_block_overstating_its_reward_is_condemned_after_a_valid_proof() {
     let (id, slot) = (block.header().id(), block.header().slot());
 
     cryptarchia
-        .verify_proposal_header(block.header(), slot)
+        .verify_header(block.header().clone(), block.uncle_headers().clone(), slot)
         .expect("the proof holds for the value the header carries");
     let err = cryptarchia.try_apply_block(block, slot).err().unwrap();
     assert!(matches!(
@@ -1588,31 +1551,6 @@ pub fn try_build_block_with_transactions(
     )
 }
 
-// Applies a header before its block is proven.
-struct UnprovenHeader;
-
-impl LeaderProof for UnprovenHeader {
-    fn verify(&self, _public_inputs: &LeaderPublic) -> bool {
-        true
-    }
-
-    fn verify_genesis(&self) -> bool {
-        false
-    }
-
-    fn entropy(&self) -> Fr {
-        Fr::ZERO
-    }
-
-    fn reward_commitment(&self) -> NoteCommitment {
-        NoteCommitment(Fr::ZERO)
-    }
-
-    fn reward_value(&self) -> Value {
-        0
-    }
-}
-
 // The reward of the block, or 0 for a block the test wants invalid before that.
 fn computed_reward_value(
     cryptarchia: &Cryptarchia,
@@ -1627,7 +1565,7 @@ fn computed_reward_value(
         .state(&parent)
         .expect("the parent of the block is applied")
         .clone()
-        .try_apply_header::<_, HeaderId>(slot, &UnprovenHeader, &uncle_headers.slots(), eras)
+        .try_apply_proposal_header::<HeaderId>(slot, &uncle_headers.slots(), eras)
         .and_then(|(state, _)| {
             state.try_apply_block_transactions::<_, HeaderId>(eras, transactions.iter().cloned())
         })

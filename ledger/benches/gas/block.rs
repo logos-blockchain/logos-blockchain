@@ -32,6 +32,7 @@ use lb_core::{
         },
         transactions::states::{Preverified, Unverified},
     },
+    proofs::leader_proof::LeaderProof as _,
     sdp::SNAPSHOT_FINALIZATION_DELAY,
 };
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
@@ -193,7 +194,7 @@ pub fn apply_header(
     leader: &AcceptedLeadership,
 ) -> Result<(LedgerState, Vec<HeaderEvent>), String> {
     state
-        .try_apply_header::<_, HeaderId>(slot, leader, &UncleSlots::default(), config)
+        .try_apply_header::<HeaderId>(slot, &leader.entropy(), &UncleSlots::default(), config)
         .map_err(|error| format!("header: {error}"))
 }
 
