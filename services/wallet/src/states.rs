@@ -405,6 +405,10 @@ impl<'u> ServiceState<'u> {
         )
     }
 
+    pub fn is_pending_note(&self, nullifier: &NoteNullifier) -> bool {
+        self.pending_notes.notes.contains_key(nullifier)
+    }
+
     pub fn reserve_pending_notes(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {
         self.pending_notes.reserve(nullifiers);
     }

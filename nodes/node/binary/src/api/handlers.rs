@@ -1093,6 +1093,7 @@ fn channel_response(result: Result<Option<ChannelState>, DynError>) -> Response 
     path = paths::CHANNEL_STEP,
     responses(
         (status = 200, description = "A channel step with its proof"),
+        (status = 400, description = "The step moves no value", body = ErrorBody),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1104,6 +1105,18 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
 {
+    // A step spends at least one note, so it has to move some value.
+    if req.payments.iter().all(|payment| payment.value == 0)
+        && req
+            .program_deposit
+            .as_ref()
+            .is_none_or(|deposit| deposit.value == 0)
+    {
+        return ApiError::BadRequest(
+            "A channel step must pay a note or deposit to a program".into(),
+        )
+        .into_response();
+    }
     make_request_and_return_response!(async {
         let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
             handle.relay::<WalletService>().await?,

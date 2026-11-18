@@ -575,6 +575,7 @@ mod tests {
                         commitments: vec![small.commitment(), large.commitment()],
                     }],
                     revealed: vec![],
+                    withdrawals: vec![],
                 },
             )
             .unwrap();
@@ -666,6 +667,7 @@ mod tests {
                         commitments: vec![on_chain.commitment()],
                     }],
                     revealed: vec![],
+                    withdrawals: vec![],
                 },
             )
             .unwrap();

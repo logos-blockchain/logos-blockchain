@@ -143,6 +143,12 @@ pub enum WalletServiceError {
     #[error("The wallet holds no spendable note {0:?} in channel {1:?}")]
     NoChannelNote(NoteCommitment, ChannelId),
 
+    #[error("The note {0:?} of channel {1:?} is spent by a withdrawal or a step in flight")]
+    ChannelNoteInFlight(NoteCommitment, ChannelId),
+
+    #[error("A channel step must pay a note or deposit to a program")]
+    EmptyChannelStep,
+
     #[error("Failed to read or write the persisted state of the wallet: {0}")]
     PersistedState(DynError),
 
@@ -1499,6 +1505,14 @@ where
         } = request;
         let note_set = channel_note_set(channel_id)
             .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
+        // A step spends at least one note, so it has to move some value.
+        if payments.iter().all(|(_, value)| *value == 0)
+            && program_deposit
+                .as_ref()
+                .is_none_or(|deposit| deposit.value == 0)
+        {
+            return Err(WalletServiceError::EmptyChannelStep);
+        }
         let paid = payments
             .into_iter()
             .map(|(public_key, value)| Note::new(value, random_nonce(), public_key))
@@ -1580,14 +1594,25 @@ where
         let note_set = channel_note_set(channel_id)
             .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
         let spend_state = state.wallet().spend_state(tip)?;
+        // A note another withdrawal waits to spend, or a transaction or a step
+        // in flight spends, is left to it.
         let inputs = notes
             .iter()
             .map(|commitment| {
-                spend_state
+                let owned = spend_state
                     .notes
                     .get(commitment)
                     .filter(|owned| owned.note_set == note_set)
-                    .ok_or(WalletServiceError::NoChannelNote(*commitment, channel_id))
+                    .ok_or(WalletServiceError::NoChannelNote(*commitment, channel_id))?;
+                if spend_state.is_withdrawing(&owned.nullifier)
+                    || state.is_pending_note(&owned.nullifier)
+                {
+                    return Err(WalletServiceError::ChannelNoteInFlight(
+                        *commitment,
+                        channel_id,
+                    ));
+                }
+                Ok(owned)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let outputs: Vec<Note> = inputs

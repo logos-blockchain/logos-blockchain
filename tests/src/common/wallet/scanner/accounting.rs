@@ -165,6 +165,7 @@ impl ScannerAccounting {
             epoch: 0.into(),
             updates,
             revealed,
+            withdrawals: vec![],
         })?;
         self.tip = id;
         // As the tip were the LIB: the wallet holds it and the blocks down to the

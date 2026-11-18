@@ -20,6 +20,10 @@ use lb_http_api_common::{
     TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
+        channel::{
+            ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
+            ChannelWithdrawResponseBody,
+        },
         mantle::GasPricesResponseBody,
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
@@ -279,6 +283,29 @@ impl NodeHttpClient {
         self.with_timeout(
             "Fund transaction request",
             self.http_client.fund_tx(self.base_url.clone(), body),
+        )
+        .await
+    }
+
+    pub async fn channel_step(
+        &self,
+        body: ChannelStepRequestBody,
+    ) -> Result<ChannelStepResponseBody, Error> {
+        self.with_timeout(
+            "Channel step request",
+            self.http_client.channel_step(self.base_url.clone(), body),
+        )
+        .await
+    }
+
+    pub async fn channel_withdraw(
+        &self,
+        body: ChannelWithdrawRequestBody,
+    ) -> Result<ChannelWithdrawResponseBody, Error> {
+        self.with_timeout(
+            "Channel withdraw request",
+            self.http_client
+                .channel_withdraw(self.base_url.clone(), body),
         )
         .await
     }

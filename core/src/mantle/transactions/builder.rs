@@ -327,6 +327,7 @@ impl MantleTxBuilder {
                 let inputs: &[NoteNullifier] = match op {
                     Op::Transfer(transfer) => &transfer.inputs,
                     Op::ChannelDeposit(deposit) => &deposit.inputs,
+                    Op::ChannelWithdraw(withdraw) => &withdraw.inputs,
                     Op::SDPDeclare(declare) => &declare.inputs,
                     Op::SDPWithdraw(withdraw) => {
                         core::slice::from_ref(&withdraw.service_note_nullifier)

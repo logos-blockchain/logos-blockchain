@@ -106,6 +106,8 @@ pub struct WalletBlock {
     pub updates: Vec<NoteSetUpdate>,
     // openings the block reveals, adopted only once registered as known notes
     pub revealed: Vec<(NoteSetIndex, Note)>,
+    // the inputs of each channel withdrawal the block posts
+    pub withdrawals: Vec<InputNullifiers>,
 }
 
 impl WalletBlock {
@@ -129,6 +131,14 @@ impl WalletBlock {
                 events,
                 block.transactions_iter().flat_map(MantleTx::op_refs_iter),
             ),
+            withdrawals: block
+                .transactions_iter()
+                .flat_map(MantleTx::op_refs_iter)
+                .filter_map(|op| match op {
+                    OpRef::ChannelWithdraw(withdraw) => Some(withdraw.inputs.clone()),
+                    _ => None,
+                })
+                .collect(),
         }
     }
 }
@@ -165,6 +175,10 @@ pub struct WalletState {
     // snapshot the next epoch will use
     pub next_aged_paths: rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
     pub epoch: Epoch,
+    // The inputs of the channel withdrawals on chain that spend a note of the
+    // wallet and wait for their due slot. A withdrawal leaves once one of its
+    // inputs is spent: by its release, or by a step, which cancels it.
+    pub withdrawals: rpds::VectorSync<InputNullifiers>,
 }
 
 impl WalletState {
@@ -196,6 +210,7 @@ impl WalletState {
             aged_paths: paths.clone(),
             next_aged_paths: paths,
             epoch,
+            withdrawals: rpds::VectorSync::new_sync(),
         })
     }
 
@@ -301,13 +316,55 @@ impl WalletState {
             apply_update(&mut commitments, &mut notes, known, update)?;
         }
 
+        // The withdrawals of the wallet's notes the block posts join the
+        // waiting ones, and the ones the block spends an input of leave.
+        let mut withdrawals = self.withdrawals.clone();
+        if !block.withdrawals.is_empty() {
+            let owned = notes
+                .values()
+                .map(|owned| owned.nullifier)
+                .collect::<HashSet<_>>();
+            for inputs in &block.withdrawals {
+                if inputs.iter().any(|nullifier| owned.contains(nullifier)) {
+                    withdrawals.push_back_mut(inputs.clone());
+                }
+            }
+        }
+        if !withdrawals.is_empty() {
+            let spent = block
+                .updates
+                .iter()
+                .flat_map(|update| &update.nullifiers)
+                .collect::<HashSet<_>>();
+            if withdrawals
+                .iter()
+                .any(|inputs| inputs.iter().any(|nullifier| spent.contains(nullifier)))
+            {
+                withdrawals = withdrawals
+                    .iter()
+                    .filter(|inputs| !inputs.iter().any(|nullifier| spent.contains(nullifier)))
+                    .cloned()
+                    .collect();
+            }
+        }
+
         Ok(Self {
             commitments,
             notes,
             aged_paths,
             next_aged_paths,
             epoch: block.epoch,
+            withdrawals,
         })
+    }
+
+    // Whether a channel withdrawal on chain waits to spend the note of
+    // `nullifier`.
+    #[must_use]
+    pub fn is_withdrawing(&self, nullifier: &NoteNullifier) -> bool {
+        self.withdrawals
+            .iter()
+            .any(|inputs| inputs.contains(nullifier))
     }
 
     /// Funds the transaction so its excess balance is exactly the requested
@@ -525,7 +582,9 @@ impl WalletState {
         Ok((nullifiers, opening, self.root_of(note_set)))
     }
 
-    // The spendable notes of `pks` in `note_set`, largest first.
+    // The spendable notes of `pks` in `note_set`, largest first. A note a
+    // withdrawal waits to spend is left to it: spending it would cancel the
+    // withdrawal.
     fn spend_candidates(
         &self,
         note_set: NoteSetIndex,
@@ -535,7 +594,9 @@ impl WalletState {
         let mut notes = self
             .notes_owned_in(note_set, pks)
             .into_iter()
-            .filter(|owned| !excluded.contains(&owned.nullifier))
+            .filter(|owned| {
+                !excluded.contains(&owned.nullifier) && !self.is_withdrawing(&owned.nullifier)
+            })
             .collect::<Vec<_>>();
         // Consume large valued notes first to ensure we converge.
         notes.sort_by_key(|owned| -i128::from(owned.note.value));
@@ -824,10 +885,12 @@ impl<KeyId> Wallet<KeyId> {
     /// The state every spend from `tip` is built and proven against: the block
     /// [`SPEND_ROOT_DEPTH`] below `tip`, or the deepest block the wallet holds
     /// a state of if that is shallower, as after a restart from the LIB. It
-    /// holds the notes of that block still unspent at `tip`.
+    /// holds the notes of that block still unspent at `tip`, and the
+    /// withdrawals waiting at `tip`.
     pub fn spend_state(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
         let mut state = self.wallet_state_at(tip)?;
         let unspent = state.notes.clone();
+        let withdrawals = state.withdrawals.clone();
         let mut block = tip;
         for _ in 0..SPEND_ROOT_DEPTH {
             let Some((parent, parent_state)) = self
@@ -846,6 +909,7 @@ impl<KeyId> Wallet<KeyId> {
             .filter(|(commitment, _)| unspent.contains_key(commitment))
             .map(|(commitment, owned)| (*commitment, owned.clone()))
             .collect();
+        state.withdrawals = withdrawals;
         Ok(state)
     }
 
@@ -1003,6 +1067,7 @@ mod tests {
             epoch: Epoch::new(epoch),
             updates,
             revealed: vec![],
+            withdrawals: vec![],
         }
     }
 
@@ -1197,6 +1262,102 @@ mod tests {
                 .verify::<ZkHasher>(channel_note.commitment().0, root)
         );
         assert_eq!(state.balance(pk(1)), None);
+    }
+
+    // A note a withdrawal on chain waits to spend is not spent by anything
+    // else until the withdrawal is released or cancelled.
+    #[test]
+    fn withdrawing_notes_are_kept_out_of_spends_until_release_or_cancellation() {
+        let released = Note::new(3, Fr::from(1u64), pk(1));
+        let free = Note::new(2, Fr::from(2u64), pk(1));
+        let cancelled = Note::new(4, Fr::from(3u64), pk(1));
+        let known = known(&[
+            (released, channel_set(), nullifier(1)),
+            (free, channel_set(), nullifier(2)),
+            (cancelled, channel_set(), nullifier(3)),
+        ]);
+        let spend = |state: &WalletState, value| {
+            state
+                .note_set_spend(
+                    NoteSetSpend {
+                        note_set: channel_set(),
+                        appended: vec![],
+                        outputs: vec![Note::new(value, Fr::from(4u64), pk(2))],
+                        excess: 0,
+                        change_pk: pk(1),
+                        change_nonce: Fr::from(5u64),
+                        holder_pks: vec![pk(1)],
+                    },
+                    &known,
+                    &HashSet::new(),
+                )
+                .map(|(_, opening, _)| opening.inputs)
+        };
+        let spent = |nullifiers| NoteSetUpdate {
+            note_set: channel_set(),
+            nullifiers,
+            commitments: vec![],
+        };
+
+        // two withdrawals are posted, one sharing a note of somebody else
+        let state = WalletState::from_genesis(&known, &[], &[], Epoch::new(0))
+            .unwrap()
+            .apply_block(
+                &known,
+                &block(
+                    1,
+                    0,
+                    0,
+                    vec![appended(
+                        channel_set(),
+                        vec![
+                            released.commitment(),
+                            free.commitment(),
+                            cancelled.commitment(),
+                        ],
+                    )],
+                ),
+            )
+            .unwrap()
+            .apply_block(
+                &known,
+                &WalletBlock {
+                    withdrawals: vec![
+                        [nullifier(1)].into(),
+                        [nullifier(3), nullifier(9)].into(),
+                        // of nobody the wallet knows
+                        [nullifier(8)].into(),
+                    ],
+                    ..block(2, 1, 0, vec![])
+                },
+            )
+            .unwrap();
+        assert_eq!(state.withdrawals.len(), 2);
+        assert!(state.is_withdrawing(&nullifier(1)));
+        assert!(!state.is_withdrawing(&nullifier(2)));
+        assert_eq!(spend(&state, 1), Ok(vec![free]));
+        assert_eq!(
+            spend(&state, 3),
+            Err(WalletError::InsufficientFunds { available: 2 })
+        );
+
+        // the release of the first spends its note
+        let state = state
+            .apply_block(&known, &block(3, 2, 0, vec![spent(vec![nullifier(1)])]))
+            .unwrap();
+        assert!(!state.is_withdrawing(&nullifier(1)));
+        assert!(state.is_withdrawing(&nullifier(3)));
+        assert_eq!(
+            spend(&state, 3),
+            Err(WalletError::InsufficientFunds { available: 2 })
+        );
+
+        // a step spending the other note of the second cancels it
+        let state = state
+            .apply_block(&known, &block(4, 3, 0, vec![spent(vec![nullifier(9)])]))
+            .unwrap();
+        assert!(state.withdrawals.is_empty());
+        assert_eq!(spend(&state, 3), Ok(vec![cancelled]));
     }
 
     #[test]
