@@ -1457,6 +1457,7 @@ impl LedgerState {
         if !config.accepted_fork_digests.accepts(&fork_digest) {
             return Err(LedgerError::UnacceptedForkDigest(fork_digest));
         }
+        let max_gas = Gas::from(config.execution_market.max_gas_per_block);
         // The buffers and roots the Operations share, empty for every Mantle
         // Transaction and dropped with it.
         let mut tx_notes = TxNoteState::new();
@@ -1470,7 +1471,23 @@ impl LedgerState {
         let mut tx_events = Vec::new();
         let mut deferred_proofs = DeferredProofs::new();
 
-        loop {
+        // Each operation is priced against the state the operations before
+        // moved, before it is verified: verifying it extends the roots its
+        // proofs name over the commitments buffered so far, which is work the
+        // transaction must have the gas for before it is done.
+        while let Some(operation) = verified_operations.peek_operation() {
+            execution_gas = execution_gas
+                .checked_add(operation.execution_gas(&config.gas_profile, &gas_state)?)?;
+            gas_state.apply(operation);
+            let admitted =
+                execution_gas.checked_add(gas_state.root_extensions_gas(&config.gas_profile)?)?;
+            if admitted > max_gas {
+                return Err(LedgerError::TooMuchTransactionExecutionGas {
+                    gas: admitted,
+                    limit: max_gas,
+                });
+            }
+
             let helper = MantleOperationVerificationHelper::new(
                 &self.mantle_ledger,
                 &self.cryptarchia_ledger,
@@ -1483,17 +1500,9 @@ impl LedgerState {
                 .next(&helper, &mut deferred_proofs)
                 .transpose()?
             else {
-                // All operations have been processed, exit the loop.
                 break;
             };
             verified_operations = remaining_verified_operations;
-
-            // Price the operation against the state it was just verified
-            // against, before executing it.
-            let operation = signed_op.operation();
-            execution_gas = execution_gas
-                .checked_add(operation.execution_gas(&config.gas_profile, &gas_state)?)?;
-            gas_state.apply(operation);
 
             (self, balance, tx_events) = self.try_apply_op(
                 signed_op,
@@ -1596,7 +1605,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::ModulusShift,
+        config::{MaxGasPerBlock, ModulusShift},
         cryptarchia::tests::{
             apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot,
             ledger, note, note_with_sk, update_ledger,
@@ -2057,6 +2066,50 @@ mod tests {
             .map(|deferred| deferred.inputs().tx_commitment_root.into_inner())
             .collect();
         assert_eq!(tx_commitment_roots, vec![root, extended]);
+    }
+
+    /// Verifying an Operation extends the roots its proofs name over the
+    /// commitments the Operations before buffered. That work is priced, and
+    /// held to the gas a transaction can have, before it is done: a transaction
+    /// that cannot pay for it is refused before its Operation is verified.
+    #[test]
+    fn root_extensions_are_held_to_the_transaction_gas_before_verification() {
+        let genesis_note = note();
+        let apply_under = |max_gas: u64, second_root: Option<Fr>| {
+            let test_config = Config {
+                execution_market: ExecutionMarketConfig {
+                    max_gas_per_block: MaxGasPerBlock::new(max_gas).unwrap(),
+                    ..config().execution_market
+                },
+                ..config()
+            };
+            let state =
+                LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
+            let root = ledger_root(&state);
+            // The second Transfer extends the root over the output of the first.
+            let tx = transfer_tx(vec![
+                spend(1, 10, root, 0),
+                spend(2, 11, second_root.unwrap_or(root), 0),
+            ]);
+            state
+                .try_apply_tx_operations::<_, HeaderId>(&single_era(test_config), tx)
+                .map(|(_, _, gas, _, _)| gas)
+        };
+        let limit = u64::from(config().execution_market.max_gas_per_block);
+        let gas = apply_under(limit, None).unwrap();
+
+        assert_eq!(apply_under(gas.into_inner(), None), Ok(gas));
+        let over_budget = Err(LedgerError::TooMuchTransactionExecutionGas {
+            gas,
+            limit: Gas::new(gas.into_inner() - 1),
+        });
+        assert_eq!(apply_under(gas.into_inner() - 1, None), over_budget);
+        // A root verification would refuse, so the budget refused the
+        // transaction before verifying the second Transfer.
+        assert_eq!(
+            apply_under(gas.into_inner() - 1, Some(Fr::from(12_345u64))),
+            over_budget
+        );
     }
 
     #[test]
