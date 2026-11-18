@@ -19,8 +19,6 @@ use super::{
 };
 use crate::adapter;
 
-const BACKFILL_BATCH_SIZE: u64 = 100;
-
 impl<Node> ZoneSequencer<Node>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
@@ -44,7 +42,7 @@ where
             return None;
         }
 
-        let batch_end = (from_u64 + BACKFILL_BATCH_SIZE).min(to_u64);
+        let batch_end = (from_u64 + self.config.backfill_batch_slots).min(to_u64);
         let batch = match fetch_and_process_blocks(
             self.state.as_mut().unwrap(),
             from_u64,

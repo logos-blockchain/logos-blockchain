@@ -172,6 +172,11 @@ pub enum Query {
     LibSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<LibUpdate>>,
     },
+    /// Returns the ID and slot of the block of the highest slot in the block
+    /// tree.
+    HighestBlock {
+        reply_channel: oneshot::Sender<(HeaderId, Slot)>,
+    },
     GetHeaders {
         from_descendant: Option<HeaderId>,
         to_ancestor: Option<HeaderId>,
@@ -299,11 +304,13 @@ pub struct AppliedBlock<Tx> {
     pub tip: HeaderId,
     /// Hashes of the transactions carried by the blocks that entered the
     /// canonical chain, including blocks applied earlier while their branch
-    /// was not canonical.
-    pub newly_canonical_txs: Vec<TxHash>,
+    /// was not canonical, each mapped to the slot of the block carrying it.
+    pub newly_canonical_txs: HashMap<TxHash, Slot>,
     /// Transactions carried by the blocks that left the canonical chain,
     /// except those also carried by the blocks that entered it.
     pub reorged_txs: Vec<Tx>,
+    /// The slot of the latest immutable block after applying the block.
+    pub lib_slot: Slot,
 }
 
 /// Event emitted when a block is processed by cryptarchia.
@@ -445,6 +452,17 @@ impl Cryptarchia {
     #[must_use]
     pub fn lib_branch(&self) -> &Branch<HeaderId> {
         self.consensus.lib_branch()
+    }
+
+    /// The block of the highest slot in the block tree. It is a tip, since a
+    /// block's slot is higher than its parent's.
+    #[must_use]
+    pub fn highest_branch(&self) -> &Branch<HeaderId> {
+        self.consensus
+            .branches()
+            .branches()
+            .max_by_key(|branch| branch.slot())
+            .expect("the block tree has at least one tip")
     }
 
     /// Try to apply a block to the chain.
@@ -704,6 +722,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display

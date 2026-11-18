@@ -9,7 +9,7 @@ use futures::StreamExt as _;
 use lb_core::{
     block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
     mantle::{
-        Note, Op, OpProof, SignedOps, TxHash, Utxo,
+        Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
         gas::{MainnetGasProfile, TxGasCalculator as _},
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
@@ -728,18 +728,26 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         .unwrap()
     };
 
+    let (b1_slot, f1_slot, f2_slot) = (b1.header().slot(), f1.header().slot(), f2.header().slot());
+
     let outcome = apply(b1).await;
-    assert_eq!(outcome.newly_canonical_txs, vec![tx1.hash(), tx3.hash()]);
+    assert_eq!(
+        outcome.newly_canonical_txs,
+        HashMap::from([(tx1.hash(), b1_slot), (tx3.hash(), b1_slot)])
+    );
     assert_eq!(outcome.reorged_txs, vec![]);
 
     // f1 only ties b1, so the local chain is kept and nothing enters it.
     let outcome = apply(f1).await;
-    assert_eq!(outcome.newly_canonical_txs, Vec::<TxHash>::new());
+    assert_eq!(outcome.newly_canonical_txs, HashMap::new());
     assert_eq!(outcome.reorged_txs, vec![]);
 
     // tx1 is carried by both branches, so only tx3 leaves the canonical chain.
     let outcome = apply(f2.clone()).await;
-    assert_eq!(outcome.newly_canonical_txs, vec![tx1.hash(), tx2.hash()]);
+    assert_eq!(
+        outcome.newly_canonical_txs,
+        HashMap::from([(tx1.hash(), f1_slot), (tx2.hash(), f2_slot)])
+    );
     assert_eq!(outcome.reorged_txs, vec![tx3]);
     assert_eq!(cryptarchia.tip(), f2.header().id());
 }
@@ -1076,7 +1084,7 @@ pub fn utxo() -> (ZkKey, Utxo) {
 
 pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
-    let mut backend = RocksBackend::new(RocksBackendSettings {
+    let backend = RocksBackend::new(RocksBackendSettings {
         db_path: db_dir.path().join("db"),
         read_only: false,
         column_family: None,
@@ -1085,7 +1093,7 @@ pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<
 
     let handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &mut backend).await;
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &backend);
         }
     });
 

@@ -83,7 +83,7 @@ impl DeploymentInfo {
     }
 }
 
-fn to_c_string(value: &str) -> Result<CString, OperationStatus> {
+pub(crate) fn to_c_string(value: &str) -> Result<CString, OperationStatus> {
     CString::new(value).map_err(|error| {
         OperationStatus::error(
             OperationStatusCode::RuntimeError,

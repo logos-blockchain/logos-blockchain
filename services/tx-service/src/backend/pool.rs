@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt as _};
 use indexmap::{IndexMap, IndexSet};
 use lb_core::mantle::{
     traits::{Hashable, MantleTx},
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::Status;
 use crate::{
     backend::{
-        MemPool, MempoolError, RecoverableMempool,
+        AdmissionTime, MemPool, MempoolError, RecoverableMempool,
         evictor::Evictor,
         policy::{BlockSlots, EvictableTx as _, PowClaimEvictionSettings},
     },
@@ -28,7 +28,6 @@ use crate::{
     storage::{BlockSlotLookup, MempoolStorageAdapter},
 };
 
-const REMOVED_ITEM_GRACE_PERIOD: Duration = Duration::from_mins(10);
 const LOG_TARGET: &str = mempool::POOL;
 
 /// Default time a pending transaction may stay in the pool before eviction.
@@ -69,10 +68,27 @@ pub struct PoolRecoveryState<Key>
 where
     Key: Hash + Eq + Ord,
 {
-    /// Pending item keys mapped to their insertion timestamp in milliseconds.
-    pub pending_items: IndexMap<Key, u64>,
-    pub removed_items: BTreeMap<Key, u64>,
+    /// Pending item keys mapped to their admission timestamp in milliseconds,
+    /// oldest first.
+    pub pending_items: IndexMap<Key, AdmissionTime>,
+    /// Retired item keys not carried by a canonical block (inapplicable or
+    /// evicted), mapped to their admission timestamp in milliseconds.
+    pub removed_items: BTreeMap<Key, AdmissionTime>,
+    /// Retired item keys carried by a canonical block that is not yet
+    /// immutable.
+    #[serde(default)]
+    pub included_in_canonical: HashMap<Key, IncludedItem>,
     pub last_item_timestamp: u64,
+}
+
+/// A retired item carried by a canonical block that is not yet immutable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncludedItem {
+    /// Slot of the block carrying the item.
+    pub slot: Slot,
+    /// Admission timestamp in milliseconds, kept if the item is admitted
+    /// again after a reorg.
+    pub admitted_at: AdmissionTime,
 }
 
 /// Transactions are keyed by their hash.
@@ -82,19 +98,31 @@ pub struct Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
     Item: Hashable<Hash: PrefixedKey>,
 {
-    pending_items: IndexSet<ItemKey<Item>>,
-    /// Secondary index over [`Self::pending_items`] and
-    /// [`Self::removed_items`], keyed by the hash prefix a block proposal
-    /// would use to refer to a transaction. Retired transactions stay
-    /// indexed until their bodies are pruned, so a competing proposal that
-    /// references one still resolves.
+    /// Pending items mapped to their admission timestamp in milliseconds,
+    /// oldest first.
+    pending_items: IndexMap<ItemKey<Item>, AdmissionTime>,
+    /// Secondary index over [`Self::pending_items`],
+    /// [`Self::included_in_canonical`] and [`Self::removed_items`], keyed
+    /// by the hash prefix a block proposal would use to refer to a
+    /// transaction. Retired transactions stay indexed until their bodies
+    /// are deleted, so a competing proposal that references one still
+    /// resolves.
     ///
     /// Buckets are plain vectors: a 128-bit prefix cannot be made to collide at
     /// any feasible cost, so every one holds a single key in practice. A set
     /// would cost a hash table per bucket to deduplicate keys that are already
     /// unique.
     by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>>,
-    removed_items: BTreeMap<ItemKey<Item>, u64>,
+    /// Retired items not carried by a canonical block (inapplicable or
+    /// evicted), mapped to their admission timestamp in milliseconds. They
+    /// keep their prefix index entry and body until the evictor selects them
+    /// for release, unlike [`Self::included_in_canonical`], which keeps them
+    /// until the carrying block becomes immutable.
+    removed_items: BTreeMap<ItemKey<Item>, AdmissionTime>,
+    /// Retired items carried by a canonical block that is not yet immutable.
+    /// They keep their prefix index entry and body until the block becomes
+    /// immutable, since until then a competing block can carry them too.
+    included_in_canonical: HashMap<ItemKey<Item>, IncludedItem>,
     last_item_timestamp: u64,
     evictor: Evictor<Item, BlockId>,
     storage_adapter: Storage,
@@ -112,6 +140,7 @@ where
             .field("pending_items", &self.pending_items)
             .field("by_prefix", &self.by_prefix)
             .field("removed_items", &self.removed_items)
+            .field("included_in_canonical", &self.included_in_canonical)
             .field("last_item_timestamp", &self.last_item_timestamp)
             .field("storage_adapter", &"<StorageAdapter>")
             .finish_non_exhaustive()
@@ -149,9 +178,10 @@ where
 
     fn new(settings: Self::Settings, storage: Self::Storage) -> Self {
         Self {
-            pending_items: IndexSet::new(),
+            pending_items: IndexMap::new(),
             by_prefix: HashMap::new(),
             removed_items: BTreeMap::new(),
+            included_in_canonical: HashMap::new(),
             last_item_timestamp: 0,
             evictor: Evictor::new(&settings),
             storage_adapter: storage,
@@ -164,9 +194,9 @@ where
         key: Self::Key,
         item: I,
     ) -> Result<(), MempoolError> {
-        self.prune_removed_items().await;
+        self.release_retained().await;
 
-        if self.pending_items.contains(&key) {
+        if self.pending_items.contains_key(&key) || self.included_in_canonical.contains_key(&key) {
             return Err(MempoolError::ExistingItem);
         }
 
@@ -186,16 +216,22 @@ where
             .await
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
-        self.removed_items.remove(&key);
+        // If `item` is admitted again after being retired, remove it from
+        // `removed_items` and use the original admission time stored there.
+        let removed_item = self.removed_items.remove(&key);
+        let admitted_at = removed_item.unwrap_or(timestamp);
         self.index_by_prefix(&key);
         self.evictor.on_add(&key, &item, timestamp, &block_slots);
-        self.pending_items.insert(key);
+        let index = self.insert_pending(key, admitted_at);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
             target: LOG_TARGET,
-            "Added item to mempool; pending_items={}, last_item_timestamp={}",
-            self.pending_items.len(),
-            self.last_item_timestamp
+            admitted_at,
+            index,
+            readmission = removed_item.is_some(),
+            pending_items = self.pending_items.len(),
+            last_item_timestamp = self.last_item_timestamp,
+            "Added item to mempool",
         );
 
         metrics::mempool_transactions_added();
@@ -208,7 +244,7 @@ where
         &self,
         _ancestor_hint: BlockId,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, MempoolError> {
-        self.get_items_by_keys(self.pending_items.iter().copied())
+        self.get_items_by_keys(self.pending_items.keys().copied())
             .await
     }
 
@@ -236,31 +272,84 @@ where
     }
 
     async fn remove(&mut self, keys: &[Self::Key]) {
-        self.prune_removed_items().await;
+        self.retire(keys.iter().copied(), "removed");
 
-        let removed_at = current_timestamp_millis();
-
-        self.retire(keys.iter().copied(), removed_at, "removed");
-
-        // Removals come from applied canonical blocks and from leaders
-        // dropping unselectable transactions, so they double as a trigger for
-        // eviction alongside processed-block notifications.
+        // Removals come from leaders dropping inapplicable transactions, so
+        // they double as a trigger for eviction alongside processed-block
+        // notifications.
         self.retire(
-            self.evictor.select_evictions(removed_at),
-            removed_at,
+            self.evictor
+                .select_retirements(current_timestamp_millis(), &self.pending_items),
             "evicted",
         );
+        self.release_retained().await;
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
 
-    async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot) {
-        self.prune_removed_items().await;
+    async fn on_canonical_chain_updated(
+        &mut self,
+        entered: HashMap<Self::Key, Slot>,
+        reorged: Vec<Self::Item>,
+    ) -> Vec<Self::Item> {
+        // A reorged tx leaves `included_in_canonical` to be admitted again
+        // below. If its admission fails, it is retained in `removed_items`
+        // like any other retired tx.
+        for item in &reorged {
+            let key = item.hash();
+            if let Some(included) = self.included_in_canonical.remove(&key) {
+                self.removed_items.insert(key, included.admitted_at);
+            }
+        }
+
+        let mut count = 0usize;
+        for (key, slot) in entered {
+            let admitted_at = if let Some(admitted_at) = self.pending_items.shift_remove(&key) {
+                count += 1;
+                admitted_at
+            } else if let Some(admitted_at) = self.removed_items.remove(&key) {
+                admitted_at
+            } else if let Some(included) = self.included_in_canonical.get(&key) {
+                included.admitted_at
+            } else {
+                // The mempool never held the tx, so there is no body to retain.
+                continue;
+            };
+            self.included_in_canonical
+                .insert(key, IncludedItem { slot, admitted_at });
+        }
+
+        log_retired_items(count, "included", self.pending_items.len());
+        metrics::mempool_transactions_removed(count);
+        metrics::mempool_transactions_pending(self.pending_items.len());
+
+        let mut readmitted = Vec::with_capacity(reorged.len());
+        for item in reorged {
+            match self.add_item(item.hash(), item.clone()).await {
+                Ok(()) => readmitted.push(item),
+                // Already pending: the pool didn't hold it when its block
+                // entered the canonical chain, and received it afterwards.
+                Err(MempoolError::ExistingItem) => {}
+                Err(error) => tracing::debug!(
+                    target: LOG_TARGET,
+                    "Could not admit a reorged item again: {error}"
+                ),
+            }
+        }
+        readmitted
+    }
+
+    async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot, lib_slot: Slot) {
+        self.release_immutable(lib_slot).await;
 
         self.evictor.on_processed_block(&block_id, slot);
 
         let now = current_timestamp_millis();
-        self.retire(self.evictor.select_evictions(now), now, "evicted");
+        self.retire(
+            self.evictor.select_retirements(now, &self.pending_items),
+            "evicted",
+        );
+        self.release_retained().await;
 
         metrics::mempool_transactions_pending(self.pending_items.len());
     }
@@ -277,8 +366,12 @@ where
         items
             .iter()
             .map(|key| {
-                if self.pending_items.contains(key) {
+                if self.pending_items.contains_key(key) {
                     Status::Pending
+                } else if self.removed_items.contains_key(key)
+                    || self.included_in_canonical.contains_key(key)
+                {
+                    Status::Retained
                 } else {
                     Status::Unknown
                 }
@@ -287,6 +380,7 @@ where
     }
 }
 
+#[async_trait]
 impl<BlockId, Item, Storage, RuntimeServiceId> RecoverableMempool
     for Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
@@ -314,36 +408,50 @@ where
 
     fn save(&self) -> Self::RecoveryState {
         PoolRecoveryState {
-            pending_items: self.evictor.save(),
+            pending_items: self.pending_items.clone(),
             removed_items: self.removed_items.clone(),
+            included_in_canonical: self.included_in_canonical.clone(),
             last_item_timestamp: self.last_item_timestamp,
         }
     }
 
-    fn recover(
+    async fn recover(
         settings: <Self as MemPool>::Settings,
         state: Self::RecoveryState,
         storage: <Self as MemPool>::Storage,
     ) -> Self {
         // `by_prefix` is derived, so it is rebuilt rather than restored.
         let mut by_prefix: HashMap<<ItemKey<Item> as PrefixedKey>::Prefix, Vec<ItemKey<Item>>> =
-            HashMap::with_capacity(state.pending_items.len() + state.removed_items.len());
-        for key in state.pending_items.keys().chain(state.removed_items.keys()) {
+            HashMap::with_capacity(
+                state.pending_items.len()
+                    + state.removed_items.len()
+                    + state.included_in_canonical.len(),
+            );
+        for key in state
+            .pending_items
+            .keys()
+            .chain(state.removed_items.keys())
+            .chain(state.included_in_canonical.keys())
+        {
             let bucket = by_prefix.entry(key.key_prefix()).or_default();
             if !bucket.contains(key) {
                 bucket.push(*key);
             }
         }
 
-        Self {
-            pending_items: state.pending_items.keys().copied().collect(),
+        let mut pool = Self {
+            pending_items: state.pending_items,
             by_prefix,
             removed_items: state.removed_items,
+            included_in_canonical: state.included_in_canonical,
             last_item_timestamp: state.last_item_timestamp,
-            evictor: Evictor::recover(&settings, state.pending_items),
+            evictor: Evictor::new(&settings),
             storage_adapter: storage,
             _phantom: std::marker::PhantomData,
-        }
+        };
+
+        pool.add_recovered_items_to_evictor().await;
+        pool
     }
 }
 
@@ -401,27 +509,52 @@ where
         }
     }
 
-    /// The single exit for pending items: every removal — included in a
-    /// block or evicted — goes through here so the evictor stays in sync.
+    /// Retire pending items that are inapplicable or evicted. Items carried by
+    /// a canonical block go through `on_canonical_chain_updated` instead. The
+    /// evictor keeps tracking a retired item until it is released, so a
+    /// retained claim is still released at its deadline.
     ///
     /// A retired item keeps its prefix index entry, and its body, until
-    /// [`Self::prune_removed_items`] drops both after the grace period.
+    /// [`Self::release_retained`] drops both once the evictor selects it for
+    /// release.
     ///
     /// Items not in `pending_items` are ignored, such as ones the mempool
     /// doesn't hold (e.g. from a downloaded block).
-    fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, at: u64, cause: &str) {
+    fn retire(&mut self, keys: impl IntoIterator<Item = ItemKey<Item>>, cause: &str) {
         let mut count = 0usize;
         for key in keys {
-            if !self.pending_items.shift_remove(&key) {
+            let Some(admitted_at) = self.pending_items.shift_remove(&key) else {
                 continue;
-            }
-            self.evictor.on_remove(&key);
-            self.removed_items.insert(key, at);
+            };
+            self.removed_items.insert(key, admitted_at);
             count += 1;
         }
 
         log_retired_items(count, cause, self.pending_items.len());
         metrics::mempool_transactions_removed(count);
+    }
+
+    /// Add every recovered item to the evictor, which is not saved.
+    async fn add_recovered_items_to_evictor(&mut self) {
+        let keys = self
+            .pending_items
+            .keys()
+            .chain(self.removed_items.keys())
+            .chain(self.included_in_canonical.keys())
+            .copied()
+            .collect::<Vec<_>>();
+        let items = match self.get_items_by_keys(keys).await {
+            Ok(items) => items.collect::<Vec<_>>().await,
+            Err(e) => {
+                tracing::warn!(target: LOG_TARGET, "Failed to load recovered items: {e:?}");
+                return;
+            }
+        };
+        let now = current_timestamp_millis();
+        for item in items {
+            let block_slots = self.resolve_claim_anchors(&item).await;
+            self.evictor.on_add(&item.hash(), &item, now, &block_slots);
+        }
     }
 
     /// Slots of the blocks the `PoW` reward claims in `item` are anchored
@@ -451,29 +584,75 @@ where
         slots
     }
 
-    async fn prune_removed_items(&mut self) {
-        let now = current_timestamp_millis();
-        let grace_period_millis = REMOVED_ITEM_GRACE_PERIOD.as_millis() as u64;
+    /// Release the retired items the evictor selects for release, in
+    /// [`Self::removed_items`] or [`Self::included_in_canonical`].
+    async fn release_retained(&mut self) {
+        let releases = self.evictor.select_releases(
+            current_timestamp_millis(),
+            &self.removed_items,
+            &self.included_in_canonical,
+        );
+        debug_assert!(
+            releases
+                .iter()
+                .all(|key| self.removed_items.contains_key(key)
+                    || self.included_in_canonical.contains_key(key)),
+            "the evictor must only select retired items for release"
+        );
+        if !self.delete_retained(&releases).await {
+            return;
+        }
+        for key in &releases {
+            self.removed_items.remove(key);
+            self.included_in_canonical.remove(key);
+        }
+    }
 
-        let expired_keys = self
-            .removed_items
+    /// Delete the bodies of retired `keys`, drop them from the prefix index
+    /// and stop tracking them for eviction. Returns `false`, leaving
+    /// everything in place, if storage fails.
+    async fn delete_retained(&mut self, keys: &[ItemKey<Item>]) -> bool {
+        if keys.is_empty() {
+            return true;
+        }
+        if let Err(e) = self.storage_adapter.remove_items(keys).await {
+            tracing::warn!(target: LOG_TARGET, "Failed to delete retired items from storage: {e:?}");
+            return false;
+        }
+        for key in keys {
+            self.unindex_by_prefix(key);
+            self.evictor.on_release(key);
+        }
+        true
+    }
+
+    /// Insert `key` into [`Self::pending_items`] at the position its
+    /// admission timestamp gives it. A new item normally goes last; an item
+    /// admitted again goes back among the items admitted around the same
+    /// time. Returns the position.
+    fn insert_pending(&mut self, key: ItemKey<Item>, admitted_at: AdmissionTime) -> usize {
+        let index = self
+            .pending_items
+            .partition_point(|_, timestamp| *timestamp <= admitted_at);
+        self.pending_items.shift_insert(index, key, admitted_at);
+        index
+    }
+
+    /// Release the items carried by blocks that became immutable, since no
+    /// competing block can carry them anymore.
+    async fn release_immutable(&mut self, lib_slot: Slot) {
+        let immutable_keys = self
+            .included_in_canonical
             .iter()
-            .filter(|(_, removed_at)| now.saturating_sub(**removed_at) >= grace_period_millis)
+            .filter(|(_, included)| included.slot <= lib_slot)
             .map(|(key, _)| *key)
             .collect::<Vec<_>>();
 
-        if expired_keys.is_empty() {
+        if !self.delete_retained(&immutable_keys).await {
             return;
         }
-
-        if let Err(e) = self.storage_adapter.remove_items(&expired_keys).await {
-            tracing::warn!(target: LOG_TARGET, "Failed to prune removed items from storage: {e:?}");
-            return;
-        }
-
-        for key in expired_keys {
-            self.removed_items.remove(&key);
-            self.unindex_by_prefix(&key);
+        for key in immutable_keys {
+            self.included_in_canonical.remove(&key);
         }
     }
 }

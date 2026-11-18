@@ -61,6 +61,24 @@ After running `docker compose up`, the randomly assigned ports can be viewed wit
 docker compose ps 
 ```
 
+### Reaching the node API by name
+
+A node answers to `localhost` and to IP addresses. A client that reaches its API by any other host name gets
+`403 Forbidden` until that name is listed in the node's user config, which is what stops a web page from reaching the
+API through DNS rebinding. In `compose.run.yml` the explorer and the faucet both call node 0 by name, so that node needs:
+
+```yaml
+api:
+  backend:
+    allowed_hosts:
+      - logos-blockchain-node-0
+      - logos_blockchain_node_0
+```
+
+Web pages are refused the same way, unless the node serves them itself: list a page's origin in
+`api.backend.cors_origins`, such as `https://app.example`, for it to use the API. There is no wildcard for either
+setting.
+
 ## Release & deployment file taxonomy
 
 Deployment files fall into three categories by **how often they change**. This

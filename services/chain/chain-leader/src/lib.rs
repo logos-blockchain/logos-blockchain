@@ -399,24 +399,16 @@ where
 
         let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
-        // Wait for other services to become ready.
-        // (except Chain, ChainNetwork, Blend, and Wallet)
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
             None,
             TxMempoolService<_, _, _, _>,
             TimeService<_, _>,
-            PreloadKmsService<_>
-        )
-        .await?;
-        // Wait for the remaining dependencies to become ready, without timeout
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            None,
-            CryptarchiaService, // becomes ready after recoverying blocks
-            ChainNetwork,       // becomes ready after IBD
-            BlendService,       // becomes ready after chain becomes online
-            Wallet              // becomes ready after Chain
+            PreloadKmsService<_>,
+            CryptarchiaService,
+            ChainNetwork,
+            BlendService,
+            Wallet
         )
         .await?;
 
@@ -457,6 +449,16 @@ where
                             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
                             continue;
                         };
+                        tracing::debug!(
+                            target: LOG_TARGET,
+                            event = "leader_eligible_notes",
+                            path = "block_production",
+                            slot = ?slot,
+                            epoch = ?epoch,
+                            note_count = eligible_aged.len(),
+                            total_value = eligible_aged.iter().map(|note| note.utxo.note.value).sum::<u64>(),
+                            "Eligible notes for block production"
+                        );
 
                         // The block-proposal proof must prove the winning note is still
                         // unspent, so it needs the latest tip ledger state (fetched per slot).

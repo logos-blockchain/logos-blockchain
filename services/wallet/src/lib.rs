@@ -44,7 +44,7 @@ use lb_key_management_system_service::{
     },
     operators::zk::voucher::UnsafeVoucherOperator,
 };
-use lb_ledger::LedgerState;
+use lb_ledger::{LedgerState, UtxoTree};
 use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
 use lb_services_utils::{
@@ -190,7 +190,9 @@ pub enum WalletMsg {
         resp_tx: Sender<Result<ZkSignature, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
-        tip: Option<HeaderId>,
+        parent: HeaderId,
+        /// Aged UTXO set of the epoch the caller leads in.
+        aged_utxos: UtxoTree,
         resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
     GetLeaderAgedNotesInfo {
@@ -343,11 +345,11 @@ impl WalletMsg {
             Self::GetBalance { tip, .. }
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
-            | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetLeaderAgedNotesInfo { tip, .. }
             | Self::GetClaimableVouchers { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::BuildLeaderClaimTx { tip, .. } => Some(*tip),
+            Self::GetLeaderAgedNotes { parent, .. } => Some(*parent),
             Self::SignTxWithEd25519 { .. }
             | Self::SignTxWithZk { .. }
             | Self::GenerateNewVoucherSecret { .. }
@@ -420,6 +422,7 @@ where
         + AsServiceId<Kms>
         + std::fmt::Debug
         + std::fmt::Display
+        + Clone
         + Send
         + Sync
         + 'static,
@@ -441,19 +444,12 @@ where
             ..
         } = self;
 
-        // Wait for services (except Chain) to become ready.
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
             None,
             lb_storage_service::StorageService<_>,
-            Kms
-        )
-        .await?;
-        // Wait for Chain service to become ready, without timeout
-        wait_until_services_are_ready!(
-            &service_resources_handle.overwatch_handle,
-            None,
-            Cryptarchia // becomes ready after recoverying blocks
+            Kms,
+            Cryptarchia
         )
         .await?;
 
@@ -808,19 +804,31 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to SignTxWithZk");
                 }
             }
-            WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
-                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia).await;
+            WalletMsg::GetLeaderAgedNotes {
+                parent,
+                aged_utxos,
+                resp_tx,
+            } => {
+                let response = Self::leader_aged_notes_at(parent, &aged_utxos, state.wallet());
                 if resp_tx.send(response).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotes");
                 }
             }
             WalletMsg::GetLeaderAgedNotesInfo { tip, resp_tx } => {
-                let response = Self::leader_aged_notes_at(tip, state.wallet(), cryptarchia)
-                    .await
-                    .map(|TipResponse { tip, response }| TipResponse {
-                        tip,
-                        response: LeaderAgedNotesInfo::from(response),
-                    });
+                let response = async {
+                    let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
+                    let aged_utxos = Self::ledger_state_at(tip, cryptarchia)
+                        .await?
+                        .epoch_state()
+                        .utxos
+                        .clone();
+                    Self::leader_aged_notes_at(tip, &aged_utxos, state.wallet())
+                }
+                .await
+                .map(|TipResponse { tip, response }| TipResponse {
+                    tip,
+                    response: LeaderAgedNotesInfo::from(response),
+                });
                 if resp_tx.send(response).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to GetLeaderAgedNotesInfo");
                 }
@@ -1191,23 +1199,20 @@ where
         )?)
     }
 
-    /// Resolves the wallet-owned UTXOs that are eligible to lead at `tip`
-    /// (or at the current tip when `tip` is `None`), paired with the key ids
-    /// needed to build a leadership proof for them.
-    async fn leader_aged_notes_at(
-        tip: Option<HeaderId>,
+    /// Resolves the wallet-owned UTXOs that are unspent at `parent` and in
+    /// `aged_utxos`, paired with the key ids needed to build a leadership
+    /// proof for them.
+    fn leader_aged_notes_at(
+        parent: HeaderId,
+        aged_utxos: &UtxoTree,
         wallet: &Wallet,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError> {
-        let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
-        let ledger_state = Self::ledger_state_at(tip, cryptarchia).await?;
-
-        let wallet_state = wallet.wallet_state_at(tip).map_err(|err| {
+        let wallet_state = wallet.wallet_state_at(parent).map_err(|err| {
             error!(target: LOG_TARGET, err = ?err, "Failed to fetch wallet state");
-            WalletServiceError::FailedToFetchWalletStateForBlock(tip)
+            WalletServiceError::FailedToFetchWalletStateForBlock(parent)
         })?;
 
-        let aged_utxos = ledger_state.epoch_state().utxos.utxos();
+        let aged_utxos = aged_utxos.utxos();
         let eligible_utxos = wallet_state
             .utxos
             .iter()
@@ -1224,7 +1229,7 @@ where
             .collect();
 
         Ok(TipResponse {
-            tip,
+            tip: parent,
             response: eligible_utxos,
         })
     }

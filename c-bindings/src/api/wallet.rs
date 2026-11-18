@@ -34,7 +34,7 @@ use lb_node::{
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
 use lb_wallet_service::{ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
-use overwatch::services::status::ServiceStatus;
+use overwatch::services::status::{ServiceStatus, WaitPolicy};
 
 use crate::{
     LogosBlockchainNode,
@@ -55,7 +55,8 @@ use crate::{
 
 pub type FfiClaimableVouchersResult = FfiStatusResult<ClaimableVouchers>;
 
-type WalletService = NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
+pub(crate) type WalletService =
+    NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
 /// Resolved tip plus the `(note ID, value)` pairs for a wallet address.
 type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
@@ -290,7 +291,11 @@ pub(crate) fn get_claimable_vouchers_sync(
             })?;
 
         if let Err(status) = status_watcher
-            .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
+            .wait_with_policy(
+                ServiceStatus::Ready,
+                Some(Duration::from_millis(100)),
+                WaitPolicy::RestartFriendly,
+            )
             .await
         {
             return Err(OperationStatus::error(

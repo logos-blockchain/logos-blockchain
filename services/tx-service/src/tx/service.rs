@@ -5,7 +5,9 @@ pub mod openapi {
 }
 
 use std::{
+    collections::HashMap,
     fmt::{Debug, Display},
+    iter,
     marker::PhantomData,
     pin::Pin,
 };
@@ -18,6 +20,7 @@ use lb_core::{
         transactions::hash::PrefixedKey,
     },
 };
+use lb_cryptarchia_engine::Slot;
 use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
@@ -175,6 +178,7 @@ where
     RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Display
         + Debug
+        + Clone
         + Sync
         + Send
         + 'static
@@ -212,11 +216,14 @@ where
 
         let mut pool = match pool_state {
             None => <Pool as MemPoolTrait>::new(settings.pool.clone(), storage_adapter),
-            Some(recovered_pool_state) => <Pool as RecoverableMempool>::recover(
-                settings.pool.clone(),
-                recovered_pool_state,
-                storage_adapter,
-            ),
+            Some(recovered_pool_state) => {
+                <Pool as RecoverableMempool>::recover(
+                    settings.pool.clone(),
+                    recovered_pool_state,
+                    storage_adapter,
+                )
+                .await
+            }
         };
 
         let network_service_relay = overwatch_handle
@@ -359,8 +366,22 @@ where
                 pool.remove(&ids).await;
                 state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
-            MempoolMsg::ProcessedBlock { block_id, slot } => {
-                pool.on_processed_block(block_id, slot).await;
+            MempoolMsg::CanonicalChainUpdated { entered, reorged } => {
+                Self::handle_canonical_chain_updated_message(
+                    pool,
+                    entered,
+                    reorged,
+                    &state_updater,
+                    accepted_items_channel_sender,
+                )
+                .await;
+            }
+            MempoolMsg::ProcessedBlock {
+                block_id,
+                slot,
+                lib_slot,
+            } => {
+                pool.on_processed_block(block_id, slot, lib_slot).await;
                 state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
             }
             MempoolMsg::Metrics { reply_channel } => {
@@ -380,6 +401,26 @@ where
                     tracing::warn!(target: LOG_TARGET, "Subscriber hung up before it could be given the accepted-item stream.");
                 }
             }
+        }
+    }
+
+    async fn handle_canonical_chain_updated_message(
+        pool: &mut Pool,
+        entered: HashMap<Pool::Key, Slot>,
+        reorged: Vec<Pool::Item>,
+        state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
+        accepted_items_channel_sender: &broadcast::Sender<Pool::Item>,
+    ) where
+        Pool::Settings: Send + Sync,
+        NetworkAdapter::Settings: Send + Sync,
+    {
+        let readmitted = pool.on_canonical_chain_updated(entered, reorged).await;
+        state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
+
+        // Txs admitted again after a reorg are not broadcast: every node
+        // re-admits them from its own copy of the displaced blocks.
+        for item in readmitted {
+            Self::notify_about_accepted_item(accepted_items_channel_sender, item);
         }
     }
 
@@ -499,14 +540,25 @@ where
     ) {
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
-        spawn("logos/mempool/transaction-broadcast", async move {
-            let adapter = NetworkAdapter::new(settings, network_relay).await;
-            adapter.send(item_for_broadcast).await;
-        });
+        Self::broadcast_items(settings, network_relay, iter::once(item_for_broadcast));
 
         if let Err(e) = reply_channel.send(Ok(())) {
             tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
         }
+    }
+
+    fn broadcast_items(
+        settings: NetworkAdapter::Settings,
+        network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
+        items: impl IntoIterator<Item = Pool::Item, IntoIter: Send + 'static>,
+    ) {
+        let items = items.into_iter();
+        spawn("logos/mempool/transaction-broadcast", async move {
+            let adapter = NetworkAdapter::new(settings, network_relay).await;
+            for item in items {
+                adapter.send(item).await;
+            }
+        });
     }
 
     fn handle_add_error(

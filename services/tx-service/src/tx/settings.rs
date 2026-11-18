@@ -3,7 +3,15 @@ use core::num::NonZeroUsize;
 use lb_services_utils::overwatch::{RecoveryData, StorageRecoverySettings};
 use serde::{Deserialize, Serialize};
 
-pub const RECOVERY_KEY_SUFFIX: &[u8] = b"mempool";
+/// The key the mempool snapshot is stored under.
+///
+/// `v2` since 0.3.6: the snapshot gained `included_in_canonical`, and the
+/// value of `removed_items` changed from the removal time to the admission
+/// time. The snapshot is bincode, which has no field defaults, so a 0.3.4
+/// snapshot cannot be decoded as the new one, and a failed decode stops the
+/// service from starting. Under a new key the 0.3.4 snapshot is never read:
+/// an upgraded node starts with an empty mempool.
+pub const RECOVERY_KEY_SUFFIX: &[u8] = b"mempool/v2";
 
 /// Settings for the tx mempool service.
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -4,6 +4,10 @@ use std::{
     fs,
     ops::Deref,
     path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -325,6 +329,41 @@ pub struct SuffixWrite {
 struct ReplicatedDatabase {
     connection: Connection,
     functions: FunctionOverrides,
+    hooks: ApplicationHooks,
+}
+
+/// The authorizer that constrains application SQL. Installed once per
+/// connection, since setting it needs `&mut Connection`; active only while
+/// armed.
+struct ApplicationHooks {
+    armed: Arc<AtomicBool>,
+}
+
+impl ApplicationHooks {
+    fn install(connection: &mut Connection) -> Result<Self, Error> {
+        let hooks = Self {
+            armed: Arc::new(AtomicBool::new(false)),
+        };
+
+        let armed = Arc::clone(&hooks.armed);
+        connection.authorizer(Some(move |context: AuthContext<'_>| {
+            if armed.load(Ordering::Relaxed) {
+                authorize_application_sql(context)
+            } else {
+                Authorization::Allow
+            }
+        }))?;
+
+        Ok(hooks)
+    }
+
+    fn arm(&self) {
+        self.armed.store(true, Ordering::Relaxed);
+    }
+
+    fn disarm(&self) {
+        self.armed.store(false, Ordering::Relaxed);
+    }
 }
 
 /// An isolated replacement for `LIVE.db` while canonical history is replayed.
@@ -705,7 +744,7 @@ impl Databases {
         let capture = self.live.functions.capture();
         let db_transaction = self.live.connection.transaction()?;
 
-        apply_statements(&db_transaction, transaction)?;
+        apply_statements(&db_transaction, &self.live.hooks, transaction)?;
         let captured_function_calls = capture.finish()?;
         let encoded = EncodedWrite::new(tx_id, transaction, captured_function_calls)?;
 
@@ -976,26 +1015,30 @@ impl FromSql for WriteStatus {
 }
 
 fn open_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = open_connection(path)?;
+    let mut connection = open_connection(path)?;
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
 fn open_rebuild_writer(path: &Path) -> Result<ReplicatedDatabase, Error> {
-    let connection = Connection::open(path)?;
+    let mut connection = Connection::open(path)?;
 
     configure_connection(&connection)?;
     connection.execute_batch(REBUILD_PRAGMAS)?;
 
     let functions = FunctionOverrides::install(&connection)?;
+    let hooks = ApplicationHooks::install(&mut connection)?;
 
     Ok(ReplicatedDatabase {
         connection,
         functions,
+        hooks,
     })
 }
 
@@ -1051,7 +1094,7 @@ fn apply_channel_write(
         return Ok(());
     }
 
-    if let Err(error) = apply_statements(&db_transaction, &write.transaction) {
+    if let Err(error) = apply_statements(&db_transaction, &database.hooks, &write.transaction) {
         if replay.failed() {
             return Err(Error::InvalidPayload(
                 "captured SQLite function call does not match replay",
@@ -1143,9 +1186,10 @@ fn is_deterministic_sql_error(error: &rusqlite::Error) -> bool {
 
 fn apply_statements(
     db_transaction: &rusqlite::Transaction<'_>,
+    hooks: &ApplicationHooks,
     transaction: &Transaction,
 ) -> Result<(), Error> {
-    db_transaction.authorizer(Some(authorize_application_sql));
+    hooks.arm();
 
     let result = transaction.statements().iter().try_for_each(|statement| {
         db_transaction.execute(statement.sql(), params_from_iter(statement.params()))?;
@@ -1153,7 +1197,7 @@ fn apply_statements(
         Ok::<_, Error>(())
     });
 
-    db_transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    hooks.disarm();
 
     result
 }

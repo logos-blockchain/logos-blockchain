@@ -16,6 +16,7 @@ use lb_core::{
                 withdraw::ChannelWithdrawOp,
             },
         },
+        traits::Hashable as _,
         transactions::{OpProofs, Ops, states::Unverified},
     },
 };
@@ -29,7 +30,7 @@ use super::{
         block_fetch::ViewBefore,
         block_states::{BlockChannelTx, ChannelTxKind},
         state::PendingBundle,
-        types::{FinalizedOp, InscriptionInfo, SequencerConfig},
+        types::{ConfigInfo, FinalizedOp, InscriptionInfo, SequencerConfig},
         zone_sequencer::track_pending_tx,
     },
     *,
@@ -154,6 +155,63 @@ async fn submit_signed_tx_refuses_a_parent_with_a_pending_child() {
         matches!(result, Err(Error::ChannelStateChanged(_))),
         "stale parent must be refused, got {result:?}"
     );
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
+}
+
+/// A hand-built tx chained on a message whose continuation is already mined
+/// is refused at submit like one whose continuation is pending: the entry
+/// would pend on a passed position, re-posted and refused by the node until
+/// the expiry shed. On the publish tip it is accepted and the receipt names
+/// the parent it chains on.
+#[tokio::test]
+async fn submit_signed_tx_refuses_a_parent_with_a_mined_child() {
+    let channel_id = ChannelId::from([0; 32]);
+    let key = Ed25519Key::from_bytes(&[0; 32]);
+    let mut sequencer = ready_sequencer_with_channel(None, key).await;
+
+    // Block 1 mines entry 1 on root: the publish parent is entry 1 now.
+    let mined = inscribe_op(channel_id, MsgId::root(), b"1");
+    let mined_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(mined.clone())]);
+    let lib = sequencer.state.as_ref().unwrap().lib();
+    sequencer.state.as_mut().unwrap().process_block(
+        header_id(1),
+        lib,
+        lib,
+        std::iter::empty(),
+        vec![BlockChannelTx::new(
+            Arc::new(mined_tx.clone()),
+            mined_tx.hash(),
+            ChannelTxKind::Inscription(InscriptionInfo {
+                tx_hash: mined_tx.hash(),
+                parent_msg: MsgId::root(),
+                this_msg: mined.id(),
+                payload: mined.inscription.clone(),
+                signer: Some(mined.signer),
+            }),
+        )],
+        Vec::new(),
+        vec![],
+    );
+    sequencer.current_tip = Some(header_id(1));
+    assert_eq!(sequencer.compute_publish_parent(), mined.id());
+
+    let behind = inscribe_op(channel_id, MsgId::root(), b"behind the tip");
+    let behind_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(behind.clone())]);
+    let result = sequencer.handle().submit_signed_tx(behind_tx, behind.id());
+    assert!(
+        matches!(result, Err(Error::ChannelStateChanged(_))),
+        "a parent with a mined child must be refused, got {result:?}"
+    );
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 0);
+
+    let on_tip = inscribe_op(channel_id, mined.id(), b"on the tip");
+    let on_tip_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(on_tip.clone())]);
+    let (result, _) = sequencer
+        .handle()
+        .submit_signed_tx(on_tip_tx, on_tip.id())
+        .expect("a tx on the publish tip is accepted");
+    assert_eq!(result.tx.inscription().parent_msg, mined.id());
+    assert_eq!(result.tx.inscription().this_msg, on_tip.id());
     assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
 }
 
@@ -1349,6 +1407,173 @@ async fn cold_start_backfills_genesis_slot() {
     assert_eq!(notes(&checkpoints[1]), vec![(note_id, 50)]);
 }
 
+/// The complete mined configuration reaches `Event::BlocksProcessed`'s
+/// finalized items during a cold-start backfill: a config accrediting two
+/// keys, then one removing the second, each with its exact key set, across
+/// two backfill batches.
+#[tokio::test]
+async fn cold_start_backfill_finalizes_configs_with_their_keys() {
+    let channel_id = ChannelId::from([7; 32]);
+    let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+    let peer_key = Ed25519Key::from_bytes(&[1; 32]);
+    let config = |parent: MsgId, keys: Vec<_>| ChannelConfigOp {
+        channel: channel_id,
+        parent,
+        keys: VerifiedChannelKeys::try_from(keys).unwrap(),
+        posting_timeframe: SlotTimeframe::from(3u32),
+        posting_timeout: SlotTimeout::from(0u32),
+        configuration_threshold: 1,
+        transfer_threshold: 1,
+    };
+    let accredit = config(
+        MsgId::root(),
+        vec![sequencer_key.public_key(), peer_key.public_key()],
+    );
+    let remove = config(accredit.id(), vec![sequencer_key.public_key()]);
+    let accredit_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(accredit.clone())]);
+    let remove_tx = unverified_tx_with_ops(vec![Op::ChannelConfig(remove.clone())]);
+
+    let genesis_block = api_block(1, 0, 0, vec![accredit_tx.clone()]);
+    // Slot 120 falls in the second 100-slot batch.
+    let remove_block = api_block(2, 1, 120, vec![remove_tx.clone()]);
+    let lib_block = api_block(3, 2, 150, Vec::new());
+    let live_block = api_block(4, 3, 151, Vec::new());
+
+    let node = MockNode {
+        lib: lib_block.header.id,
+        lib_slot: lib_block.header.slot,
+        tip: lib_block.header.id,
+        scripts: scripts(vec![StreamScript {
+            events: vec![ProcessedBlockEvent {
+                block: live_block.clone(),
+                tip: live_block.header.id,
+                tip_slot: live_block.header.slot,
+                lib: lib_block.header.id,
+                lib_slot: lib_block.header.slot,
+            }],
+            then: StreamEnd::Hang,
+        }]),
+        immutable: vec![genesis_block, remove_block, lib_block.clone()],
+        ..MockNode::default()
+    };
+    let mut sequencer =
+        ZoneSequencer::init(channel_id, sequencer_key, node, funding_config(), None);
+
+    let mut configs: Vec<ConfigInfo> = Vec::new();
+    loop {
+        match sequencer.next_event().await {
+            Event::Ready => break,
+            Event::BlocksProcessed { finalized, .. } => {
+                configs.extend(
+                    finalized
+                        .iter()
+                        .flat_map(|tx| &tx.ops)
+                        .filter_map(|op| match op {
+                            FinalizedOp::Config(info) => Some(info.clone()),
+                            _ => None,
+                        }),
+                );
+            }
+            Event::TurnNotification { .. } => {}
+        }
+    }
+
+    assert_eq!(configs.len(), 2, "both configs finalized: {configs:?}");
+    assert_eq!(configs[0].tx_hash, accredit_tx.hash());
+    assert_eq!(configs[0].parent_msg, MsgId::root());
+    assert_eq!(configs[0].this_msg, accredit.id());
+    assert_eq!(
+        configs[0].config, accredit,
+        "the mined config, keys included"
+    );
+    assert_eq!(configs[0].config.keys.len(), 2);
+    assert_eq!(configs[1].tx_hash, remove_tx.hash());
+    assert_eq!(configs[1].parent_msg, accredit.id());
+    assert_eq!(configs[1].this_msg, remove.id());
+    assert_eq!(
+        configs[1].config, remove,
+        "the removal, with the one key left"
+    );
+    assert_eq!(configs[1].config.keys.len(), 1);
+}
+
+/// Cold start over finalized history that is empty but for a block at
+/// genesis and one deep in, as on a chain whose slots follow the wall clock.
+/// A wide `backfill_batch_slots` replays both inscriptions in a few node reads.
+#[tokio::test]
+async fn cold_start_backfill_reads_configured_batch_slots() {
+    const LIB_SLOT: u64 = 1_000_000;
+    const BATCH_SLOTS: u64 = 10_000;
+
+    let channel_id = ChannelId::from([7; 32]);
+    let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+    let genesis_inscribe = inscribe_op(channel_id, MsgId::root(), b"genesis");
+    let deep_inscribe = inscribe_op(channel_id, genesis_inscribe.id(), b"deep");
+    let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(genesis_inscribe.clone())]);
+    let deep_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(deep_inscribe.clone())]);
+
+    let genesis_block = api_block(1, 0, 0, vec![genesis_tx]);
+    let deep_block = api_block(2, 1, LIB_SLOT - 1_234, vec![deep_tx]);
+    let lib_block = api_block(3, 2, LIB_SLOT, Vec::new());
+    let live_block = api_block(4, 3, LIB_SLOT + 1, Vec::new());
+
+    let (calls_tx, mut calls_rx) = mpsc::unbounded_channel();
+    let node = MockNode {
+        lib: lib_block.header.id,
+        lib_slot: lib_block.header.slot,
+        tip: lib_block.header.id,
+        scripts: scripts(vec![StreamScript {
+            events: vec![ProcessedBlockEvent {
+                block: live_block.clone(),
+                tip: live_block.header.id,
+                tip_slot: live_block.header.slot,
+                lib: lib_block.header.id,
+                lib_slot: lib_block.header.slot,
+            }],
+            then: StreamEnd::Hang,
+        }]),
+        immutable: vec![genesis_block, deep_block, lib_block.clone()],
+        immutable_blocks_calls: Some(calls_tx),
+        ..MockNode::default()
+    };
+    let config = SequencerConfig {
+        backfill_batch_slots: BATCH_SLOTS,
+        ..SequencerConfig::new(funding_config())
+    };
+    let mut sequencer =
+        ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+
+    let mut inscriptions = Vec::new();
+    loop {
+        match sequencer.next_event().await {
+            Event::Ready => break,
+            Event::BlocksProcessed { finalized, .. } => {
+                inscriptions.extend(finalized.iter().flat_map(|tx| &tx.ops).filter_map(
+                    |op| match op {
+                        FinalizedOp::Inscription(info) => Some(info.this_msg),
+                        _ => None,
+                    },
+                ));
+            }
+            Event::TurnNotification { .. } => {}
+        }
+    }
+
+    assert_eq!(
+        inscriptions,
+        vec![genesis_inscribe.id(), deep_inscribe.id()]
+    );
+    assert_eq!(sequencer.lib_slot, lib_block.header.slot);
+
+    let mut reads = 0u64;
+    while calls_rx.try_recv().is_ok() {
+        reads += 1;
+    }
+    // Slots `0..=LIB_SLOT`, `BATCH_SLOTS + 1` per batch (inclusive at both ends).
+    assert_eq!(reads, (LIB_SLOT + 1).div_ceil(BATCH_SLOTS + 1));
+}
+
 /// The one finalized tx with `tx_hash` carries a single root inscription
 /// with `msg_id`.
 fn assert_genesis_inscription_finalized(items: &[FinalizedTx], tx_hash: TxHash, msg_id: MsgId) {
@@ -1781,6 +2006,153 @@ async fn update_variant_follows_orphaned() {
     );
     assert_eq!(hashes(&got), hashes(&[adopted]));
     assert_eq!(hashes(&orphaned), hashes(&[orphaned_entry]));
+}
+
+/// A pending bundle whose transfer input is gone from the branch on a block
+/// that moves no message (a deposit reorged out changes no lineage entry) is
+/// kept while the deposit may re-land, then expires un-refunded: a fresh fee
+/// note brings no deposit back, and the bundle would otherwise be re-funded
+/// and re-posted forever while holding the publish parent.
+#[tokio::test]
+async fn dead_input_bundle_expires_without_a_lineage_change() {
+    use lb_core::mantle::transactions::MantleTxBuilder;
+
+    let channel_id = ChannelId::from([0; 32]);
+    let key = Ed25519Key::from_bytes(&[0; 32]);
+    let mut sequencer = ready_sequencer_with_channel(None, key).await;
+    assert_eq!(sequencer.current_tip, Some(header_id(1)));
+    let window = sequencer.config.stale_refund_slots;
+    assert!(window > 0, "fixture: the refund window is on");
+
+    // A withdraw bundle on the channel tip spending a note the channel does
+    // not hold on this branch, funded at slot 0.
+    let (_, utxo) = utxo_with_sk();
+    let withdraw_op = ChannelWithdrawOp {
+        channel_id,
+        inputs: BoundedInputs::from(utxo.id()).into(),
+    };
+    let transfer_op = lb_core::mantle::ops::channel::channel_transfer::ChannelTransferOp {
+        channel_id,
+        inputs: BoundedInputs::from(utxo.id()).into(),
+        outputs: Outputs::new([utxo.note]),
+    };
+    let inscribe = inscribe_op(channel_id, MsgId::root(), b"withdraw");
+    let bundle = unverified_tx_with_ops(vec![
+        Op::ChannelTransfer(transfer_op),
+        Op::ChannelWithdraw(withdraw_op),
+        Op::ChannelInscribe(inscribe.clone()),
+    ]);
+    let bundle_hash = bundle.hash();
+    let state = sequencer.state.as_mut().unwrap();
+    track_pending_tx(state, bundle, channel_id).unwrap();
+    state.stamp_funding(&bundle_hash, Slot::from(0), Some(MantleTxBuilder::new()));
+    state.mark_pending_inscription_posted(&bundle_hash);
+    sequencer.last_msg_id = inscribe.id();
+    let silent = || BlockEventResult {
+        finalized_items: Vec::new(),
+        channel_update: None,
+        view_before: ViewBefore::new(&[], HashSet::new()),
+        deposits: Vec::new(),
+    };
+
+    // Inside the window the bundle is kept: the deposit may come back.
+    sequencer.lib_slot = Slot::from(window / 2);
+    let (update, ..) = sequencer.apply_block_result(silent());
+    assert!(
+        matches!(update, ChannelUpdate::Extension { .. }),
+        "kept: {update:?}"
+    );
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 1);
+    assert!(
+        sequencer
+            .state
+            .as_ref()
+            .unwrap()
+            .refund_candidates(
+                header_id(1),
+                Slot::from(window * 2),
+                window,
+                usize::MAX,
+                channel_id
+            )
+            .is_empty(),
+        "a dead-input bundle is never re-funded"
+    );
+
+    // Past it, the bundle expires and is reported orphaned.
+    sequencer.lib_slot = Slot::from(window * 2);
+    let (update, ..) = sequencer.apply_block_result(silent());
+    let ChannelUpdate::Conflict { orphaned, .. } = update else {
+        panic!("the dead bundle must be reported orphaned, got {update:?}")
+    };
+    assert_eq!(
+        orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect::<Vec<_>>(),
+        vec![bundle_hash]
+    );
+    assert!(matches!(orphaned[0], ChannelUpdateTx::AtomicWithdraw(_)));
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 0);
+    assert_eq!(
+        sequencer.last_msg_id,
+        MsgId::root(),
+        "the publish parent falls back to the channel tip"
+    );
+}
+
+/// A pending entry whose parent is neither the channel tip nor another
+/// pending entry is shed on a block that moves no message. Restored from a
+/// checkpoint after the block taking its parent finalized, such an entry is
+/// off the pending suffix, so it is never posted, and the first event's diff
+/// is silent about finalized history: without a shed it would stay pending
+/// for good, unreported.
+#[tokio::test]
+async fn off_suffix_pending_entry_is_shed_without_a_lineage_change() {
+    let channel_id = ChannelId::from([0; 32]);
+    let key = Ed25519Key::from_bytes(&[0; 32]);
+    let mut sequencer = ready_sequencer_with_channel(None, key).await;
+    assert_eq!(sequencer.current_tip, Some(header_id(1)));
+
+    // Chained on a message that is not the tip (root) and not pending.
+    let taken = MsgId::from([7u8; 32]);
+    let stranded = inscribe_op(channel_id, taken, b"queued out of turn");
+    let stranded_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(stranded.clone())]);
+    let stranded_hash = stranded_tx.hash();
+    sequencer
+        .state
+        .as_mut()
+        .unwrap()
+        .submit_inscription(stranded_tx, taken, stranded.id(), stranded.inscription)
+        .unwrap();
+    assert!(
+        sequencer
+            .state
+            .as_ref()
+            .unwrap()
+            .pending_txs(header_id(1))
+            .is_empty(),
+        "fixture: off the suffix, the entry is never posted"
+    );
+
+    let (update, ..) = sequencer.apply_block_result(BlockEventResult {
+        finalized_items: Vec::new(),
+        channel_update: None,
+        view_before: ViewBefore::new(&[], HashSet::new()),
+        deposits: Vec::new(),
+    });
+    let ChannelUpdate::Conflict { orphaned, .. } = update else {
+        panic!("the stranded entry must be reported orphaned, got {update:?}")
+    };
+    assert_eq!(
+        orphaned
+            .iter()
+            .map(ChannelUpdateTx::tx_hash)
+            .collect::<Vec<_>>(),
+        vec![stranded_hash]
+    );
+    assert_eq!(sequencer.state.as_ref().unwrap().pending_publish_count(), 0);
+    assert_eq!(sequencer.last_msg_id, MsgId::root());
 }
 
 fn assert_history_matches_update(sequencer: &ZoneSequencer<MockNode>, update: &ChannelUpdate) {

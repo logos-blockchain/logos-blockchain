@@ -109,7 +109,10 @@ use crate::{
         self,
         chain::{BlendEpoch, BlendEpochState},
     },
-    message::{DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage},
+    message::{
+        DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage,
+        proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
+    },
     mode::{CoreMembership, ModeMembership},
     pending::{
         EncapsulationResult, LocalEncapsulation, MessageKind, NextLocalMessage, PendingProposals,
@@ -133,10 +136,6 @@ mod state;
 #[cfg(test)]
 mod tests;
 pub use state::RecoveryServiceState as CoreServiceState;
-
-use crate::message::{
-    proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
-};
 
 const LOG_TARGET: &str = blend::service::CORE;
 

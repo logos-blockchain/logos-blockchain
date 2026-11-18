@@ -10,8 +10,10 @@ const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::M
 /// known and confirmed to be mapped to a publicly reachable address on the
 /// NAT-box. In this state, the address is periodically tested by the `autonat`
 /// client to ensure it remains valid. If the address is found to be
-/// unreachable, the state machine transitions to the `TestIfMappedPublic` state
-/// to re-evaluate the address.
+/// unreachable, the swarm stops advertising it and the state machine
+/// transitions to the `TestIfPublic` state to re-evaluate the node's
+/// reachability. If the mapping is lost, the swarm stops advertising the mapped
+/// address and the state machine transitions to the `Private` state.
 impl OnEvent for State<MappedPublic> {
     #[expect(
         clippy::cognitive_complexity,
@@ -26,9 +28,14 @@ impl OnEvent for State<MappedPublic> {
                 self
             }
             Event::AutonatClientTestFailed(addr) if self.state.external_address() == &addr => {
+                command_tx.force_send(Command::ExternalAddrExpired(addr));
                 self.boxed(MappedPublic::into_test_if_public)
             }
-            Event::AddressMappingFailed(addr) if self.state.external_address() == &addr => {
+            // The address mapper identifies a mapping by its local address.
+            Event::AddressMappingFailed(addr) if self.state.local_address() == &addr => {
+                command_tx.force_send(Command::ExternalAddrExpired(
+                    self.state.external_address().clone(),
+                ));
                 self.boxed(MappedPublic::into_private)
             }
             Event::DefaultGatewayChanged { local_address, .. } => {
@@ -80,7 +87,7 @@ mod tests {
         StateMachine,
         states::{MappedPublic, Private, TestIfPublic, TryMapAddress},
         transitions::fixtures::{
-            ADDR, all_events, autonat_failed, autonat_failed_address_mismatch, autonat_ok,
+            ADDR, ADDR_1, all_events, autonat_failed, autonat_failed_address_mismatch, autonat_ok,
             autonat_ok_address_mismatch, default_gateway_changed,
             default_gateway_changed_no_local_address, external_address_confirmed,
             external_address_confirmed_address_mismatch, mapping_failed,
@@ -122,30 +129,44 @@ mod tests {
     }
 
     #[test]
-    fn autonat_client_failed_causes_transition_to_test_if_public() {
+    fn autonat_client_failed_expires_address_and_causes_transition_to_test_if_public() {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(MappedPublic::for_test(ADDR.clone()));
+        // Local address ADDR_1, mapped address ADDR
+        state_machine.inner = Some(MappedPublic::for_test_with_addrs(
+            ADDR_1.clone(),
+            ADDR.clone(),
+        ));
         let event = autonat_failed();
         state_machine.on_test_event(event);
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
-            &TestIfPublic::for_test(ADDR.clone())
+            &TestIfPublic::for_test(ADDR_1.clone())
         );
-        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(Command::ExternalAddrExpired(ADDR.clone()))
+        );
     }
 
     #[test]
-    fn address_mapping_failed_causes_transition_to_private() {
+    fn address_mapping_failed_expires_address_and_causes_transition_to_private() {
         let (tx, mut rx) = unbounded_channel();
         let mut state_machine = StateMachine::new(tx);
-        state_machine.inner = Some(MappedPublic::for_test(ADDR.clone()));
+        // Local address ADDR, mapped address ADDR_1
+        state_machine.inner = Some(MappedPublic::for_test_with_addrs(
+            ADDR.clone(),
+            ADDR_1.clone(),
+        ));
         state_machine.on_test_event(mapping_failed());
         assert_eq!(
             state_machine.inner.as_ref().unwrap(),
             &Private::for_test(ADDR.clone())
         );
-        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(
+            rx.try_recv(),
+            Ok(Command::ExternalAddrExpired(ADDR_1.clone()))
+        );
     }
 
     #[test]

@@ -5,14 +5,7 @@ use std::{
     marker::PhantomData,
 };
 
-use axum::{
-    Router,
-    http::{
-        HeaderValue,
-        header::{CONTENT_TYPE, USER_AGENT},
-    },
-    routing,
-};
+use axum::{Router, routing};
 use http::StatusCode;
 use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
@@ -37,7 +30,6 @@ use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
-    cors::{Any, CorsLayer},
     limit::RequestBodyLimitLayer,
     timeout::TimeoutLayer,
     trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer},
@@ -57,6 +49,7 @@ use super::handlers::{
 use crate::{
     BlendService, PoWService, TracingService, WalletService,
     api::{
+        browser_access::restrict_browser_access,
         handlers::{
             blend_join_network, channel, channel_deposit, leader_claim, post_activity,
             post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
@@ -199,20 +192,6 @@ where
     }
 
     async fn serve(self, handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error> {
-        let mut builder = CorsLayer::new();
-        if self.settings.cors_origins.is_empty() {
-            builder = builder.allow_origin(Any);
-        }
-
-        for origin in &self.settings.cors_origins {
-            builder = builder.allow_origin(
-                origin
-                    .as_str()
-                    .parse::<HeaderValue>()
-                    .expect("fail to parse origin"),
-            );
-        }
-
         let app = api_routes!(build_router)
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
 
@@ -239,24 +218,19 @@ where
                     .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
             );
 
-        let cors_layer = builder
-            .allow_headers(vec![CONTENT_TYPE, USER_AGENT])
-            .allow_methods(Any);
-
-        let app = app.layer(cors_layer.clone());
-
         #[cfg(feature = "profiling")]
         let app = {
-            let pprof_routes = lb_http_api_common::pprof::create_pprof_router()
-                .layer(
-                    TraceLayer::new_for_http()
-                        .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
-                        .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
-                )
-                .layer(cors_layer);
+            let pprof_routes = lb_http_api_common::pprof::create_pprof_router().layer(
+                TraceLayer::new_for_http()
+                    .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
+                    .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),
+            );
 
             app.merge(pprof_routes)
         };
+
+        let app =
+            restrict_browser_access(app, self.settings.cors_origins, self.settings.allowed_hosts);
 
         let listener = TcpListener::bind(&self.settings.address)
             .await

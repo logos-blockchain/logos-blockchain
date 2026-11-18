@@ -5,6 +5,7 @@ pub mod storage;
 pub mod tx;
 
 use std::{
+    collections::HashMap,
     fmt::{Debug, Error, Formatter},
     pin::Pin,
 };
@@ -40,13 +41,28 @@ where
         prefix: Key::Prefix,
         reply_channel: Sender<Result<TxsWithCommonPrefix<Item>, MempoolError>>,
     },
-    Remove {
-        ids: Vec<Key>,
+    /// Retire the items that block building found inapplicable.
+    Remove { ids: Vec<Key> },
+    /// The canonical chain was updated, either by growing with a new block or
+    /// by a reorg.
+    ///
+    /// - `entered`: items carried by the blocks that entered the canonical
+    ///   chain, each mapped to the slot of the block carrying it. They are
+    ///   retired, and remain available for reference resolution until that
+    ///   block becomes immutable.
+    /// - `reorged`: items carried by the blocks that left the canonical chain
+    ///   and not by the blocks now in it. They are no longer retained as
+    ///   included, and are admitted again. Empty when the chain only grows.
+    CanonicalChainUpdated {
+        entered: HashMap<Key, Slot>,
+        reorged: Vec<Item>,
     },
-    /// The chain processed `block_id` at `slot`.
+    /// The chain processed `block_id` at `slot`, and its latest immutable
+    /// block is at `lib_slot`.
     ProcessedBlock {
         block_id: BlockId,
         slot: Slot,
+        lib_slot: Slot,
     },
     Metrics {
         reply_channel: Sender<MempoolMetrics>,
@@ -80,9 +96,17 @@ where
             }
             Self::Add { payload, .. } => write!(f, "MempoolMsg::Add{{payload: {payload:?}}}"),
             Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
-            Self::ProcessedBlock { block_id, slot } => write!(
+            Self::CanonicalChainUpdated { entered, reorged } => write!(
                 f,
-                "MempoolMsg::ProcessedBlock{{block_id: {block_id:?}, slot: {slot:?}}}"
+                "MempoolMsg::CanonicalChainUpdated{{entered: {entered:?}, reorged: {reorged:?}}}"
+            ),
+            Self::ProcessedBlock {
+                block_id,
+                slot,
+                lib_slot,
+            } => write!(
+                f,
+                "MempoolMsg::ProcessedBlock{{block_id: {block_id:?}, slot: {slot:?}, lib_slot: {lib_slot:?}}}"
             ),
             Self::Metrics { .. } => write!(f, "MempoolMsg::Metrics"),
             Self::Status { items, .. } => write!(f, "MempoolMsg::Status{{items: {items:?}}}"),

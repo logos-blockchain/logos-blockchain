@@ -4,5 +4,6 @@ log_targets! {
     root = utils;
 
     RECOVERY,
+    SERVICE_READINESS,
     YAML,
 }

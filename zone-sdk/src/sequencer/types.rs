@@ -39,6 +39,7 @@ const DEFAULT_MAX_PENDING_PUBLISH_DEPTH: usize = 100;
 /// Long enough that a merely slow tx is not rebuilt: a valid tx the node
 /// holds lands within a few blocks, so one unmined this long is stuck.
 const DEFAULT_STALE_REFUND_SLOTS: u64 = 30;
+const DEFAULT_BACKFILL_BATCH_SLOTS: u64 = 100;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -415,6 +416,10 @@ pub struct SequencerConfig {
     /// LIB slots a pending tx may stay unmined before it is re-funded or
     /// orphaned; `0` disables.
     pub stale_refund_slots: u64,
+    /// Slots of finalized history each backfill request reads. A chain whose
+    /// slots follow the wall clock can hold long stretches without blocks,
+    /// which a wider batch crosses in fewer requests.
+    pub backfill_batch_slots: u64,
     /// Fund transactions from the node's wallet before signing.
     pub funding: FundingConfig,
 }
@@ -430,6 +435,7 @@ impl SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: DEFAULT_MAX_PENDING_PUBLISH_DEPTH,
             stale_refund_slots: DEFAULT_STALE_REFUND_SLOTS,
+            backfill_batch_slots: DEFAULT_BACKFILL_BATCH_SLOTS,
             funding,
         }
     }
@@ -603,8 +609,9 @@ pub enum ChannelUpdate {
         adopted: Vec<ChannelUpdateTx>,
         /// Entries that left the view: ones that were on chain, plus our own
         /// pending that can no longer land, plus stale multi-sig and custom
-        /// txs. Revert from state and treat as republish candidates; see
-        /// [`ChannelUpdateTx`] for how to republish each variant.
+        /// txs. An entry comes before the entries chained on it. Revert from
+        /// state and treat as republish candidates; see [`ChannelUpdateTx`]
+        /// for how to republish each variant.
         orphaned: Vec<ChannelUpdateTx>,
     },
 }
@@ -667,6 +674,19 @@ pub struct TurnNotification {
     /// current slot, which may not be available at the time
     /// of notification.
     pub current_slot: Option<u64>,
+}
+
+/// Channel config observed in a finalized L1 block, with what it set.
+#[derive(Debug, Clone)]
+pub struct ConfigInfo {
+    /// The transaction hash containing this config.
+    pub tx_hash: TxHash,
+    /// The config this one chains from, on the config lineage.
+    pub parent_msg: MsgId,
+    /// This config's id on the config lineage.
+    pub this_msg: MsgId,
+    /// The config as mined: accredited keys, thresholds, posting rules.
+    pub config: ChannelConfigOp,
 }
 
 /// Channel inscription observed in an L1 block.
@@ -878,9 +898,10 @@ pub enum FinalizedOp {
     /// inscription+withdraw bundle (the bundling is implicit via the parent
     /// [`FinalizedTx::tx_hash`]).
     Withdraw(WithdrawInfo),
-    /// A config on the channel. `parent_msg`/`this_msg` are config-lineage
-    /// ids, not message-lineage ids, and the payload is empty.
-    Config(InscriptionInfo),
+    /// A config on the channel, with the keys and rules it set.
+    /// `parent_msg`/`this_msg` are config-lineage ids, not message-lineage
+    /// ids.
+    Config(ConfigInfo),
     /// A channel transfer op on the channel: notes re-keyed/re-denominated
     /// under channel authority.
     ChannelTransfer(ChannelTransferInfo),

@@ -274,9 +274,9 @@ pub struct SlotContext {
 /// (from the current slot for the ongoing epoch — so a mid-epoch start wastes
 /// no work — and in full for each later epoch). The stream is lazy: no slot is
 /// scanned until the subscriber drives it, and the subscriber decides how far
-/// ahead to pre-compute (e.g. via the `Buffered` adapter), so the whole epoch
-/// is never materialized here. This task only produces the cheap per-epoch
-/// handoffs; it exits when the subscriber drops its stream.
+/// ahead to pre-compute, so the whole epoch is never materialized here. This
+/// task only produces the cheap per-epoch handoffs; it exits when the
+/// subscriber drops its stream.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -335,6 +335,16 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             eligible_aged,
             source,
         } = slot_context;
+        tracing::debug!(
+            target: LOG_TARGET,
+            event = "leader_eligible_notes",
+            path = "winning_slot_scan",
+            slot = ?slot,
+            epoch = ?epoch,
+            note_count = eligible_aged.len(),
+            total_value = eligible_aged.iter().map(|note| note.utxo.note.value).sum::<u64>(),
+            "Eligible notes for the winning slot scan"
+        );
         let state = PolEpochState {
             nonce: epoch_state.nonce,
             aged_utxo_root: epoch_state.utxo_merkle_root(),
@@ -437,8 +447,11 @@ where
         .await
         .ok()?
         .ok()?;
+    // Filter the wallet's notes by the aged UTXO set of the slot's epoch, not
+    // the one of the tip's epoch: on the first slots of an epoch, before any
+    // block of it is on the chain, the two differ.
     let eligible_utxos = wallet_api
-        .get_leader_aged_notes(Some(wallet_tip))
+        .get_leader_aged_notes(wallet_tip, epoch_state.utxos.clone())
         .await
         .ok()?;
     let eligible = match &ledger_config.faucet_pk {
@@ -469,8 +482,8 @@ where
 /// driven, performs the KMS lottery check for that slot and — on a win — builds
 /// the leadership private inputs, resolving to `Some(LeaderPrivate)` for a
 /// winning slot or `None` otherwise. The consumer drives the futures (and
-/// decides how far ahead to pre-compute, e.g. via the `Buffered` adapter), so
-/// the whole epoch is never materialized at once.
+/// decides how far ahead to pre-compute), so the whole epoch is never
+/// materialized at once.
 ///
 /// The winning check uses the aged UTXO tree (`epoch_state.utxos`), since the
 /// leadership quota proof only attests that a note was aged at the end of the
