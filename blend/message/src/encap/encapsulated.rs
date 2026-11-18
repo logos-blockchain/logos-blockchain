@@ -384,9 +384,10 @@ impl EncapsulatedPrivateHeader {
     // BlendingHeaders[2]:               Enc(inputs[0], RND(inputs[0]))
     //
     // Notation:
-    // - RANDOM: Pseudo-random bytes generated from fresh entropy, reconstructable
-    //   by nobody
-    // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
+    // - RANDOM: Pseudo-random bytes generated from fresh entropy,
+    //   reconstructable by nobody
+    // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER`
+    //   DST
     // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
     fn from_inputs(inputs: &[EncapsulationInput], num_layers: usize) -> Self {
         let unused_layers = num_layers.saturating_sub(inputs.len());

@@ -265,14 +265,15 @@ impl LedgerState {
             .update_from_ledger(&self, sdp, pow, eras);
 
         // There are 3 cases to consider:
-        // 1. We are in the same epoch as the parent state: Update the next epoch state
-        // 2. We are in the next epoch: Use the next epoch state as the current epoch
-        //    state and reset next epoch state
-        // 3. We are in the next-next or later epoch (which mean that some epochs had no
-        //    block): Use the parent state as the epoch state and reset next epoch
-        //    state. Total stake should be adjusted with zero block density for skipped
-        //    epochs. Storage Market is updated with 0 storage gas used for skipped
-        //    epochs.
+        // 1. We are in the same epoch as the parent state: Update the next
+        //    epoch state
+        // 2. We are in the next epoch: Use the next epoch state as the current
+        //    epoch state and reset next epoch state
+        // 3. We are in the next-next or later epoch (which mean that some
+        //    epochs had no block): Use the parent state as the epoch state and
+        //    reset next epoch state. Total stake should be adjusted with zero
+        //    block density for skipped epochs. Storage Market is updated with 0
+        //    storage gas used for skipped epochs.
         if current_epoch == new_epoch {
             // case 1)
             Ok(Self {
