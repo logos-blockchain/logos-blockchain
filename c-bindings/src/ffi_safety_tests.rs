@@ -930,12 +930,16 @@ mod with_node {
             transfer(key.as_ptr(), funding.as_ptr(), 1, key.as_ptr(), u64::MAX);
 
             let metadata = [1u8, 2, 3];
-            let deposit = |channel: *const u8, funding_key: *const u8, amount: u64, len: usize| {
+            let deposit = |channel: *const u8,
+                           funding_key: *const u8,
+                           holder_key: *const u8,
+                           amount: u64,
+                           len: usize| {
                 let arguments = ChannelDepositArguments {
                     optional_tip: ptr::null(),
                     channel_id: channel,
                     funding_public_key: funding_key,
-                    holder_public_key: key.as_ptr(),
+                    holder_public_key: holder_key,
                     amount,
                     metadata: if len == usize::MAX {
                         ptr::null()
@@ -949,19 +953,27 @@ mod with_node {
                     channel_deposit(node, &raw const arguments),
                 )
             };
-            assert_eq!(deposit(ptr::null(), key.as_ptr(), 1, 0), np);
-            assert_eq!(deposit(zero.as_ptr(), ptr::null(), 1, 0), np);
-            assert_eq!(deposit(zero.as_ptr(), key.as_ptr(), 1, usize::MAX), np);
-            assert_ne!(
-                deposit(zero.as_ptr(), key.as_ptr(), 0, 0),
-                OperationStatusCode::Ok
+            assert_eq!(deposit(ptr::null(), key.as_ptr(), key.as_ptr(), 1, 0), np);
+            assert_eq!(deposit(zero.as_ptr(), ptr::null(), key.as_ptr(), 1, 0), np);
+            assert_eq!(deposit(zero.as_ptr(), key.as_ptr(), ptr::null(), 1, 0), np);
+            assert_eq!(
+                deposit(zero.as_ptr(), key.as_ptr(), key.as_ptr(), 1, usize::MAX),
+                np
             );
-            assert_ne!(
-                deposit(zero.as_ptr(), invalid_key.as_ptr(), 1, 3),
-                OperationStatusCode::Ok
+            assert_eq!(
+                deposit(zero.as_ptr(), key.as_ptr(), key.as_ptr(), 0, 0),
+                OperationStatusCode::RuntimeError
             );
-            deposit(zero.as_ptr(), key.as_ptr(), 1, 3);
-            deposit(zero.as_ptr(), key.as_ptr(), u64::MAX, 3);
+            assert_eq!(
+                deposit(zero.as_ptr(), invalid_key.as_ptr(), key.as_ptr(), 1, 3),
+                OperationStatusCode::DynError
+            );
+            assert_eq!(
+                deposit(zero.as_ptr(), key.as_ptr(), invalid_key.as_ptr(), 1, 3),
+                OperationStatusCode::DynError
+            );
+            deposit(zero.as_ptr(), key.as_ptr(), key.as_ptr(), 1, 3);
+            deposit(zero.as_ptr(), key.as_ptr(), key.as_ptr(), u64::MAX, 3);
 
             let not_utf8 = CString::new(vec![0xFF, 0xFE]).unwrap();
             for json in [c"{", c"{}", c"null", not_utf8.as_c_str()] {
