@@ -56,13 +56,13 @@ impl PooledFeesWindow {
     /// new size. What they did not pay out stays in the pool.
     #[must_use]
     pub fn with_block(self, pooled_fees: Value, blocks: NonZeroU16) -> Self {
+        // A grown window starts over, so no older fee is paid again.
         let mut window = if blocks.get() > self.0.max_len() {
-            let dropped_fees: Value = self.iter().sum();
             tracing::info!(
                 target: LOG_TARGET,
                 old_window = self.0.max_len(),
                 new_window = blocks.get(),
-                dropped_fees,
+                dropped_fees = self.iter().sum::<lb_core::mantle::Value>(),
                 "pooled fees window grown by an era starts over"
             );
             Self::empty(blocks)
