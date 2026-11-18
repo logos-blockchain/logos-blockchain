@@ -60,6 +60,18 @@ pub const SPEND_ROOT_DEPTH: usize = 4;
 /// reserve it does not use is the priority tip of the transaction.
 pub const DEFAULT_FEE_MARGIN_PERCENT: u64 = 13;
 
+/// A spend of the notes of `holder_pks` in `note_set` that creates `outputs`
+/// and leaves `excess`, the rest going back to `change_pk`.
+#[derive(Clone, Debug)]
+pub struct NoteSetSpend {
+    pub note_set: NoteSetIndex,
+    pub outputs: Vec<Note>,
+    pub excess: Value,
+    pub change_pk: ZkPublicKey,
+    pub change_nonce: Fr,
+    pub holder_pks: Vec<ZkPublicKey>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnedNote {
     pub note: Note,
@@ -441,20 +453,21 @@ impl WalletState {
         Ok((op, opening))
     }
 
-    // A spend of the notes of `pks` in `note_set` creating `outputs` and
-    // leaving `excess`, the rest back to `change_pk`: the nullifiers, the
-    // opening and the root of the set they are proven against.
-    #[expect(clippy::too_many_arguments, reason = "the notes it creates")]
+    // The nullifiers and the opening of `spend`, and the root of the set they
+    // are proven against.
     pub fn note_set_spend(
         &self,
-        note_set: NoteSetIndex,
-        mut outputs: Vec<Note>,
-        excess: Value,
-        change_pk: ZkPublicKey,
-        change_nonce: Fr,
-        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        spend: NoteSetSpend,
         excluded: &HashSet<NoteNullifier>,
     ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
+        let NoteSetSpend {
+            note_set,
+            mut outputs,
+            excess,
+            change_pk,
+            change_nonce,
+            holder_pks: pks,
+        } = spend;
         let value = outputs
             .iter()
             .try_fold(excess, |total, note| total.checked_add(note.value))
@@ -497,7 +510,7 @@ impl WalletState {
         self.root_of(NoteSetIndex::Ledger)
     }
 
-    pub(crate) fn root_of(&self, note_set: NoteSetIndex) -> Fr {
+    pub fn root_of(&self, note_set: NoteSetIndex) -> Fr {
         self.commitments.get(&note_set).map_or_else(
             || CommitmentMmr::new().frontier_root(),
             CommitmentMmr::frontier_root,

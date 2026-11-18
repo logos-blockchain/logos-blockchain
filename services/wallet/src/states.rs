@@ -7,7 +7,6 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Value,
-        note_set::NoteSetIndex,
         notes::{InputNullifiers, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{
@@ -20,7 +19,7 @@ use lb_core::{
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
-use lb_wallet::{KnownNote, KnownNotes, WalletBlock, WalletError, WalletState};
+use lb_wallet::{KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -394,29 +393,14 @@ impl<'u> ServiceState<'u> {
         )
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "thin passthrough to `WalletState::note_set_spend` plus the reservations"
-    )]
     pub fn note_set_spend(
         &self,
         tip: HeaderId,
-        note_set: NoteSetIndex,
-        outputs: Vec<Note>,
-        excess: Value,
-        change_pk: ZkPublicKey,
-        change_nonce: Fr,
-        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        spend: NoteSetSpend,
     ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
-        self.wallet.spend_state(tip)?.note_set_spend(
-            note_set,
-            outputs,
-            excess,
-            change_pk,
-            change_nonce,
-            pks,
-            &self.pending_notes.nullifiers(),
-        )
+        self.wallet
+            .spend_state(tip)?
+            .note_set_spend(spend, &self.pending_notes.nullifiers())
     }
 
     pub fn reserve_pending_notes(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {
@@ -452,7 +436,10 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_core::{era::ForkDigest, mantle::notes::NoteCommitment};
+    use lb_core::{
+        era::ForkDigest,
+        mantle::{note_set::NoteSetIndex, notes::NoteCommitment},
+    };
     use lb_groth16::Field as _;
 
     use super::*;

@@ -24,7 +24,10 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
-        channel::{ChannelStepRequestBody, ChannelStepResponseBody},
+        channel::{
+            ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
+            ChannelWithdrawResponseBody,
+        },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
@@ -37,8 +40,8 @@ use lb_http_api_common::{
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
-        CHANNEL_STEP, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES,
-        MANTLE_GAS_PRICES, MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION,
+        CHANNEL_STEP, CHANNEL_WITHDRAW, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM,
+        LEADER_AGED_NOTES, MANTLE_GAS_PRICES, MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION,
         MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION,
         TIME_INFO,
         wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
@@ -787,6 +790,19 @@ impl CommonHttpClient {
     ) -> Result<WalletFundResponseBody, Error> {
         let request_url = base_url
             .join(FUND.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Withdraw channel notes the node's wallet holds to the ledger.
+    pub async fn channel_withdraw(
+        &self,
+        base_url: Url,
+        body: ChannelWithdrawRequestBody,
+    ) -> Result<ChannelWithdrawResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_WITHDRAW.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

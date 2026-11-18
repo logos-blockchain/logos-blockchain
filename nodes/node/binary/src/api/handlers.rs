@@ -46,7 +46,7 @@ use lb_http_api_common::{
         chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{
             ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
-            ChannelStepResponseBody,
+            ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
@@ -1287,6 +1287,105 @@ where
         Ok::<_, overwatch::DynError>(ChannelDepositResponseBody {
             hash: tx_hash,
             holder_note,
+        })
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = paths::CHANNEL_WITHDRAW,
+    responses(
+        (status = 200, description = "Submit a channel withdrawal"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn channel_withdraw<WalletService, StorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ChannelWithdrawRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
+            BlockId = HeaderId,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Clone
+        + Display
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
+                StorageAdapter,
+                NtpTimeBackend,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+
+        let lb_wallet_service::TipResponse {
+            tip: spend_tip,
+            response: withdrawal,
+        } = wallet
+            .channel_withdrawal(req.tip, req.channel_id, req.notes)
+            .await?;
+        let outputs = withdrawal.opening.outputs.clone();
+        let tx_builder = MantleTxBuilder::new()
+            .push_op_with_opening(Op::ChannelWithdraw(withdrawal.op), withdrawal.opening)?;
+        // The withdrawal names the channel root of this tip. A funding that
+        // fails releases the notes of `tx_builder` in the wallet.
+        let lb_wallet_service::TipResponse {
+            tip,
+            response: funded_tx_builder,
+        } = wallet
+            .fund_tx(
+                Some(spend_tip),
+                tx_builder.clone(),
+                req.change_public_key,
+                req.funding_public_keys,
+                None,
+                Some(req.max_tx_fee),
+            )
+            .await?;
+        let reserved = added_nullifiers(&tx_builder, &funded_tx_builder);
+        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
+
+        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        let tx_hash = signed_tx.hash();
+
+        mempool::add_tx::<
+            Libp2pNetworkBackend,
+            MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
+            StorageAdapter,
+            ValidatedTx,
+            NtpTimeBackend,
+            RuntimeServiceId,
+        >(&handle, signed_tx, Hashable::hash)
+        .await?;
+
+        Ok::<_, overwatch::DynError>(ChannelWithdrawResponseBody {
+            hash: tx_hash,
+            outputs,
         })
     })
 }

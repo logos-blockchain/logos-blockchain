@@ -23,7 +23,8 @@ use lb_core::{
 use lb_http_api_common::bodies::{
     channel::{
         ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelPayment,
-        ChannelStepRequestBody, ChannelStepResponseBody,
+        ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
+        ChannelWithdrawResponseBody,
     },
     wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
 };
@@ -224,19 +225,23 @@ async fn channel_deposit() {
 /// 2. Call the POST `/channel/step` HTTP endpoint for a user step paying part
 ///    of the deposit, once the deposited note is deep enough to be spent.
 /// 3. Inscribe the step with its proof and wait for its inclusion.
+/// 4. Call the POST `/channel/withdraw` HTTP endpoint for the note the step
+///    paid, once that note is deep enough to be spent.
+/// 5. Verify the ledger balance of the key rises by the note's value once the
+///    withdrawal is released.
 #[tokio::test]
 #[serial]
-async fn channel_user_step() {
+async fn channel_note_round_trip() {
     let deposit_amount = 5;
     let (wallet_config, funding_pk, _funding_account) =
         channel_deposit_wallet_config(deposit_amount, FEE_NOTE_AMOUNT);
     let (_base, nodes) = start_local_manual_cluster_with_layout(
-        "channel-user-step",
+        "channel-note-round-trip",
         "mantle-channel",
         DeploymentBuilder::new(
             TfTopologyConfig::with_node_numbers(2)
                 .with_allow_multiple_genesis_tokens(true)
-                .with_test_context(Some("channel_user_step".to_owned())),
+                .with_test_context(Some("channel_note_round_trip".to_owned())),
         )
         .with_wallet_config(wallet_config),
         2,
@@ -379,6 +384,68 @@ async fn channel_user_step() {
         .await
         .expect("inscription with a user step should be submitted");
     wait_for_tx_inclusion(&mut block_stream, tx_hash, "user step inscription").await;
+
+    // The paid note is withdrawn once the wallet adopted it and its block is
+    // deep enough.
+    let balance_before_withdraw = get_wallet_balance(&validator.client, funding_pk).await;
+    let ChannelWithdrawResponseBody {
+        hash: withdraw_tx_hash,
+        outputs: released,
+    } = timeout(Duration::from_mins(2), async {
+        loop {
+            let response = reqwest::Client::new()
+                .post(api_url(&validator.client, "channel/withdraw"))
+                .json(&ChannelWithdrawRequestBody {
+                    tip: None,
+                    channel_id,
+                    notes: vec![outputs[0].commitment()],
+                    change_public_key: funding_pk,
+                    funding_public_keys: vec![funding_pk],
+                    max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
+                })
+                .send()
+                .await
+                .expect("request should not fail");
+            if response.status().is_success() {
+                return response
+                    .json::<ChannelWithdrawResponseBody>()
+                    .await
+                    .expect("withdraw response should be valid JSON");
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the paid note to be spendable");
+    assert_eq!(
+        released
+            .iter()
+            .map(|note| (note.value, note.public_key))
+            .collect::<Vec<_>>(),
+        vec![(paid, funding_pk)]
+    );
+    wait_for_tx_inclusion(&mut block_stream, withdraw_tx_hash, "withdraw").await;
+
+    // The withdrawal costs its fee at inclusion and pays the note at release.
+    let balance_after_fee = timeout(Duration::from_secs(10), async {
+        loop {
+            let balance = get_wallet_balance(&validator.client, funding_pk).await;
+            if balance != balance_before_withdraw {
+                return balance;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for the wallet to apply the withdrawal");
+    assert!(balance_after_fee < balance_before_withdraw);
+    wait_for_wallet_balance(
+        &validator.client,
+        funding_pk,
+        balance_after_fee + paid,
+        Duration::from_mins(3),
+    )
+    .await;
 }
 
 // Creates a channel with an inscription the node's wallet funds from
@@ -637,6 +704,8 @@ fn channel_test_config(mut config: RunConfig) -> RunConfig {
                     .unwrap();
             // The widest uncle reference window k allows, ⌊0.6k⌋.
             parameters.cryptarchia.uncle_reference_window_in_block = 1;
+            // Short enough for a test to see a withdrawal released.
+            parameters.cryptarchia.channel_withdraw_delay = NonZero::new(30).unwrap();
         })
         .expect("The changed deployment must be valid.");
     config
@@ -664,10 +733,6 @@ async fn wait_for_tx_inclusion(
     .unwrap_or_else(|_| panic!("timed out waiting for the {label} tx to be included in a block"))
 }
 
-#[expect(
-    dead_code,
-    reason = "Used by `channel_withdraw_updates_wallet_balance`, restore when wallet tracks channel notes"
-)]
 async fn wait_for_wallet_balance(
     node: &NodeHttpClient,
     pk: ZkPublicKey,

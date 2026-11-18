@@ -425,7 +425,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        DEFAULT_FEE_MARGIN_PERCENT,
+        DEFAULT_FEE_MARGIN_PERCENT, NoteSetSpend,
         test_utils::{FORK_DIGEST, GAS_PROFILE, known, nullifier, pk},
     };
 
@@ -581,12 +581,14 @@ mod tests {
 
         let (nullifiers, opening, spend_root) = state
             .note_set_spend(
-                channel,
-                vec![paid],
-                100,
-                pk(1),
-                Fr::from(5u64),
-                [pk(1)],
+                NoteSetSpend {
+                    note_set: channel,
+                    outputs: vec![paid],
+                    excess: 100,
+                    change_pk: pk(1),
+                    change_nonce: Fr::from(5u64),
+                    holder_pks: vec![pk(1)],
+                },
                 &HashSet::new(),
             )
             .unwrap();
@@ -615,12 +617,14 @@ mod tests {
         // the notes of the other sets do not pay for a channel step
         assert_eq!(
             state.note_set_spend(
-                channel,
-                vec![Note::new(1_001, Fr::from(6u64), pk(2))],
-                0,
-                pk(1),
-                Fr::from(7u64),
-                [pk(1)],
+                NoteSetSpend {
+                    note_set: channel,
+                    outputs: vec![Note::new(1_001, Fr::from(6u64), pk(2))],
+                    excess: 0,
+                    change_pk: pk(1),
+                    change_nonce: Fr::from(7u64),
+                    holder_pks: vec![pk(1)],
+                },
                 &HashSet::new(),
             ),
             Err(WalletError::InsufficientFunds { available: 1_000 })

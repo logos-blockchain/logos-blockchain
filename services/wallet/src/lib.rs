@@ -25,13 +25,14 @@ use lb_core::{
         gas::{GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
-        notes::{NoteCommitment, NoteNullifier, OutputCommitments, ProgramId},
+        notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments, ProgramId},
         ops::{
             ChannelInscribeProof, NoOpProof, OpRef, ZkAndEd25519Proof, ZkTransferProof,
             channel::{
                 ChannelId,
                 inscribe::{Inscription, Step, UserStep, user_step_id},
                 program_step::{ProgramDeposit, program_deposit_id},
+                withdraw::ChannelWithdrawOp,
             },
         },
         traits::{GenesisTx as _, Hashable as _, MantleTx as _, SignedMantleTx, StorageSize},
@@ -68,7 +69,8 @@ use lb_time_service::{EraEvent, TimeService, api::TimeServiceApi};
 use lb_utils::bounded::BoundedError;
 pub use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, SPEND_ROOT_DEPTH};
 use lb_wallet::{
-    KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
+    KnownNote, KnownNotes, NoteSetSpend, OwnedNote, WalletBalance, WalletBlock, WalletError,
+    WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses, step_witness},
 };
 use overwatch::{
@@ -138,6 +140,9 @@ pub enum WalletServiceError {
     #[error("Channel {0:?} has no note set")]
     ChannelWithoutNoteSet(ChannelId),
 
+    #[error("The wallet holds no spendable note {0:?} in channel {1:?}")]
+    NoChannelNote(NoteCommitment, ChannelId),
+
     #[error("Failed to read or write the persisted state of the wallet: {0}")]
     PersistedState(DynError),
 
@@ -189,6 +194,14 @@ pub struct ChannelStep {
     pub step: Step,
     pub proof: ZkTransferProof,
     pub outputs: Vec<Note>,
+}
+
+/// A withdrawal of channel notes of the wallet, each released as a ledger
+/// note of the same value and key.
+#[derive(Debug)]
+pub struct ChannelWithdrawal {
+    pub op: ChannelWithdrawOp,
+    pub opening: ZkTransferOpening,
 }
 
 #[derive(Debug)]
@@ -270,6 +283,12 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         request: ChannelStepRequest,
         resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
+    },
+    ChannelWithdrawal {
+        tip: Option<HeaderId>,
+        channel_id: ChannelId,
+        notes: Vec<NoteCommitment>,
+        resp_tx: Sender<Result<TipResponse<ChannelWithdrawal>, WalletServiceError>>,
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
@@ -379,6 +398,7 @@ impl WalletMsg {
             | Self::GetLeaderAgedNotesInfo { tip, .. }
             | Self::SpendRoot { tip, .. }
             | Self::ProveChannelStep { tip, .. }
+            | Self::ChannelWithdrawal { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
@@ -1021,6 +1041,26 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
                 }
             }
+            WalletMsg::ChannelWithdrawal {
+                tip,
+                channel_id,
+                notes,
+                resp_tx,
+            } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let response = Self::channel_withdrawal(tip, channel_id, &notes, state, kms)
+                    .await
+                    .map(|response| TipResponse { tip, response });
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to ChannelWithdrawal");
+                }
+            }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
@@ -1458,12 +1498,14 @@ where
             .collect();
         let (inputs, opening, commitment_merkle_root) = state.note_set_spend(
             tip,
-            note_set,
-            paid,
-            program_deposit.as_ref().map_or(0, |deposit| deposit.value),
-            change_pk,
-            random_nonce(),
-            holder_pks,
+            NoteSetSpend {
+                note_set,
+                outputs: paid,
+                excess: program_deposit.as_ref().map_or(0, |deposit| deposit.value),
+                change_pk,
+                change_nonce: random_nonce(),
+                holder_pks,
+            },
         )?;
         let outputs =
             OutputCommitments::try_from_iter(opening.outputs.iter().map(Note::commitment))
@@ -1513,6 +1555,57 @@ where
             step,
             proof,
             outputs: opening.outputs,
+        })
+    }
+
+    // The withdrawal of `notes` from the channel at the spend state of `tip`.
+    // The ledger notes it creates are registered, so the wallet adopts them
+    // once the withdrawal is released.
+    async fn channel_withdrawal(
+        tip: HeaderId,
+        channel_id: ChannelId,
+        notes: &[NoteCommitment],
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ChannelWithdrawal, WalletServiceError> {
+        let note_set = channel_note_set(channel_id)
+            .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
+        let spend_state = state.wallet().spend_state(tip)?;
+        let inputs = notes
+            .iter()
+            .map(|commitment| {
+                spend_state
+                    .notes
+                    .get(commitment)
+                    .filter(|owned| owned.note_set == note_set)
+                    .ok_or(WalletServiceError::NoChannelNote(*commitment, channel_id))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let outputs: Vec<Note> = inputs
+            .iter()
+            .map(|owned| Note::new(owned.note.value, random_nonce(), owned.note.public_key))
+            .collect();
+        let op = ChannelWithdrawOp {
+            channel_id,
+            inputs: InputNullifiers::try_from_iter(inputs.iter().map(|owned| owned.nullifier))
+                .map_err(WalletError::from)?,
+            outputs: OutputCommitments::try_from_iter(outputs.iter().map(Note::commitment))
+                .map_err(WalletError::from)?,
+            commitment_merkle_root: spend_state.root_of(note_set),
+        };
+
+        let mut known_notes = Vec::new();
+        for note in &outputs {
+            known_notes.push(Self::held_note(*note, NoteSetIndex::Ledger, state, kms).await?);
+        }
+        state.add_known_notes(known_notes);
+
+        Ok(ChannelWithdrawal {
+            op,
+            opening: ZkTransferOpening {
+                inputs: inputs.iter().map(|owned| owned.note).collect(),
+                outputs,
+            },
         })
     }
 

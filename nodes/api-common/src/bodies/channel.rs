@@ -3,7 +3,7 @@ use lb_core::{
     mantle::{
         Note, Value,
         gas::GasCost,
-        notes::ProgramId,
+        notes::{NoteCommitment, ProgramId},
         ops::{
             ZkTransferProof,
             channel::{
@@ -38,6 +38,26 @@ pub struct ChannelDepositResponseBody {
     /// The note paid to the holder in the channel. A holder whose wallet is not
     /// this node's imports it to withdraw it.
     pub holder_note: Note,
+}
+
+/// A withdrawal of channel notes this node's wallet holds. Each is released
+/// as a ledger note of the same value and key once the withdrawal is due.
+#[derive(Serialize, Deserialize)]
+pub struct ChannelWithdrawRequestBody {
+    pub tip: Option<HeaderId>,
+    pub channel_id: ChannelId,
+    /// The channel notes to withdraw.
+    pub notes: Vec<NoteCommitment>,
+    pub change_public_key: ZkPublicKey,
+    pub funding_public_keys: Vec<ZkPublicKey>,
+    pub max_tx_fee: GasCost,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ChannelWithdrawResponseBody {
+    pub hash: TxHash,
+    /// The ledger notes the withdrawal releases, in the order of `notes`.
+    pub outputs: Vec<Note>,
 }
 
 /// A user step, or a program deposit, built from the notes this node's wallet

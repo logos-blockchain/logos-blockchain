@@ -23,6 +23,7 @@ pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";
 pub const CHANNEL: &str = "/channel/{id}";
 pub const CHANNEL_DEPOSIT: &str = "/channel/deposit";
 pub const CHANNEL_STEP: &str = "/channel/step";
+pub const CHANNEL_WITHDRAW: &str = "/channel/withdraw";
 pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";
 pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";
