@@ -72,7 +72,7 @@ use logos_blockchain_ledger::{
 
 use crate::{
     cycles::{Case, ROUNDS, in_turn},
-    fixture::{HeaderId, commitments, filled_state, nullifiers},
+    fixture::{HeaderId, commitments, filled_state, genesis_parameters, nullifiers},
 };
 
 /// What applying a transaction yields.
@@ -951,7 +951,7 @@ fn claim_pow() -> OpShape {
     let mut parameters = crate::fixture::parameters(&fixture.config).clone();
     parameters.pow_config.reward.minimum_difficulty = ModulusShift::new::<1>();
     let genesis = Note::new(1, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-    let state = LedgerState::from_notes([genesis], &parameters, 1_000_000_000)
+    let state = LedgerState::from_notes([genesis], &parameters, &genesis_parameters())
         .with_gas_prices(&GasPrices::new(0, 0))
         .with_genesis_note_sets(fixture.state.latest_note_sets().clone());
     let config = crate::fixture::single_era(parameters);

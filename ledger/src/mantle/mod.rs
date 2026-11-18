@@ -82,6 +82,7 @@ impl LedgerState {
         signed_operation_inscriptions: [SignedOperation<InscriptionOp, Verified, GenesisMode>; 2],
         signed_operation_declarations: GenesisDeclarations,
         config: &Config,
+        pow_reward_pool: PowReward,
         note_sets: NoteSets,
         epoch_state: &EpochState,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
@@ -102,10 +103,7 @@ impl LedgerState {
             Self {
                 channels,
                 sdp,
-                pow: pow::PowState::from_reward_pool_and_config(
-                    pow::POW_REWARD_POOL_GENESIS,
-                    config,
-                ),
+                pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
                 programs: Programs::new(),
             },
             note_sets,
