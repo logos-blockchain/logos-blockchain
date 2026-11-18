@@ -1315,6 +1315,8 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZero;
+
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -1345,6 +1347,11 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    max_supply: 1000,
+                    pow_reward_pool: 5,
+                    rewards_reserve: 100,
+                    storage_gas_price: NonZero::<u64>::MIN,
+                    execution_gas_price: NonZero::<u64>::MIN,
                 }
                 .encode_to_vec(),
             ),
@@ -1362,6 +1369,11 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    max_supply: 1000,
+                    pow_reward_pool: 5,
+                    rewards_reserve: 100,
+                    storage_gas_price: NonZero::<u64>::MIN,
+                    execution_gas_price: NonZero::<u64>::MIN,
                 }
                 .encode_to_vec(),
             ),
