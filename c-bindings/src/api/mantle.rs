@@ -1,7 +1,9 @@
 use std::ffi::{CStr, CString, c_char};
 
 use lb_c_macros::panic_to_error;
-use lb_http_api_common::bodies::mantle::{MantleTxFeeRequestBody, MantleTxFeeResponseBody};
+use lb_http_api_common::bodies::mantle::{
+    LimitsResponseBody, MantleTxFeeRequestBody, MantleTxFeeResponseBody,
+};
 use lb_node::RuntimeServiceId;
 
 use crate::{
@@ -114,6 +116,88 @@ pub unsafe extern "C" fn mantle_tx_fee(
     match CString::new(response_json) {
         Ok(response_json) => FfiMantleTxFeeResult::ok(response_json.into_raw()),
         Err(error) => FfiMantleTxFeeResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create response CString: {error}"),
+        )),
+    }
+}
+
+/// What a transaction must fit in the era of the current tip, and what its
+/// Operations cost there.
+///
+/// This is a synchronous wrapper that mirrors the node's `GET /mantle/limits`
+/// HTTP handler.
+pub(crate) fn mantle_limits_sync(node: &LogosBlockchainNode) -> StatusResult<LimitsResponseBody> {
+    let runtime_handle = node.get_runtime_handle()?;
+    runtime_handle.block_on(async {
+        let config = lb_api_service::http::mantle::ledger_config_at_tip::<RuntimeServiceId>(
+            node.get_overwatch_handle(),
+        )
+        .await
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to read the era's ledger config: {error}"),
+            )
+        })?;
+        Ok(LimitsResponseBody {
+            max_op_data_size: config.max_op_data_size,
+            max_transactions_size: config.max_transactions_size,
+            max_gas_per_block: config.execution_market.max_gas_per_block.into(),
+            gas_profile: config.gas_profile,
+        })
+    })
+}
+
+pub type FfiMantleLimitsResult = FfiStatusResult<*mut c_char>;
+
+/// What a transaction must fit in the era of the current tip, and what its
+/// Operations cost there.
+///
+/// The response is a JSON string with the exact same schema as the node's
+/// `GET /mantle/limits` HTTP response body: the most bytes of data an
+/// Operation may carry, the most bytes a block's transactions may take, the
+/// most execution gas a block may consume, and the era's gas profile.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+///
+/// # Returns
+///
+/// A [`FfiMantleLimitsResult`] containing the JSON-encoded response on
+/// success, or an [`OperationStatus`] error on failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that `node` is non-null and points to a valid
+/// [`LogosBlockchainNode`].
+///
+/// # Memory Management
+///
+/// This function allocates the returned C string. The caller must free it
+/// using the [`free_cstring`](crate::api::free_cstring) function.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mantle_limits(node: *const LogosBlockchainNode) -> FfiMantleLimitsResult {
+    return_error_if_null_pointer!(node);
+    let node = unsafe { &*node };
+
+    let response = unwrap_or_return_error!(mantle_limits_sync(node));
+
+    let response_json = match serde_json::to_string(&response) {
+        Ok(response_json) => response_json,
+        Err(error) => {
+            return FfiMantleLimitsResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to serialize limits response: {error}"),
+            ));
+        }
+    };
+    match CString::new(response_json) {
+        Ok(response_json) => FfiMantleLimitsResult::ok(response_json.into_raw()),
+        Err(error) => FfiMantleLimitsResult::err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to create response CString: {error}"),
         )),

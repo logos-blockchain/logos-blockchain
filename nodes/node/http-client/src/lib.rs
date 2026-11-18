@@ -504,7 +504,8 @@ impl CommonHttpClient {
         self.post(request_url, &body).await
     }
 
-    /// Get what a transaction must fit in the era of the node's current slot.
+    /// What a transaction must fit in the era of the current tip, and what its
+    /// Operations cost there.
     pub async fn limits(&self, base_url: Url) -> Result<LimitsResponseBody, Error> {
         let request_url = base_url
             .join(MANTLE_LIMITS.trim_start_matches('/'))

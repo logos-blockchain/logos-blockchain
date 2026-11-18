@@ -1849,7 +1849,7 @@ where
     get,
     path = paths::MANTLE_LIMITS,
     responses(
-        (status = 200, description = "Get what a transaction must fit in the era of the current slot"),
+        (status = 200, description = "What a transaction must fit in the era of the current tip, and what its Operations cost"),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
@@ -1857,41 +1857,18 @@ pub async fn get_limits<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    RuntimeServiceId: AsServiceId<Cryptarchia<RuntimeServiceId>>
-        + AsServiceId<TimeService>
-        + Debug
-        + Sync
-        + Display
-        + Send
-        + 'static,
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
 {
-    let relay = match handle.relay::<TimeService>().await {
-        Ok(relay) => relay,
-        Err(error) => {
-            return ApiError::internal(error).into_response();
-        }
-    };
-    let (sender, receiver) = oneshot::channel();
-    if let Err(error) = relay.send(TimeServiceMessage::CurrentSlot { sender }).await {
-        return ApiError::internal(error).into_response();
-    }
-    let slot = match receiver.await {
-        Ok(tick) => tick.slot,
-        Err(error) => {
-            return ApiError::internal(error).into_response();
-        }
-    };
-
-    let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(&handle)
-            .await;
-    match chain_api.get_ledger_config(slot).await {
-        Ok(config) => Json(LimitsResponseBody {
+    make_request_and_return_response!(async {
+        let config = mantle::ledger_config_at_tip::<RuntimeServiceId>(&handle).await?;
+        Ok::<_, DynError>(LimitsResponseBody {
             max_op_data_size: config.max_op_data_size,
+            max_transactions_size: config.max_transactions_size,
+            max_gas_per_block: config.execution_market.max_gas_per_block.into(),
+            gas_profile: config.gas_profile,
         })
-        .into_response(),
-        Err(error) => ApiError::internal(error).into_response(),
-    }
+    })
 }
 
 #[utoipa::path(
