@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use lb_core::mantle::transactions::UNITS_PER_LGO;
+use lb_config::consensus::UNITS_PER_LGO;
 use lb_faucet::{
     faucet::{Faucet, run_worker},
     server::{FaucetServerState, faucet_app},

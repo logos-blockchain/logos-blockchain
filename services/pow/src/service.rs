@@ -2705,7 +2705,7 @@ mod tests {
         let (tx_builder, change_notes) = build(
             claim_address,
             REWARD,
-            GasPrices::default(),
+            GasPrices::new(1_000_000_000, 1_000_000_000),
             &genesis,
             &claims,
         )

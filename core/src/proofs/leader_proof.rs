@@ -79,12 +79,8 @@ impl BinaryDecode for Groth16LeaderProof {
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, proof_bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
-        let proof = lb_pol::PoLProof::try_from_bytes(&proof_bytes).map_err(|error| {
-            DecodeError::InvalidValue {
-                type_name: "PoLProof",
-                message: error.to_string().into(),
-            }
-        })?;
+        let proof = lb_pol::PoLProof::try_from_bytes(&proof_bytes)
+            .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
         let (rest, entropy_contribution) = Fr::decode(rest, &())?;
         let (rest, reward_commitment) = NoteCommitment::decode(rest, &())?;
         let (rest, reward_value) = Value::decode(rest, &())?;
@@ -453,7 +449,8 @@ pub fn pol_wallet_inputs(
     let (LowLeaf { leaf: low_aged, .. }, low_aged_path) = low_leaf_witness(aged_set, nullifier)?;
     let (low_leaf_aged_path, low_leaf_aged_selectors) = nodes_and_selectors(&low_aged_path);
 
-    // Both eligible trees hold the set at the same index, so the selectors agree.
+    // Both eligible trees hold the set at the same index, so the selectors
+    // agree.
     let (set_aged_path, set_selectors) =
         nodes_and_selectors(&aged.eligible_path(note_set).ok_or_else(unknown)?);
     let (set_latest_path, _) =
@@ -726,13 +723,14 @@ mod tests {
         let reward = notes::Note::new(500, Fr::from(13u64), ZkPublicKey::new(Fr::from(17u64)));
         let (public, private) =
             test_utils::note_set_leader_inputs(Fr::from(7u64), 1000, Fr::from(11u64), msg, &reward);
-        // The leader computes the entropy contribution before proving, to bind the
-        // proof to the block ID that covers it.
+        // The leader computes the entropy contribution before proving, to bind
+        // the proof to the block ID that covers it.
         let entropy_contribution = private.entropy_contribution();
         let proof = Groth16LeaderProof::prove(private).unwrap();
         assert!(proof.verify(&public, msg));
         assert_eq!(proof.entropy(), entropy_contribution);
-        // The circuit derives the commitment of the node's note, under its value.
+        // The circuit derives the commitment of the node's note, under its
+        // value.
         assert_eq!(proof.reward_commitment(), reward.commitment());
         assert_eq!(proof.reward_value(), 500);
 
@@ -857,7 +855,8 @@ mod tests {
         // The spending secret key does not lead.
         assert!(!check_winning(&note, public, *key.as_fr(), *key.as_fr()));
 
-        // A note staked under another key leads with its staking secret key only.
+        // A note staked under another key leads with its staking secret key
+        // only.
         let staking_secret_key = Fr::from(9u64);
         let staked = notes::Note {
             stake_public_key: kdf_public_key(&staking_secret_key),

@@ -1,6 +1,11 @@
 # === TEMPLATE: shared default, do not edit per release ===
 entropy_sources:
   - "0000000000000000000000000000000000000000000000000000000000000001"
+max_supply: 10000000000000000000
+pow_reward_pool: 50000000000000000
+rewards_reserve: 1000000000000000000
+storage_gas_price: 1000000000
+execution_gas_price: 1000000000
 
 # === PER-RELEASE: edit on every release ===
 chain_id: "X.Y.Z-rc.N"

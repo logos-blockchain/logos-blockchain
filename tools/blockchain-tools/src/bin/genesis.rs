@@ -202,9 +202,10 @@ struct DistributeArgs {
 
 #[derive(Parser, Debug)]
 struct InscribeArgs {
-    /// YAML file containing genesis parameters (`chain_id`, `genesis_time` and
-    /// `entropy_sources`). `entropy_sources` should be a list of hex-encoded
-    /// 32-byte strings.
+    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`,
+    /// `entropy_sources`, `max_supply`, `pow_reward_pool`, `rewards_reserve`,
+    /// `storage_gas_price` and `execution_gas_price`). `entropy_sources` should
+    /// be a list of hex-encoded 32-byte strings.
     #[arg(long, value_name = "FILE")]
     params: PathBuf,
 
@@ -239,11 +240,7 @@ const ERA_FILES_DIR: &str = "era/schedule";
 
 fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     let inscribe_params: InscribeParams = load_yaml_file(&args.inscription_params)?;
-    let inscription_op = inscription::inscribe::<ZkHasher>(
-        inscribe_params.chain_id,
-        inscribe_params.genesis_time,
-        inscribe_params.entropy_sources,
-    );
+    let inscription_op = inscription::inscribe::<ZkHasher>(inscribe_params);
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
@@ -504,11 +501,7 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
 fn run_inscribe(args: &InscribeArgs) -> Result<()> {
     let params: InscribeParams = load_yaml_file(&args.params)?;
 
-    let op = inscription::inscribe::<ZkHasher>(
-        params.chain_id,
-        params.genesis_time,
-        params.entropy_sources,
-    );
+    let op = inscription::inscribe::<ZkHasher>(params);
 
     let op_value = struct_to_yaml_value(&op)?;
     write_yaml(&op_value, args.output.as_deref())

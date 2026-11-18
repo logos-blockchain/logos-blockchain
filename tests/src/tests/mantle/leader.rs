@@ -1,6 +1,6 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
-use lb_core::mantle::transactions::UNITS_PER_LGO;
+use lb_config::consensus::UNITS_PER_LGO;
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody, transfer_funds::WalletTransferFundsRequestBody,

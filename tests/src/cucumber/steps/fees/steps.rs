@@ -4,10 +4,8 @@
 use std::str::FromStr;
 
 use cucumber::{Parameter, gherkin::Step, then, when};
-use lb_core::mantle::{
-    gas::GasPrice,
-    transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
-};
+use lb_config::consensus::GENESIS_GAS_PRICE;
+use lb_core::mantle::gas::GasPrice;
 
 use crate::cucumber::{
     error::{StepError, StepResult},
@@ -33,7 +31,10 @@ pub enum GasPricesReference {
 impl GasPricesReference {
     const fn expected(&self) -> (GasPrice, GasPrice) {
         match self {
-            Self::Genesis => (GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE),
+            Self::Genesis => (
+                GasPrice::new(GENESIS_GAS_PRICE.get()),
+                GasPrice::new(GENESIS_GAS_PRICE.get()),
+            ),
         }
     }
 }

@@ -18,7 +18,7 @@ use lb_node::config::deployment::{
                 MinimumNetworkSize, SchedulerSettings, Settings as BlendDeploymentSettings,
             },
             cryptarchia::{
-                BlockRewardsConfig, EmissionRatio, EpochConfig, MaxGasPerBlock, ServiceParameters,
+                BlockRewardsParameters, EpochConfig, MaxGasPerBlock, ServiceParameters,
                 Settings as CryptarchiaDeploymentSettings,
             },
             time::Settings as TimeDeploymentSettings,
@@ -131,18 +131,19 @@ pub const GAS_PROFILE: GasProfile = GasProfile {
     program_step: Gas::new(13528),
     opening: Gas::new(470),
 };
-/// The block rewards: the stake target, the scale of the emission's weight, the
-/// weight of the pooled fees, a block's emission in full, and the Blend nodes'
-/// share.
-const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
-    3_000_000_000_000_000_000,
-    NonZeroU64::new(120_000_000_000_000_000).unwrap(),
-    NonZeroU16::new(120).unwrap(),
-    10_512,
-    EmissionRatio::new(62_500_000_000_000, NonZeroU64::new(657).unwrap()),
-    ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
-)
-.unwrap();
+/// The block rewards of the specification: `I_max`, `I_min`, the stake target
+/// and the target of the pooled fees as shares of the supply cap, `α_d`, `α_a`,
+/// the window of the pooled fees, and the Blend nodes' share.
+const BLOCK_REWARDS: BlockRewardsParameters = BlockRewardsParameters {
+    max_emission_rate: ProperFraction::new(1, NonZeroU32::new(100).unwrap()).unwrap(),
+    min_emission_rate: NonNegativeRatio::new(0, NonZeroU32::new(1).unwrap()),
+    stake_target: ProperFraction::new(3, NonZeroU32::new(10).unwrap()).unwrap(),
+    pooled_fees_target: NonNegativeRatio::new(1, NonZeroU32::new(1).unwrap()),
+    stake_deviation_weight: NonNegativeRatio::new(1, NonZeroU32::new(4).unwrap()),
+    pooled_fees_weight: NonNegativeRatio::new(1, NonZeroU32::new(1).unwrap()),
+    pooled_fees_window: NonZeroU16::new(120).unwrap(),
+    blend_share: ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
+};
 
 #[must_use]
 #[expect(

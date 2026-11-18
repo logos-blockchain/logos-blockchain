@@ -26,13 +26,9 @@ use std::{num::NonZero, sync::Arc};
 use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        Note, SignedOps, Value,
-        ledger::verification_mode::StandardMode,
-        note_set::NoteSets,
-        ops::channel::withdraw::PendingWithdrawals,
-        transactions::{
-            GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
-        },
+        Note, SignedOps, Value, gas::GasPrice, ledger::verification_mode::StandardMode,
+        note_set::NoteSets, ops::channel::withdraw::PendingWithdrawals,
+        transactions::states::Preverified,
     },
     proofs::leader_proof::LeaderProof as _,
     sdp::Declarations,
@@ -50,7 +46,10 @@ use crate::{
     cryptarchia::{
         EpochState, LedgerState,
         block_density::BlockDensity,
-        tests::{GENESIS_POW_REWARD_POOL, computed_reward_value, config, generate_proof},
+        tests::{
+            GENESIS_GAS_PRICE, GENESIS_POW_REWARD_POOL, GENESIS_REWARDS_RESERVE,
+            computed_reward_value, config, generate_proof,
+        },
     },
     mantle::sdp::SdpLedger,
     test_utils::single_era,
@@ -231,11 +230,14 @@ fn genesis_ledger(config: &Config, leader_utxo: Note) -> Ledger<HeaderId> {
         },
         block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
-        block_rewards: BlockRewards::genesis(config.block_rewards.pooled_fees_window()),
+        block_rewards: BlockRewards::genesis(
+            GENESIS_REWARDS_RESERVE,
+            config.block_rewards.pooled_fees_window(),
+        ),
         average_execution_gas: 0.into(),
-        execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
+        execution_base_fee: GasPrice::new(GENESIS_GAS_PRICE.get()),
         storage_gas_ema: 0.into(),
-        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
+        storage_gas_price: GasPrice::new(GENESIS_GAS_PRICE.get()),
         storage_gas_consumed_in_epoch: 0.into(),
     };
     let state = crate::LedgerState {

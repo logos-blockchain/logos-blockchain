@@ -1,3 +1,5 @@
+use core::num::NonZero;
+
 use ark_ff::AdditiveGroup as _;
 use lb_binary_codec::canonical::codec_fixtures;
 use lb_groth16::Fr;
@@ -20,7 +22,16 @@ codec_fixtures!(
 
 codec_fixtures!(
     GenesisParameters,
-    Self { chain_id: ChainId::try_from("logos-chain-1".to_owned()).unwrap(), start_time: GenesisTime::new(1000), epoch_nonce: Fr::ZERO } => "0d6c6f676f732d636861696e2d31e80300000000000000000000000000000000000000000000000000000000000000000000"
+    Self {
+        chain_id: ChainId::try_from("logos-chain-1".to_owned()).unwrap(),
+        start_time: GenesisTime::new(1000),
+        epoch_nonce: Fr::ZERO,
+        max_supply: 10_000_000_000_000_000_000,
+        pow_reward_pool: 50_000_000_000_000_000,
+        rewards_reserve: 1_000_000_000_000_000_000,
+        storage_gas_price: NonZero::new(1_000_000_000).unwrap(),
+        execution_gas_price: NonZero::new(2_000_000_000).unwrap(),
+    } => "0d6c6f676f732d636861696e2d31e803000000000000000000000000000000000000000000000000000000000000000000000000e8890423c78a0000c52ebca2b100000064a7b3b6e00d00ca9a3b000000000094357700000000"
 );
 
 codec_fixtures!(

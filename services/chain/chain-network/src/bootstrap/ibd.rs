@@ -367,16 +367,17 @@ mod tests {
     use lb_core::{
         block::Proposal,
         era::{AcceptedForkDigests, ForkDigest},
-        mantle::gas::{Gas, GasProfile},
+        mantle::{
+            GenesisParameters, GenesisTime,
+            gas::{Gas, GasProfile},
+        },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_ledger::{
         LedgerState,
-        config::{
-            BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig,
-            RewardPoWConfig,
-        },
+        config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_network_service::{
@@ -957,7 +958,7 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_notes(empty(), &ledger_config, 0),
+            LedgerState::from_notes(empty(), &ledger_config, &genesis_parameters()),
             single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
         )
@@ -1024,6 +1025,47 @@ mod tests {
     };
 
     #[must_use]
+    /// The genesis parameters of a test chain: the supply cap and the genesis
+    /// gas prices of the deployments.
+    fn genesis_parameters() -> GenesisParameters {
+        GenesisParameters {
+            chain_id: "test".to_owned().try_into().unwrap(),
+            start_time: GenesisTime::new(0),
+            epoch_nonce: Fr::ZERO,
+            max_supply: 10_000_000_000_000_000_000,
+            pow_reward_pool: 0,
+            rewards_reserve: 1_000_000_000_000_000_000,
+            storage_gas_price: 1_000_000_000.try_into().unwrap(),
+            execution_gas_price: 1_000_000_000.try_into().unwrap(),
+        }
+    }
+
+    /// The block rewards of the specification, on the supply cap of the
+    /// deployments and a block every 30 seconds.
+    const BLOCK_REWARDS: lb_ledger::config::BlockRewardsConfig =
+        lb_ledger::config::BlockRewardsConfig::new(
+            lb_ledger::config::BlockRewardsParameters {
+                max_emission_rate: lb_utils::math::ProperFraction::new(
+                    1,
+                    NonZero::new(100).unwrap(),
+                )
+                .unwrap(),
+                min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
+                stake_target: lb_utils::math::ProperFraction::new(3, NonZero::new(10).unwrap())
+                    .unwrap(),
+                pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+                pooled_fees_window: NonZero::new(120).unwrap(),
+                blend_share: lb_utils::math::ProperFraction::new(6, NonZero::new(10).unwrap())
+                    .unwrap(),
+            },
+            10_000_000_000_000_000_000,
+            NonZero::new(1).unwrap(),
+            NonNegativeRatio::new(1, NonZero::new(30).unwrap()),
+        )
+        .unwrap();
+
     fn ledger_config() -> lb_ledger::Config {
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
@@ -1093,15 +1135,7 @@ mod tests {
                 ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
                     .unwrap(),
             },
-            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
-            )
-            .unwrap(),
+            block_rewards: BLOCK_REWARDS,
             gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {

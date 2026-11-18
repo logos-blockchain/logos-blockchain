@@ -60,7 +60,7 @@ pub struct Settings {
     pub pow_config: PoWConfig,
     pub execution_market: ExecutionMarketConfig,
     pub storage_market: StorageMarketConfig,
-    pub block_rewards: BlockRewardsConfig,
+    pub block_rewards: BlockRewardsParameters,
     pub gas_profile: GasProfile,
 }
 
@@ -429,5 +429,5 @@ pub use lb_ledger::config::RewardPoWConfig;
 // the same way: their field types refuse a rate outside (0, 1) and a gas limit
 // without a target.
 pub use lb_ledger::config::{
-    BlockRewardsConfig, EmissionRatio, ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig,
+    BlockRewardsParameters, ExecutionMarketConfig, MaxGasPerBlock, StorageMarketConfig,
 };

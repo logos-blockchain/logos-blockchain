@@ -13,7 +13,7 @@ use lb_core::{
     block::BlockNumber,
     era::{AcceptedForkDigests, ForkDigest},
     mantle::{
-        Op, OpProof, SignedOps,
+        GenesisParameters, GenesisTime, Op, OpProof, SignedOps,
         gas::{Gas, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
@@ -33,14 +33,14 @@ use lb_core::{
     sdp::{MinStake, ServiceParameters, ServiceType},
 };
 use lb_cryptarchia_engine::{EpochConfig, Slot};
-use lb_groth16::Fr;
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
     Config, LedgerState,
     config::{
-        BlendPoWConfig, BlockRewardsConfig, EmissionRatio, EraScheduledConfig,
+        BlendPoWConfig, BlockRewardsConfig, BlockRewardsParameters, EraScheduledConfig,
         ExecutionMarketConfig, MaxGasPerBlock, ModulusShift, PoWConfig, RewardPoWConfig,
         StorageMarketConfig, config_for_slot,
     },
@@ -161,7 +161,7 @@ fn build() -> Fixture {
         ZkPublicKey::new(Fr::from(2u64)),
     )];
     let genesis_held = genesis_notes.len();
-    let state = LedgerState::from_notes(genesis_notes, parameters(&config), 1_000_000_000)
+    let state = LedgerState::from_notes(genesis_notes, parameters(&config), &genesis_parameters())
         .with_gas_prices(&GasPrices::new(0, 0));
 
     let create_channel = Op::ChannelInscribe(InscriptionOp {
@@ -229,6 +229,21 @@ fn build() -> Fixture {
     }
 }
 
+/// The genesis parameters of the fixture chain: the supply cap and the genesis
+/// gas prices of the deployments.
+pub fn genesis_parameters() -> GenesisParameters {
+    GenesisParameters {
+        chain_id: "bench".to_owned().try_into().unwrap(),
+        start_time: GenesisTime::new(0),
+        epoch_nonce: Fr::ZERO,
+        max_supply: 10_000_000_000_000_000_000,
+        pow_reward_pool: 1_000_000_000,
+        rewards_reserve: 1_000_000_000_000_000_000,
+        storage_gas_price: NonZero::new(1_000_000_000).unwrap(),
+        execution_gas_price: NonZero::new(1_000_000_000).unwrap(),
+    }
+}
+
 /// The parameters of the only era of the bench.
 pub fn parameters(eras: &EraScheduledConfig) -> &Config {
     config_for_slot(eras, Slot::from(0u64))
@@ -278,6 +293,7 @@ const GAS_PROFILE: GasProfile = GasProfile {
     opening: Gas::new(470),
 };
 
+#[expect(clippy::too_many_lines, reason = "Fixture function.")]
 fn era_parameters() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
@@ -339,12 +355,22 @@ fn era_parameters() -> Config {
                 .unwrap(),
         },
         block_rewards: BlockRewardsConfig::new(
-            3_000_000_000_000_000_000,
-            120_000_000_000_000_000.try_into().unwrap(),
-            120.try_into().unwrap(),
-            10_512,
-            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            BlockRewardsParameters {
+                max_emission_rate: lb_utils::math::ProperFraction::new(1, 100.try_into().unwrap())
+                    .unwrap(),
+                min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
+                    .unwrap(),
+                pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                pooled_fees_window: 120.try_into().unwrap(),
+                blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
+                    .unwrap(),
+            },
+            10_000_000_000_000_000_000,
+            1.try_into().unwrap(),
+            NonNegativeRatio::new(1, 30.try_into().unwrap()),
         )
         .unwrap(),
         gas_profile: GAS_PROFILE,

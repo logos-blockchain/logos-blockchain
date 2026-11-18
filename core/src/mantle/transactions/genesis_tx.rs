@@ -1,4 +1,7 @@
-use core::fmt::{self, Display, Formatter};
+use core::{
+    fmt::{self, Display, Formatter},
+    num::NonZero,
+};
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::Fr;
@@ -48,9 +51,9 @@ pub struct GenesisAllocation {
 
 impl GenesisAllocation {
     // The initial note at `index` of the distribution inscription of op_id
-    // `distribution_op_id`, its nonce derived as the ledger derives the nonce of
-    // every note it creates. That inscription names the Cryptarchia inscription
-    // as its parent, so no other Operation shares its op_id.
+    // `distribution_op_id`, its nonce derived as the ledger derives the nonce
+    // of every note it creates. That inscription names the Cryptarchia
+    // inscription as its parent, so no other Operation shares its op_id.
     #[must_use]
     pub fn note(&self, distribution_op_id: &Hash, index: usize) -> notes::Note {
         notes::Note::new(
@@ -126,7 +129,8 @@ impl GenesisTx {
                     return Err(Error::UnsupportedGenesisOp(unsupported_ops));
                 }
 
-                // Genesis Validation Exemptions 3: the declarations must have no inputs.
+                // Genesis Validation Exemptions 3: the declarations must have
+                // no inputs.
                 for (index, op) in rest.iter().enumerate() {
                     if matches!(op, OpRef::SDPDeclare(declaration) if !declaration.inputs.is_empty())
                     {
@@ -249,8 +253,8 @@ fn valid_distribution_inscription(
 }
 
 impl Hashable for GenesisTx {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
     type Hash = TxHash;
 
@@ -281,13 +285,13 @@ impl GenesisTxTrait for GenesisTx {
             Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
             _ => unreachable!("GenesisTx always has a valid inscription as first op"),
         }
-        .into_state_trusted();
+        .into_state();
 
         let distribution_inscription = match signed_ops.next() {
             Some(SignedOp::ChannelInscribe(signed_operation)) => signed_operation,
             _ => unreachable!("GenesisTx always has a valid distribution inscription as second op"),
         }
-        .into_state_trusted();
+        .into_state();
 
         let declarations = {
             let declarations_vec = signed_ops
@@ -484,6 +488,22 @@ pub struct GenesisParameters {
     pub chain_id: ChainId,
     pub start_time: GenesisTime,
     pub epoch_nonce: Fr,
+    /// `S_cap`: the most tokens the chain will ever hold. The block rewards
+    /// scale with it.
+    pub max_supply: Value,
+    /// The balance the `PoW` reward pool starts with, five thousandths of the
+    /// cap in the genesis spec.
+    pub pow_reward_pool: Value,
+    /// `B_0`: the balance the rewards reserve starts with, `I_max · S_cap · Y`
+    /// in the block rewards spec.
+    pub rewards_reserve: Value,
+    /// `P_STR(0)`: the storage gas price of the first epoch. The market moves
+    /// the price by a fraction of itself, so a zero price would stay zero.
+    pub storage_gas_price: NonZero<u64>,
+    /// The execution base fee of the first block. The
+    /// market moves the fee by a fraction of itself, so a zero fee would stay
+    /// zero.
+    pub execution_gas_price: NonZero<u64>,
 }
 
 #[cfg(test)]
@@ -529,6 +549,11 @@ mod tests {
             chain_id: "test".to_owned().try_into().unwrap(),
             start_time: GenesisTime::new(1000),
             epoch_nonce: Fr::ZERO,
+            max_supply: 1000,
+            pow_reward_pool: 5,
+            rewards_reserve: 100,
+            storage_gas_price: NonZero::<u64>::MIN,
+            execution_gas_price: NonZero::<u64>::MIN,
         }
     }
 
@@ -794,7 +819,8 @@ mod tests {
 
     #[test]
     fn test_genesis_tx_serde() {
-        // Create a genesis transaction with inscription (no signature proof required)
+        // Create a genesis transaction with inscription (no signature proof
+        // required)
         let c = parameters_op();
         let signed_mantle_tx = create_trusted_tx(
             vec![
@@ -817,7 +843,8 @@ mod tests {
 
     #[test]
     fn test_genesis_time_boundaries() {
-        // The u32::MAX unix timestamp is the largest value `GenesisTime` accepts.
+        // The u32::MAX unix timestamp is the largest value `GenesisTime`
+        // accepts.
         let max = OffsetDateTime::from_unix_timestamp(i64::from(u32::MAX)).unwrap();
         assert_eq!(
             GenesisTime::try_from(max).unwrap(),
@@ -866,12 +893,14 @@ mod tests {
         ));
     }
 
-    // The example of Cryptarchia Parameters in the genesis spec: the inscription
-    // decodes to exactly the three parameters.
+    // The example of Cryptarchia Parameters in the genesis spec, followed by a
+    // supply cap of 10^10 LGO, a PoW reward pool of 5 * 10^7 LGO, a rewards
+    // reserve of 10^9 LGO and genesis gas prices of 1 LGO: the inscription
+    // decodes to exactly the eight parameters.
     #[test]
     fn genesis_parameters_decode_the_spec_example() {
         let inscription = hex::decode(
-            "186c6f676f732d626c6f636b636861696e2d6d61696e6e6574030f5c69abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567800",
+            "186c6f676f732d626c6f636b636861696e2d6d61696e6e6574030f5c69abcdef1234567890abcdef1234567890abcdef1234567890abcdef12345678000000e8890423c78a0000c52ebca2b100000064a7b3b6e00d00ca9a3b0000000000ca9a3b00000000",
         )
         .unwrap();
         let parameters = GenesisParameters::decode_all(&inscription, &()).unwrap();
@@ -881,6 +910,11 @@ mod tests {
             ChainId::try_from("logos-blockchain-mainnet".to_owned()).unwrap()
         );
         assert_eq!(parameters.start_time, GenesisTime::new(1_767_640_835));
+        assert_eq!(parameters.max_supply, 10_000_000_000_000_000_000);
+        assert_eq!(parameters.pow_reward_pool, 50_000_000_000_000_000);
+        assert_eq!(parameters.rewards_reserve, 1_000_000_000_000_000_000);
+        assert_eq!(parameters.storage_gas_price.get(), 1_000_000_000);
+        assert_eq!(parameters.execution_gas_price.get(), 1_000_000_000);
         assert_eq!(
             hex::encode(parameters.encode_to_vec()),
             hex::encode(inscription)
@@ -1003,8 +1037,8 @@ mod tests {
         );
         let genesis_tx = GenesisTx::from_tx(tx).expect("the distribution decodes");
         assert_eq!(genesis_tx.distribution().as_slice(), allocations.as_slice());
-        // More than the eight outputs of a ZkTransfer, each nonce derived as the
-        // ledger derives the nonce of every note it creates.
+        // More than the eight outputs of a ZkTransfer, each nonce derived as
+        // the ledger derives the nonce of every note it creates.
         let op_id = distribution.op_id();
         assert_eq!(
             genesis_tx.initial_notes(),
