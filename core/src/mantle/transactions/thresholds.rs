@@ -216,6 +216,7 @@ mod tests {
     use super::*;
     use crate::mantle::{
         Op,
+        gas::test_utils::GAS_PROFILE,
         notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::{
             channel::{
@@ -232,14 +233,16 @@ mod tests {
         transactions::GasPrices,
     };
 
-    const PROFILE: GasProfile = GasProfile::MAINNET;
-
     fn empty() -> OpsGasContext {
-        OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), PROFILE)
+        OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE)
     }
 
     fn existing(channel: ChannelId, threshold: ChannelKeyIndex) -> OpsGasContext {
-        OpsGasContext::new([(channel, threshold)].into(), GasPrices::new(0, 0), PROFILE)
+        OpsGasContext::new(
+            [(channel, threshold)].into(),
+            GasPrices::new(0, 0),
+            GAS_PROFILE,
+        )
     }
 
     fn user_step(root: u64, nullifier: u64, outputs: u64) -> Step {
@@ -278,7 +281,10 @@ mod tests {
             ])
             .by_ref(),
         );
-        assert_eq!(state.root_extensions_gas(&PROFILE), PROFILE.root_gas(4));
+        assert_eq!(
+            state.root_extensions_gas(&GAS_PROFILE),
+            GAS_PROFILE.root_gas(4)
+        );
     }
 
     #[test]
@@ -293,14 +299,14 @@ mod tests {
             ])
             .by_ref(),
         );
-        let expected = PROFILE
+        let expected = GAS_PROFILE
             .root_gas(4)
             .unwrap()
-            .checked_add(PROFILE.root_gas(4).unwrap())
+            .checked_add(GAS_PROFILE.root_gas(4).unwrap())
             .unwrap()
-            .checked_add(PROFILE.root_gas(5).unwrap())
+            .checked_add(GAS_PROFILE.root_gas(5).unwrap())
             .unwrap();
-        assert_eq!(state.root_extensions_gas(&PROFILE), Ok(expected));
+        assert_eq!(state.root_extensions_gas(&GAS_PROFILE), Ok(expected));
     }
 
     #[test]
@@ -308,7 +314,7 @@ mod tests {
         let context = empty();
         let mut state = TxGasState::new(&context);
         state.apply(inscription_of(vec![vec![user_step(7, 1, 1), user_step(8, 2, 1)]]).by_ref());
-        assert_eq!(state.root_extensions_gas(&PROFILE), Ok(Gas::new(0)));
+        assert_eq!(state.root_extensions_gas(&GAS_PROFILE), Ok(Gas::new(0)));
     }
 
     #[test]
@@ -323,12 +329,12 @@ mod tests {
         state.apply(deposit.by_ref());
         let deposited = state.buffered(&NoteSetKey::Channel(inscription.channel_id));
         assert!(deposited > 0);
-        let before = state.root_extensions_gas(&PROFILE).unwrap();
+        let before = state.root_extensions_gas(&GAS_PROFILE).unwrap();
         state.apply(inscription_of(vec![vec![user_step(7, 1, 0)]]).by_ref());
         assert_eq!(
-            state.root_extensions_gas(&PROFILE),
+            state.root_extensions_gas(&GAS_PROFILE),
             Ok(before
-                .checked_add(PROFILE.root_gas(deposited).unwrap())
+                .checked_add(GAS_PROFILE.root_gas(deposited).unwrap())
                 .unwrap())
         );
     }
@@ -339,17 +345,20 @@ mod tests {
         let mut state = TxGasState::new(&context);
         let transfer = Op::Transfer(TransferOp::sample()); // two outputs
         state.apply(transfer.by_ref());
-        assert_eq!(state.root_extensions_gas(&PROFILE), Ok(Gas::new(0)));
+        assert_eq!(state.root_extensions_gas(&GAS_PROFILE), Ok(Gas::new(0)));
         state.apply(transfer.by_ref());
-        assert_eq!(state.root_extensions_gas(&PROFILE), PROFILE.root_gas(2));
+        assert_eq!(
+            state.root_extensions_gas(&GAS_PROFILE),
+            GAS_PROFILE.root_gas(2)
+        );
         // the buffer has grown, so the root is extended over more commitments
         state.apply(transfer.by_ref());
-        let expected = PROFILE
+        let expected = GAS_PROFILE
             .root_gas(2)
             .unwrap()
-            .checked_add(PROFILE.root_gas(4).unwrap())
+            .checked_add(GAS_PROFILE.root_gas(4).unwrap())
             .unwrap();
-        assert_eq!(state.root_extensions_gas(&PROFILE), Ok(expected));
+        assert_eq!(state.root_extensions_gas(&GAS_PROFILE), Ok(expected));
     }
 
     #[test]
@@ -413,14 +422,14 @@ mod tests {
             ])
             .by_ref(),
         );
-        let expected = PROFILE
+        let expected = GAS_PROFILE
             .root_gas(1)
             .unwrap()
-            .checked_add(PROFILE.root_gas(2).unwrap())
+            .checked_add(GAS_PROFILE.root_gas(2).unwrap())
             .unwrap()
-            .checked_add(PROFILE.root_gas(3).unwrap())
+            .checked_add(GAS_PROFILE.root_gas(3).unwrap())
             .unwrap();
-        assert_eq!(state.root_extensions_gas(&PROFILE), Ok(expected));
+        assert_eq!(state.root_extensions_gas(&GAS_PROFILE), Ok(expected));
     }
 
     #[test]

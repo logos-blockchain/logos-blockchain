@@ -43,6 +43,7 @@ pub struct ProgramDeposit {
     // The zone message of the program deposit, signed by its holder through
     // `program_deposit_id`.
     #[serde(with = "serde_inscription")]
+    #[context]
     pub inscription: Inscription,
 }
 
@@ -63,7 +64,7 @@ impl ProgramDeposit {
             commitment_merkle_root: Fr::from(0x37u64),
             value: 0x38,
             intent: Fr::from(0x39u64),
-            inscription: b"deposit-inscription".into(),
+            inscription: Inscription::new_unchecked(b"deposit-inscription".to_vec()),
         }
     }
 }
@@ -87,6 +88,7 @@ pub struct ProgramStep {
     // The zone message of the step, bound by the `op_id` like the rest of the
     // step.
     #[serde(with = "serde_inscription")]
+    #[context]
     pub inscription: Inscription,
 }
 
@@ -146,7 +148,7 @@ impl ProgramStep {
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::from(0x3cu64),
             program_step_id: Fr::from(0x3du64),
-            inscription: b"program-step-inscription".into(),
+            inscription: Inscription::new_unchecked(b"program-step-inscription".to_vec()),
         }
     }
 }

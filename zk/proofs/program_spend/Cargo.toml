@@ -18,8 +18,8 @@ lbc-program-spend-sys = { features = ["prebuilt"], workspace = true }
 lbc-types             = { workspace = true }
 lbp-error             = { workspace = true }
 serde                 = { features = ["derive", "std"], workspace = true }
-serde-big-array       = { workspace = true }
 serde_json            = { workspace = true }
+serde_with            = { features = ["macros"], workspace = true }
 thiserror             = { workspace = true }
 tracing               = { workspace = true }
 

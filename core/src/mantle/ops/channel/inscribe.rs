@@ -8,10 +8,10 @@ use lb_groth16::{Fr, serde::serde_fr};
 use lb_key_management_system_keys::keys::Ed25519Key;
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
 use lb_program_spend::{ZkProgramSpendPublic, ZkProgramSpendVerifierInput};
-use lb_utils::bounded::{Bounded, NonEmptyBoundedVec, UpperBoundedVec};
+use lb_utils::bounded::{Bounded, NonEmptyBoundedVec, UpperBoundedVec, UpperRuntimeBoundedVec};
 use serde::{Deserialize, Serialize};
 
-use super::{ChannelId, MAX_OPERATION_DATA_SIZE, MsgId, step_id};
+use super::{ChannelId, MsgId, step_id};
 use crate::{
     block::BlockNumber,
     crypto::{Digest as _, Hasher},
@@ -49,15 +49,19 @@ use crate::{
     },
 };
 
-/// The maximum number of bytes that can be inscribed in a single inscription
-/// operation, its inscription and the inscriptions of its steps together.
-pub const MAX_BYTES: usize = MAX_OPERATION_DATA_SIZE;
-pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
+/// The bytes an inscription writes, at most as many as the era it is decoded
+/// under allows.
+///
+/// The length is checked against the era's maximum, a `u32`, when the
+/// inscription is built or decoded, and an inscribe holds its inscription and
+/// those of its steps to that maximum together. Serde reads it without an era,
+/// under the largest maximum of the type.
+pub type Inscription = UpperRuntimeBoundedVec<u8, u32>;
 
 pub(super) mod serde_inscription {
-    use serde::{Deserializer, Serializer};
+    use serde::{Deserializer, Serializer, de::Error as _};
 
-    use super::{Inscription, MAX_BYTES};
+    use super::Inscription;
 
     pub fn serialize<S>(inscription: &Inscription, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -70,9 +74,12 @@ pub(super) mod serde_inscription {
     where
         D: Deserializer<'de>,
     {
-        lb_utils::serde::serde_bytes_slice::deserialize_bounded::<Inscription, MAX_BYTES, D>(
-            deserializer,
-        )
+        let bytes = lb_utils::serde::serde_bytes_slice::deserialize_bounded::<
+            Vec<u8>,
+            { u32::MAX as usize },
+            D,
+        >(deserializer)?;
+        Inscription::try_new(bytes, u32::MAX).map_err(D::Error::custom)
     }
 }
 
@@ -93,6 +100,7 @@ pub struct UserStep {
     /// The zone message of the step, signed by its holder through
     /// `user_step_id`
     #[serde(with = "serde_inscription")]
+    #[context]
     pub inscription: Inscription,
 }
 
@@ -283,21 +291,23 @@ impl BinaryEncode for Step {
 }
 
 impl BinaryDecode for Step {
-    type Context = ();
+    /// The most bytes the era the step is decoded under allows its inscription.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        max_inscription_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
+        let context = (*max_inscription_size, ());
         let (input, kind) = u8::decode(input, &())?;
         match kind {
             USER_STEP_KIND => {
-                UserStep::decode(input, &()).map(|(rest, step)| (rest, Self::User(step)))
+                UserStep::decode(input, &context).map(|(rest, step)| (rest, Self::User(step)))
             }
-            PROGRAM_DEPOSIT_KIND => ProgramDeposit::decode(input, &())
+            PROGRAM_DEPOSIT_KIND => ProgramDeposit::decode(input, &context)
                 .map(|(rest, deposit)| (rest, Self::ProgramDeposit(deposit))),
             PROGRAM_STEP_KIND => {
-                ProgramStep::decode(input, &()).map(|(rest, step)| (rest, Self::Program(step)))
+                ProgramStep::decode(input, &context).map(|(rest, step)| (rest, Self::Program(step)))
             }
             other => Err(DecodeError::unknown_discriminant::<Self>(u64::from(other))),
         }
@@ -310,7 +320,7 @@ pub fn user_step_id(channel_id: &ChannelId, step: &UserStep) -> Fr {
     step_id(b"USER_STEP_V1", channel_id, USER_STEP_KIND, step)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -328,24 +338,6 @@ pub struct InscriptionOp {
     pub mini_blocks: MiniBlocks,
 }
 
-impl BinaryEncode for InscriptionOp {
-    fn encoded_length(&self) -> usize {
-        self.channel_id.encoded_length()
-            + self.inscription.encoded_length()
-            + self.parent.encoded_length()
-            + self.signer.encoded_length()
-            + self.mini_blocks.encoded_length()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.channel_id.encode_into(out);
-        self.inscription.encode_into(out);
-        self.parent.encode_into(out);
-        self.signer.encode_into(out);
-        self.mini_blocks.encode_into(out);
-    }
-}
-
 impl BinaryDecode for InscriptionOp {
     /// The most bytes the era the inscription is decoded under allows its
     /// inscriptions together.
@@ -355,22 +347,11 @@ impl BinaryDecode for InscriptionOp {
         input: &'input [u8],
         max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let max = usize::try_from(*max_op_data_size).unwrap_or(usize::MAX);
         let (rest, channel_id) = ChannelId::decode(input, &())?;
-        // The era bounds the inscription before its bytes are read.
-        let (_, inscription_len) = u32::decode(rest, &())?;
-        let inscription_len = usize::try_from(inscription_len).unwrap_or(usize::MAX);
-        if inscription_len > max {
-            return Err(DecodeError::length_out_of_bounds::<Inscription>(
-                inscription_len,
-                0,
-                max,
-            ));
-        }
-        let (rest, inscription) = Inscription::decode(rest, &())?;
+        let (rest, inscription) = Inscription::decode(rest, &(*max_op_data_size, ()))?;
         let (rest, parent) = MsgId::decode(rest, &())?;
         let (rest, signer) = UnverifiedEd25519PublicKey::decode(rest, &())?;
-        let (rest, mini_blocks) = MiniBlocks::decode(rest, &())?;
+        let (rest, mini_blocks) = MiniBlocks::decode(rest, max_op_data_size)?;
         let operation = Self {
             channel_id,
             inscription,
@@ -378,7 +359,7 @@ impl BinaryDecode for InscriptionOp {
             signer,
             mini_blocks,
         };
-        if operation.inscriptions_len() > max {
+        if operation.inscriptions_len() > usize::try_from(*max_op_data_size).unwrap_or(usize::MAX) {
             return Err(DecodeError::invalid_value::<Self>(
                 "the inscriptions of an inscribe total more than the era's max_op_data_size bytes",
             ));
@@ -467,8 +448,8 @@ impl InscriptionOp {
                 actual: MsgId::root().into(),
             })
         } else {
-            // A channel being created holds no note yet, so its inscription carries no
-            // step
+            // A channel being created holds no note yet, so its inscription
+            // carries no step
             Ok(None)
         }
     }
@@ -497,7 +478,7 @@ impl InscriptionOp {
                     inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
                     outputs: [NoteCommitment(Fr::from(0x24u64))].into(),
                     commitment_merkle_root: Fr::from(0x25u64),
-                    inscription: b"step-inscription".into(),
+                    inscription: Inscription::new_unchecked(b"step-inscription".to_vec()),
                 }),
                 Step::ProgramDeposit(ProgramDeposit::sample()),
                 Step::Program(ProgramStep::sample()),
@@ -542,8 +523,8 @@ impl ProvableOperation for InscriptionOp {
 impl OpGasCalculator for InscriptionOp {
     // The Operation and its signature, plus each step beyond its spend: a user
     // step, a program deposit, or a program step with its program proof and an
-    // opening per program note, the spend of a program step covering its program
-    // outputs and its outputs.
+    // opening per program note, the spend of a program step covering its
+    // program outputs and its outputs.
     fn execution_gas(
         &self,
         profile: &GasProfile,
@@ -584,20 +565,12 @@ impl PreverifiableOperation<StandardMode>
     type Error = Error;
 
     fn preverify(&self, context: &Self::Context<'_>) -> Result<(), Self::Error> {
-        // Even if the signer weakness is also checked as part of the `.verify()`
-        // function below, we still explicitly check it here, in case something changes
-        // within the `.verify()` implementation.
+        // Even if the signer weakness is also checked as part of the
+        // `.verify()` function below, we still explicitly check it
+        // here, in case something changes within the `.verify()`
+        // implementation.
         if self.operation().signer.is_weak() {
             return Err(Error::InvalidSigner);
-        }
-
-        // The inscription and the inscriptions of the steps count together
-        let inscriptions_len = self.operation().inscriptions_len();
-        if inscriptions_len > MAX_BYTES {
-            return Err(Error::InscriptionsTooLarge {
-                len: inscriptions_len,
-                max: MAX_BYTES,
-            });
         }
 
         // Check the signature
@@ -623,8 +596,8 @@ impl VerifiableOperation<StandardMode>
         let operation = self.operation();
         let note_set = operation.verify_channel(context)?;
 
-        // The signature is cheap and checked by `preverify`, only the step proofs
-        // are deferred.
+        // The signature is cheap and checked by `preverify`, only the step
+        // proofs are deferred.
         if operation.mini_blocks.is_empty() {
             return Ok(InscriptionDeferredProofs::default());
         }
@@ -683,8 +656,8 @@ impl<'a> StepVerifier<'a> {
         mini_block: &'a MiniBlock,
         step_proofs: &mut impl Iterator<Item = &'p StepProof>,
     ) -> Result<Self, Error> {
-        // The user steps and program deposits of the mini-block cover the buffer as
-        // it stands now.
+        // The user steps and program deposits of the mini-block cover the
+        // buffer as it stands now.
         let covered = self.buffer.len();
         // The program deposits pending for the next program step.
         let mut program_deposits: Vec<&ProgramDeposit> = Vec::new();
@@ -707,8 +680,8 @@ impl<'a> StepVerifier<'a> {
                 }
                 _ => return Err(Error::StepProofKind { step: self.index }),
             }
-            // The next program spends and the next mini-blocks cover the notes this
-            // step creates.
+            // The next program spends and the next mini-blocks cover the notes
+            // this step creates.
             self.buffer.push(&step.outputs().to_vec());
             self.index += 1;
         }
@@ -747,8 +720,8 @@ impl<'a> StepVerifier<'a> {
         Ok(())
     }
 
-    // A program deposit pays its value to a registered program and waits for the
-    // next program step.
+    // A program deposit pays its value to a registered program and waits for
+    // the next program step.
     fn verify_program_deposit(
         &mut self,
         deposit: &ProgramDeposit,
@@ -904,9 +877,10 @@ impl<Mode: VerificationMode> ExecutableOperation
                 })?
                 .clone();
             let index = note_set.index();
-            // A program step creates its notes of the program before the user notes
-            // it pays, the notes extending the buffer the next Operations of the
-            // transaction are proven against.
+            // A program step creates its notes of the program before the user
+            // notes it pays, the notes extending the buffer the
+            // next Operations of the transaction are proven
+            // against.
             let note_set = operation.steps().try_fold(note_set, |note_set, step| {
                 let outputs = step.outputs().to_vec();
                 context.tx_notes.buffer_outputs(index, &outputs);
@@ -917,8 +891,8 @@ impl<Mode: VerificationMode> ExecutableOperation
             context.note_sets = context.note_sets.update_channel(note_set);
         }
 
-        // Update the channel sequencer, its starting slot, the tip message and the tip
-        // slot
+        // Update the channel sequencer, its starting slot, the tip message and
+        // the tip slot
         let (new_sequencer, new_starting_slot) = channel.round_robin(context.block_slot);
         context.channels.channels = context.channels.channels.insert(
             operation.channel_id,
@@ -943,7 +917,6 @@ mod tests {
     };
     use lb_key_management_system_keys::keys::{PK0, ZkKey, ZkPublicKey};
     use lb_program_spend::ZkProgramSpendInputsError;
-    use lb_utils::bounded::BoundedError;
     use lb_zktransfer::{ZkTransferInputsError, ZkTransferVerifierInput};
 
     use super::*;
@@ -952,7 +925,7 @@ mod tests {
         mantle::{
             TxHash,
             batch::{DeferrableProof as _, DeferredProofs},
-            gas::test_utils::FixedThresholds,
+            gas::test_utils::{FixedThresholds, GAS_PROFILE},
             note_set::{CommitmentMmr, NoteSetError, TypedNoteSet},
             notes::{self, derive_note_nullifier},
             ops::{
@@ -1002,34 +975,9 @@ mod tests {
     }
 
     #[test]
-    fn oversized_inscription_rejected_at_construction() {
-        let oversized = vec![0u8; MAX_BYTES + 1];
-        let err = Inscription::try_from(oversized).unwrap_err();
-        assert!(
-            matches!(err, BoundedError::TooManyItems { count, max } if count == MAX_BYTES + 1 && max == MAX_BYTES)
-        );
-    }
-
-    #[test]
-    fn oversized_inscription_rejected_on_deserialize() {
-        let oversized = vec![0u8; MAX_BYTES + 1];
-        let bytes = bincode::serialize(&oversized).unwrap();
-        let err = bincode::deserialize::<Inscription>(&bytes).unwrap_err();
-        assert!(
-            format!("{err}").contains(
-                format!(
-                    "Item count {} exceeds maximum of {MAX_BYTES}",
-                    MAX_BYTES + 1,
-                )
-                .as_str()
-            ),
-            "{err:?}",
-        );
-    }
-
-    #[test]
     fn the_inscriptions_of_an_inscribe_and_its_steps_count_together() {
-        let bytes = |len: usize| Inscription::try_from(vec![0u8; len]).unwrap();
+        const MAX_OP_DATA_SIZE: usize = 64;
+        let bytes = |len: usize| Inscription::new_unchecked(vec![0u8; len]);
         // One byte in a user step, one in a deposit, `program_step_len` in the
         // program step and the rest of the limit in the inscribe.
         let inscribed = |program_step_len: usize| {
@@ -1046,14 +994,14 @@ mod tests {
                 ..ProgramStep::sample()
             };
             InscriptionOp {
-                inscription: bytes(MAX_BYTES - 2),
+                inscription: bytes(MAX_OP_DATA_SIZE - 2),
                 ..with_steps(vec![user.into(), deposit.into(), program.into()])
             }
         };
 
-        let max_op_data_size = u32::try_from(MAX_BYTES).unwrap();
+        let max_op_data_size = u32::try_from(MAX_OP_DATA_SIZE).unwrap();
         let at_the_limit = inscribed(0);
-        assert_eq!(at_the_limit.inscriptions_len(), MAX_BYTES);
+        assert_eq!(at_the_limit.inscriptions_len(), MAX_OP_DATA_SIZE);
         assert_eq!(
             InscriptionOp::decode(&at_the_limit.encode(), &max_op_data_size)
                 .unwrap()
@@ -1061,21 +1009,10 @@ mod tests {
             at_the_limit
         );
 
-        let over = inscribed(1);
         assert!(matches!(
-            InscriptionOp::decode(&over.encode(), &max_op_data_size),
+            InscriptionOp::decode(&inscribed(1).encode(), &max_op_data_size),
             Err(DecodeError::InvalidValue { .. })
         ));
-        let steps: Vec<Step> = over.steps().cloned().collect();
-        assert_eq!(
-            signed(over, sample_proofs(&steps)).preverify(&InscriptionPreverificationContext {
-                tx_hash_view: &tx_hash_view()
-            }),
-            Err(Error::InscriptionsTooLarge {
-                len: MAX_BYTES + 1,
-                max: MAX_BYTES
-            })
-        );
     }
 
     #[test]
@@ -1442,8 +1379,7 @@ mod tests {
     fn inscription_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
             assert_eq!(
-                InscriptionOp::sample()
-                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                InscriptionOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 // 26 + 557
                 Ok(Gas::new(583))
             );
@@ -1458,12 +1394,13 @@ mod tests {
             commitment_merkle_root: Fr::ZERO,
             inscription: Inscription::default(),
         };
-        // 583 + steps * (28 + 4177 + 1758), one input, no output, nothing buffered
+        // 583 + steps * (28 + 4177 + 1758), one input, no output, nothing
+        // buffered
         for (steps, expected) in [(0usize, 583u64), (1, 6_546), (3, 18_472)] {
             let operation = with_steps(vec![Step::User(step.clone()); steps]);
             for threshold in [0, 3] {
                 assert_eq!(
-                    operation.execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                    operation.execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                     Ok(Gas::new(expected))
                 );
             }
@@ -1475,10 +1412,11 @@ mod tests {
         let user = Step::User(step(&[nullifier(1)], &[], Fr::ZERO));
         let deposit = Step::ProgramDeposit(ProgramDeposit::sample());
         let program = Step::Program(ProgramStep::sample());
-        // A user step of one input is 28 + 4177 + 1758 = 5_963, a program deposit
-        // of one input and one output 144 + 4177 + 1758 + 58 = 6_137, and a program
-        // step of one input and one program output 13528 + 4177 + 1758 + 58 + 470 =
-        // 19_991. The transaction pays the root extensions.
+        // A user step of one input is 28 + 4177 + 1758 = 5_963, a program
+        // deposit of one input and one output 144 + 4177 + 1758 + 58 =
+        // 6_137, and a program step of one input and one program output
+        // 13528 + 4177 + 1758 + 58 + 470 = 19_991. The transaction pays
+        // the root extensions.
         for (steps, expected) in [
             (vec![], 583u64),
             // 583 + 19_991
@@ -1500,7 +1438,7 @@ mod tests {
         ] {
             let operation = with_steps(steps);
             assert_eq!(
-                operation.execution_gas(&GasProfile::MAINNET, &FixedThresholds(3)),
+                operation.execution_gas(&GAS_PROFILE, &FixedThresholds(3)),
                 Ok(Gas::new(expected))
             );
         }
@@ -1514,10 +1452,10 @@ mod tests {
             outputs: [commitment(5)].into(),
             ..ProgramStep::sample()
         })]);
-        // 583 + 13528 + the spend of two inputs and three outputs (4177 + 2 * 1758 +
-        // 3 * 58) + two openings (2 * 470)
+        // 583 + 13528 + the spend of two inputs and three outputs (4177 + 2 *
+        // 1758 + 3 * 58) + two openings (2 * 470)
         assert_eq!(
-            operation.execution_gas(&GasProfile::MAINNET, &FixedThresholds(3)),
+            operation.execution_gas(&GAS_PROFILE, &FixedThresholds(3)),
             Ok(Gas::new(583 + 13_528 + 7_867 + 940))
         );
     }
@@ -1568,7 +1506,8 @@ mod tests {
         Ed25519Key::from_bytes(&[15; 32])
     }
 
-    // The sample channel, accrediting the sample signer, with an empty note set.
+    // The sample channel, accrediting the sample signer, with an empty note
+    // set.
     fn empty_state() -> (Channels, NoteSets) {
         let keys = UnverifiedChannelKeys::from(signer().public_key().into_unverified());
         Channels::new().create_channel(sample_channel(), Slot::from(0u64), keys, NoteSets::new())
@@ -1587,7 +1526,7 @@ mod tests {
             .unwrap();
         (
             channels,
-            note_sets.update_channel(set).end_block(0).unwrap(),
+            note_sets.update_channel(set).end_block(0, 1024).unwrap(),
         )
     }
 
@@ -1646,7 +1585,7 @@ mod tests {
     fn user_step_id_hashes_the_channel_and_the_encoded_user_step() {
         let channel = ChannelId::from([0x22u8; 32]);
         let user_step = UserStep {
-            inscription: b"step-inscription".into(),
+            inscription: Inscription::new_unchecked(b"step-inscription".to_vec()),
             ..step(&[nullifier(0x23)], &[commitment(0x24)], Fr::from(0x25u64))
         };
         let mut preimage = b"USER_STEP_V1".to_vec();
@@ -1710,8 +1649,9 @@ mod tests {
 
     #[test]
     fn verify_rejects_steps_on_a_channel_being_created_and_on_the_null_channel() {
-        // Neither holds a note: the null channel has no note set, and a channel being
-        // created gets its set only when the inscription executes.
+        // Neither holds a note: the null channel has no note set, and a channel
+        // being created gets its set only when the inscription
+        // executes.
         for channel_id in [NULL_CHANNEL_ID, ChannelId::from([5u8; 32])] {
             let operation = InscriptionOp {
                 channel_id,
@@ -1772,8 +1712,8 @@ mod tests {
     #[test]
     fn verify_extends_each_step_root_with_the_buffer_before_its_mini_block() {
         let (_, note_sets) = state();
-        // An earlier Operation of the transaction deposited commitment(7) into the
-        // channel.
+        // An earlier Operation of the transaction deposited commitment(7) into
+        // the channel.
         let mut tx_notes = TxNoteState::new();
         tx_notes.buffer_outputs(sample_set(), &[commitment(7)]);
         let mini_blocks = vec![
@@ -1799,7 +1739,8 @@ mod tests {
                 )
                 .frontier_root()
         };
-        // The steps of a mini-block cover the same buffer, whatever their order.
+        // The steps of a mini-block cover the same buffer, whatever their
+        // order.
         for index in 0..2 {
             assert_eq!(
                 deferred.zk_transfers[index]
@@ -1821,7 +1762,8 @@ mod tests {
     #[test]
     fn a_second_inscription_of_the_transaction_covers_the_first_in_its_first_mini_block() {
         let (_, note_sets) = state();
-        // The first inscription of the transaction added commitment(3) to the buffer.
+        // The first inscription of the transaction added commitment(3) to the
+        // buffer.
         let mut tx_notes = TxNoteState::new();
         tx_notes.buffer_outputs(sample_set(), &[commitment(3)]);
         let steps = vec![Step::User(step(&[nullifier(4)], &[], root()))];
@@ -1931,9 +1873,9 @@ mod tests {
     #[test]
     fn an_empty_mini_block_does_not_decode() {
         // One mini-block of no step
-        assert!(MiniBlocks::decode(&[1, 0, 0, 0], &()).is_err());
+        assert!(MiniBlocks::decode(&[1, 0, 0, 0], &u32::MAX).is_err());
         assert_eq!(
-            MiniBlocks::decode(&[0, 0], &()).unwrap().1,
+            MiniBlocks::decode(&[0, 0], &u32::MAX).unwrap().1,
             MiniBlocks::default()
         );
     }
@@ -2037,7 +1979,7 @@ mod tests {
             .clone()
             .execute_adding(&[input.commitment()])
             .unwrap();
-        let note_sets = note_sets.update_channel(set).end_block(1).unwrap();
+        let note_sets = note_sets.update_channel(set).end_block(1, 1024).unwrap();
         let output = notes::Note::new(1_000, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));
         let step = step(
             &[derive_note_nullifier(
@@ -2088,13 +2030,13 @@ mod tests {
         let program = Step::Program(ProgramStep::sample());
         assert_eq!(program.encode()[0], PROGRAM_STEP_KIND);
         assert_eq!(
-            Step::decode(&program.encode(), &()).unwrap(),
+            Step::decode(&program.encode(), &u32::MAX).unwrap(),
             (&[][..], program)
         );
         let deposit = Step::ProgramDeposit(ProgramDeposit::sample());
         assert_eq!(deposit.encode()[0], PROGRAM_DEPOSIT_KIND);
         assert_eq!(
-            Step::decode(&deposit.encode(), &()).unwrap(),
+            Step::decode(&deposit.encode(), &u32::MAX).unwrap(),
             (&[][..], deposit)
         );
         let user = Step::User(step(&[nullifier(2)], &[commitment(3)], Fr::ZERO));
@@ -2102,7 +2044,7 @@ mod tests {
         let mut bytes = user.encode();
         bytes[0] = 0x03;
         assert_eq!(
-            Step::decode(&bytes, &()).unwrap_err(),
+            Step::decode(&bytes, &u32::MAX).unwrap_err(),
             DecodeError::unknown_discriminant::<Step>(3)
         );
     }
@@ -2295,8 +2237,8 @@ mod tests {
     fn verify_extends_deposit_roots_like_their_mini_block_and_the_spend_root_with_the_whole_buffer()
     {
         let (_, note_sets) = state();
-        // An earlier Operation of the transaction deposited commitment(7) into the
-        // channel.
+        // An earlier Operation of the transaction deposited commitment(7) into
+        // the channel.
         let mut tx_notes = TxNoteState::new();
         tx_notes.buffer_outputs(sample_set(), &[commitment(7)]);
         let user = Step::User(step(&[nullifier(9)], &[commitment(10)], root()));
@@ -2549,9 +2491,9 @@ mod tests {
         reason = "the deposit, the spend and the program proof of one step"
     )]
     fn program_step_proofs_verify_end_to_end() {
-        // A user note of 1,000 in the channel deposits it all to the program, whose
-        // spend consumes no note and creates one program note of 1,000, open to
-        // everyone.
+        // A user note of 1,000 in the channel deposits it all to the program,
+        // whose spend consumes no note and creates one program note of
+        // 1,000, open to everyone.
         let secret_key = Fr::from(1u64);
         let user_note = notes::Note::new(
             1_000,
@@ -2569,7 +2511,7 @@ mod tests {
             .clone()
             .execute_adding(&[user_note.commitment()])
             .unwrap();
-        let note_sets = note_sets.update_channel(set).end_block(1).unwrap();
+        let note_sets = note_sets.update_channel(set).end_block(1, 1024).unwrap();
         let (_, proving_key) = three_input_setup(1);
         // Staked by an operator of key 7.
         let program_note = notes::Note {

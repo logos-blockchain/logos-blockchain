@@ -593,7 +593,6 @@ mod tests {
     use std::fmt::{self, Display, Formatter};
 
     use lb_core::mantle::{
-        gas::GasProfile,
         ops::channel::{ChannelId, ChannelKeyIndex},
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
@@ -601,6 +600,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+    use crate::tests::GAS_PROFILE;
 
     struct DummyWallet;
 
@@ -646,7 +646,7 @@ mod tests {
                         gas_context: OpsGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
                             expected_gas_prices,
-                            GasProfile::MAINNET,
+                            GAS_PROFILE,
                         ),
                     };
                     drop(resp_tx.send(Ok(context)));

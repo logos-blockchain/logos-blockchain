@@ -379,7 +379,7 @@ pub fn inscription_of_mini_blocks(
     let fixture = filled_state();
     InscriptionOp {
         channel_id: fixture.channel,
-        inscription: Inscription::try_from(vec![0xa5; payload]).expect("the payload fits"),
+        inscription: Inscription::new_unchecked(vec![0xa5; payload]),
         parent,
         signer: fixture.channel_key.public_key().into_unverified(),
         mini_blocks: MiniBlocks::try_from(

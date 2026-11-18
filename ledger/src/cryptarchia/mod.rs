@@ -801,9 +801,13 @@ impl LedgerState {
         &self.epoch_state.note_sets
     }
 
-    pub fn end_block(self, block_number: BlockNumber) -> Result<Self, NoteSetError> {
+    pub fn end_block(
+        self,
+        block_number: BlockNumber,
+        root_window: BlockNumber,
+    ) -> Result<Self, NoteSetError> {
         Ok(Self {
-            note_sets: self.note_sets.end_block(block_number)?,
+            note_sets: self.note_sets.end_block(block_number, root_window)?,
             ..self
         })
     }
@@ -811,8 +815,11 @@ impl LedgerState {
     pub fn end_block_with_updates(
         self,
         block_number: BlockNumber,
+        root_window: BlockNumber,
     ) -> Result<(Self, Vec<NoteSetUpdate>), NoteSetError> {
-        let (note_sets, updates) = self.note_sets.end_block_with_updates(block_number)?;
+        let (note_sets, updates) = self
+            .note_sets
+            .end_block_with_updates(block_number, root_window)?;
         Ok((Self { note_sets, ..self }, updates))
     }
 
@@ -914,7 +921,7 @@ impl LedgerState {
             .expect("genesis notes fit in the commitment MMR");
         let note_sets = note_sets
             .update_ledger(ledger_set)
-            .end_block(0)
+            .end_block(0, config.root_window)
             .expect("a new tree is hashed without reading the store");
         let (lottery_0, lottery_1) = config
             .lottery_constants()
@@ -948,7 +955,7 @@ impl LedgerState {
             },
             block_density,
             // The genesis values of Block Rewards.
-            block_rewards: BlockRewards::genesis(),
+            block_rewards: BlockRewards::genesis(config.block_rewards.pooled_fees_window()),
             average_execution_gas: 0.into(),
             execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_ema: 0.into(),
@@ -1222,7 +1229,7 @@ pub mod tests {
         state.cryptarchia_ledger.note_sets = note_sets
             .clone()
             .update_ledger(ledger_set)
-            .end_block(state.block_number)
+            .end_block(state.block_number, 1024)
             .unwrap();
         state
     }
@@ -1328,6 +1335,8 @@ pub mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
@@ -1340,6 +1349,7 @@ pub mod tests {
             block_rewards: BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
@@ -1364,7 +1374,30 @@ pub mod tests {
     pub const GENESIS_POW_REWARD_POOL: lb_core::mantle::ops::pow::PowReward = 1_000_000_000;
 
     /// The costs of the deployments' current gas profile.
-    pub const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
+    pub const GAS_PROFILE: GasProfile = GasProfile {
+        transfer: Gas::new(10),
+        program_register: Gas::new(15114),
+        channel_config: Gas::new(24),
+        channel_inscribe: Gas::new(26),
+        channel_deposit: Gas::new(26),
+        channel_withdraw: Gas::new(33),
+        sdp_declare: Gas::new(1693),
+        sdp_withdraw: Gas::new(0),
+        sdp_active: Gas::new(15117),
+        claim_pow_reward: Gas::new(1506),
+        kilobyte: Gas::new(30),
+        note_set: Gas::new(8961),
+        proof: Gas::new(4177),
+        root: Gas::new(2332),
+        buffered: Gas::new(60),
+        nullifier: Gas::new(1758),
+        commitment: Gas::new(58),
+        signature: Gas::new(557),
+        user_step: Gas::new(28),
+        program_deposit: Gas::new(144),
+        program_step: Gas::new(13528),
+        opening: Gas::new(470),
+    };
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests that don't exercise the reward parameters.

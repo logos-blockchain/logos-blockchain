@@ -19,7 +19,7 @@ mod fixture;
 mod micro;
 
 use cycles::{Case, Counter};
-use lb_core::mantle::note_set::{NoteSet, RECENT_ROOTS_WINDOW, TxBuffer};
+use lb_core::mantle::note_set::{NoteSet, TxBuffer};
 use lb_groth16::Fr;
 
 fn counter() -> Counter {
@@ -167,7 +167,7 @@ fn the_ledger_set_holds_its_recent_roots() {
         assert!(set.tx_commitment_root(&empty, &expired, block).is_err());
     }
     // The window is full: the oldest root expires at the next block.
-    let (sets, roots, block) = micro::recent_roots_sets(RECENT_ROOTS_WINDOW);
+    let (sets, roots, block) = micro::recent_roots_sets(fixture::ROOT_WINDOW);
     let set = sets.ledger();
     assert!(
         set.tx_commitment_root(&empty, &roots[0], block + 1)

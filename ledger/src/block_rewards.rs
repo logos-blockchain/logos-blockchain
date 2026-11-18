@@ -1,12 +1,14 @@
-use core::num::{NonZeroI128, NonZeroU128};
+use core::num::{NonZeroI128, NonZeroU16, NonZeroU128};
+use std::collections::VecDeque;
 
 use lb_core::mantle::Value;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::{
+    bounded::{BoundedError, ResizableRuntimeBoundedVecDeque, RuntimeBounded},
+    math::NonNegativeRatio,
+};
 
 use crate::config::{BlockRewardsConfig, EmissionRatio};
 
-/// T, the blocks of the moving average.
-pub const POOLED_FEES_WINDOW: usize = 120;
 /// `S_cap`, the maximum token supply.
 pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
 /// `B_0`, the rewards reserve at genesis.
@@ -24,41 +26,65 @@ pub struct BlockRewardShares {
     pub blend: Value,
 }
 
-/// The pooled fees of the last `POOLED_FEES_WINDOW` blocks, oldest first.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct PooledFeesWindow(#[serde(with = "serde_arrays")] [Value; POOLED_FEES_WINDOW]);
+/// The pooled fees of the last blocks, oldest first: at most the `T` of the
+/// era of the last block, the blocks it lacks counting as pooling nothing.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "PooledFeesWindowFields", into = "PooledFeesWindowFields")]
+pub struct PooledFeesWindow(ResizableRuntimeBoundedVecDeque<Value, u16, 0>);
+
+/// A [`PooledFeesWindow`] as it is stored: its `T` and its pooled fees.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PooledFeesWindowFields {
+    blocks: NonZeroU16,
+    fees: VecDeque<Value>,
+}
 
 impl PooledFeesWindow {
-    /// The window before any block pooled fees.
+    /// The window of `blocks` before any block pooled fees.
     #[must_use]
-    pub const fn empty() -> Self {
-        Self([0; POOLED_FEES_WINDOW])
+    pub const fn empty(blocks: NonZeroU16) -> Self {
+        Self(ResizableRuntimeBoundedVecDeque::empty(blocks.get()))
     }
 
-    /// The window once a block pooled `pooled_fees`: they enter as the last
-    /// entry, and the oldest entry leaves.
+    /// The window once a block of an era of `blocks` pooled `pooled_fees`: a
+    /// window the era shrinks drops its oldest blocks, then the block enters
+    /// last, and the oldest leaves a full window.
     #[must_use]
-    pub const fn with_block(mut self, pooled_fees: Value) -> Self {
-        self.0.rotate_left(1);
-        self.0[POOLED_FEES_WINDOW - 1] = pooled_fees;
+    pub fn with_block(mut self, pooled_fees: Value, blocks: NonZeroU16) -> Self {
+        self.0
+            .try_set_max_len(blocks.get())
+            .expect("a window holds any number of blocks down to none");
+        self.0.push_back_evicting(pooled_fees);
         self
     }
 
     /// The pooled fees of the last block.
     #[must_use]
-    pub const fn last(&self) -> Value {
-        self.0[POOLED_FEES_WINDOW - 1]
+    pub fn last(&self) -> Value {
+        self.0.as_inner().back().copied().unwrap_or_default()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Value> {
-        self.0.iter()
+        self.0.as_inner().iter()
     }
 }
 
-impl From<[Value; POOLED_FEES_WINDOW]> for PooledFeesWindow {
-    fn from(fees: [Value; POOLED_FEES_WINDOW]) -> Self {
-        Self(fees)
+impl TryFrom<PooledFeesWindowFields> for PooledFeesWindow {
+    type Error = BoundedError;
+
+    fn try_from(
+        PooledFeesWindowFields { blocks, fees }: PooledFeesWindowFields,
+    ) -> Result<Self, Self::Error> {
+        ResizableRuntimeBoundedVecDeque::try_new(fees, blocks.get()).map(Self)
+    }
+}
+
+impl From<PooledFeesWindow> for PooledFeesWindowFields {
+    fn from(PooledFeesWindow(window): PooledFeesWindow) -> Self {
+        Self {
+            blocks: NonZeroU16::new(window.max_len()).expect("a window spans at least one block"),
+            fees: RuntimeBounded::from(window).into_inner(),
+        }
     }
 }
 
@@ -76,14 +102,15 @@ pub struct BlockRewards {
 }
 
 impl BlockRewards {
+    /// The block rewards at genesis, over the window of the genesis era.
     #[must_use]
-    pub const fn genesis() -> Self {
+    pub const fn genesis(pooled_fees_window: NonZeroU16) -> Self {
         Self {
             rewards_reserve: REWARDS_RESERVE_GENESIS,
             rewards_pool: 0,
             blend_rewards_closed: 0,
             blend_rewards_pending: 0,
-            pooled_fees_window: PooledFeesWindow::empty(),
+            pooled_fees_window: PooledFeesWindow::empty(pooled_fees_window),
         }
     }
 
@@ -93,7 +120,9 @@ impl BlockRewards {
         total_stake: Value,
         config: &BlockRewardsConfig,
     ) -> Result<(Self, BlockRewardShares), BlockRewardsError> {
-        let pooled_fees_window = self.pooled_fees_window.with_block(pooled_fees);
+        let pooled_fees_window = self
+            .pooled_fees_window
+            .with_block(pooled_fees, config.pooled_fees_window());
         let (release, payout) = block_reward(
             total_stake,
             &pooled_fees_window,
@@ -219,7 +248,13 @@ pub fn block_reward(
     let payout = a_scale
         .checked_sub(a)
         .and_then(|weight| weight.checked_mul(sum_fees))
-        .and_then(|numerator| numerator.checked_div(POOLED_FEES_WINDOW as i128 * a_scale))
+        .and_then(|numerator| {
+            numerator.checked_div(
+                NonZeroI128::from(config.pooled_fees_window())
+                    .get()
+                    .checked_mul(a_scale)?,
+            )
+        })
         .ok_or(BlockRewardsError::OutOfRange)?;
     Ok((
         Value::try_from(release).map_err(|_| BlockRewardsError::OutOfRange)?,
@@ -244,7 +279,7 @@ pub fn leader_share(block_reward: Value, config: &BlockRewardsConfig) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZero;
+    use std::{iter, num::NonZero};
 
     use lb_utils::math::ProperFraction;
 
@@ -259,6 +294,7 @@ mod tests {
         let Some(config) = BlockRewardsConfig::new(
             STAKE_AT_TARGET,
             NonZero::new(120_000_000_000_000_000).unwrap(),
+            NonZero::new(120).unwrap(),
             10_512,
             EmissionRatio::new(62_500_000_000_000, NonZero::new(657).unwrap()),
             ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
@@ -268,19 +304,55 @@ mod tests {
         config
     }
 
+    fn window_of(fees: impl IntoIterator<Item = Value>, blocks: u16) -> PooledFeesWindow {
+        let blocks = NonZero::new(blocks).unwrap();
+        fees.into_iter()
+            .fold(PooledFeesWindow::empty(blocks), |window, fee| {
+                window.with_block(fee, blocks)
+            })
+    }
+
     fn window_with_last(fee: Value) -> PooledFeesWindow {
-        PooledFeesWindow::empty().with_block(fee)
+        window_of([fee], CONFIG.pooled_fees_window().get())
     }
 
     #[test]
     fn a_block_enters_the_window_last_and_pushes_out_the_oldest() {
-        let mut fees = [0; POOLED_FEES_WINDOW];
-        fees[0] = 7;
-        fees[1] = 8;
-        let window = PooledFeesWindow::from(fees).with_block(9);
+        let window = window_of([7, 8].into_iter().chain(iter::repeat_n(0, 118)), 120)
+            .with_block(9, CONFIG.pooled_fees_window());
         assert_eq!(window.last(), 9);
         assert_eq!(window.iter().next(), Some(&8));
         assert_eq!(window.iter().sum::<Value>(), 17);
+    }
+
+    #[test]
+    fn an_era_resizing_the_window_drops_or_awaits_blocks() {
+        // A window of 2 blocks keeps the last two of three.
+        let window = window_of([1, 2, 3], 2);
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [2, 3]);
+        // Shrunk to 1 by the next block's era, it keeps that block only.
+        let window = window.with_block(4, NonZero::new(1).unwrap());
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [4]);
+        // Grown to 3, it keeps every block until it holds three.
+        let window = window
+            .with_block(5, NonZero::new(3).unwrap())
+            .with_block(6, NonZero::new(3).unwrap());
+        assert_eq!(window.iter().copied().collect::<Vec<_>>(), [4, 5, 6]);
+    }
+
+    #[test]
+    fn a_window_lacking_blocks_averages_them_as_pooling_nothing() {
+        // One block pooled 120 units under a window of 120: the average is 1, as
+        // if 119 blocks had pooled nothing. Stake above target: no release.
+        assert_eq!(
+            block_reward(
+                4_000_000_000_000_000_000,
+                &window_with_last(120),
+                REWARDS_RESERVE_GENESIS,
+                &CONFIG
+            ),
+            Ok((0, 1))
+        );
     }
 
     #[test]
@@ -290,7 +362,7 @@ mod tests {
         assert_eq!(
             block_reward(
                 0,
-                &PooledFeesWindow::empty(),
+                &PooledFeesWindow::empty(CONFIG.pooled_fees_window()),
                 REWARDS_RESERVE_GENESIS,
                 &CONFIG
             ),
@@ -311,7 +383,7 @@ mod tests {
         assert_eq!(
             block_reward(
                 4_000_000_000_000_000_000,
-                &PooledFeesWindow::from([10_000_000_000; POOLED_FEES_WINDOW]),
+                &window_of(iter::repeat_n(10_000_000_000, 120), 120),
                 REWARDS_RESERVE_GENESIS,
                 &CONFIG
             ),
@@ -319,7 +391,12 @@ mod tests {
         );
         // The release is capped at the reserve.
         assert_eq!(
-            block_reward(0, &PooledFeesWindow::empty(), 5, &CONFIG),
+            block_reward(
+                0,
+                &PooledFeesWindow::empty(CONFIG.pooled_fees_window()),
+                5,
+                &CONFIG
+            ),
             Ok((5, 0))
         );
     }
@@ -329,7 +406,7 @@ mod tests {
         assert_eq!(leader_share(7, &CONFIG), 2);
         assert_eq!(leader_share(95_129_375_951, &CONFIG), 38_051_750_380);
         assert_eq!(leader_share(Value::MAX, &CONFIG), 7_378_697_629_483_820_646);
-        let (_, shares) = BlockRewards::genesis()
+        let (_, shares) = BlockRewards::genesis(CONFIG.pooled_fees_window())
             .distribute_block_reward(0, 0, &CONFIG)
             .unwrap();
         assert_eq!(
@@ -343,8 +420,8 @@ mod tests {
 
     #[test]
     fn pooled_fee_is_paid_over_exactly_120_blocks() {
-        let mut state = BlockRewards::genesis();
-        for block in 0..POOLED_FEES_WINDOW {
+        let mut state = BlockRewards::genesis(CONFIG.pooled_fees_window());
+        for block in 0..CONFIG.pooled_fees_window().get() {
             let pooled_fees = if block == 0 { 1_000_000_000_000 } else { 0 };
             let shares;
             (state, shares) = state
@@ -375,12 +452,15 @@ mod tests {
             }
         );
         assert_eq!(state.rewards_pool(), 87_600_000_040);
-        assert_eq!(state.pooled_fees_window(), &PooledFeesWindow::empty());
+        assert_eq!(
+            state.pooled_fees_window(),
+            &window_of(iter::repeat_n(0, 120), 120)
+        );
     }
 
     #[test]
     fn block_reward_moves_tokens_between_stocks_only() {
-        let (state, shares) = BlockRewards::genesis()
+        let (state, shares) = BlockRewards::genesis(CONFIG.pooled_fees_window())
             .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
             .unwrap();
         assert_eq!(state.rewards_reserve(), 999_999_991_666_666_667);
@@ -403,7 +483,7 @@ mod tests {
 
     #[test]
     fn settling_an_epoch_closes_the_pending_share_and_pays_nothing_from_it() {
-        let (state, _) = BlockRewards::genesis()
+        let (state, _) = BlockRewards::genesis(CONFIG.pooled_fees_window())
             .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
             .unwrap();
         assert_eq!(state.blend_rewards_closed(), 0);

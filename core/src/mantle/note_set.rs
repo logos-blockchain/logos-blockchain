@@ -137,10 +137,6 @@ const LEDGER_LEAF: usize = 0;
 const SDP_LEAF: usize = 1;
 const FIRST_CHANNEL_LEAF: usize = 2;
 
-// A root can be referenced while validating the 1024 blocks after the last
-// block it was current at.
-pub const RECENT_ROOTS_WINDOW: BlockNumber = 1024;
-
 pub type CommitmentMmr = MerkleMountainRange<NoteCommitment, ZkHasher, 41>;
 /// The store of a note set: its namespace in the store of its [`NoteSets`].
 pub type NoteSetStore = Prefixed<DynKvStore>;
@@ -361,7 +357,7 @@ pub struct NoteSet {
     nullifiers: NullifierImt,
     // root at the end of the last block that changed the set
     committed_root: Fr,
-    // snapshot of each recent root, with the block at whose end it was superseded
+    // snapshot of each recent root, with the first block that cannot reference it
     recent_commitment_roots: RecentRoots,
     // what the set inserted and appended during the current block, reported at its end
     block_nullifiers: VectorSync<NoteNullifier>,
@@ -590,9 +586,9 @@ impl NoteSet {
             .by_root
             .get(commitment_merkle_root)
         {
-            Some((mmr, superseded_at))
+            Some((mmr, expires_at))
                 if *commitment_merkle_root == self.committed_root
-                    || is_recent(*superseded_at, block) =>
+                    || is_recent(*expires_at, block) =>
             {
                 Ok(mmr)
             }
@@ -602,20 +598,27 @@ impl NoteSet {
 
     // Called at the end of `block` on a set the block changed. The nullifiers the
     // block inserted are hashed into the tree here, once each.
-    fn record_commitment_root(mut self, block: BlockNumber) -> Result<Self, NoteSetError> {
+    fn record_commitment_root(
+        mut self,
+        block: BlockNumber,
+        root_window: BlockNumber,
+    ) -> Result<Self, NoteSetError> {
         self.nullifiers = self.nullifiers.seal()?;
+        // The root the block supersedes keeps the window of the block's era,
+        // whatever window a later era sets.
+        let expires_at = block.saturating_add(root_window);
         let previous = self.committed_root;
         if let Some((mmr, _)) = self.recent_commitment_roots.by_root.get(&previous).cloned() {
-            // The empty seed root is current before block 0, so a root is
-            // stored with the block that superseded it.
             self.recent_commitment_roots
-                .insert_mut(previous, mmr, block);
+                .insert_mut(previous, mmr, expires_at);
         }
         self.committed_root = self.commitment_root();
+        // The current root is referenceable until a block supersedes it, which
+        // stamps its expiry then.
         self.recent_commitment_roots.insert_mut(
             self.committed_root,
             self.commitments.clone(),
-            block,
+            expires_at,
         );
         self.recent_commitment_roots
             .expire_mut(&self.committed_root, block);
@@ -632,42 +635,42 @@ fn unextended_root(commitment_merkle_root: &Fr, snapshot: &CommitmentMmr) -> Fr 
     *commitment_merkle_root
 }
 
-const fn is_recent(superseded_at: BlockNumber, block: BlockNumber) -> bool {
-    superseded_at.saturating_add(RECENT_ROOTS_WINDOW) > block
+const fn is_recent(expires_at: BlockNumber, block: BlockNumber) -> bool {
+    expires_at > block
 }
 
-// The recent roots of a set, each with its snapshot and the block at whose end
-// it was superseded, also ordered by that block so a block end removes the
+// The recent roots of a set, each with its snapshot and the first block that
+// cannot reference it, also ordered by that block so a block end removes the
 // expired roots without visiting the others.
 #[derive(Clone, Debug, Default)]
 struct RecentRoots {
     by_root: HashTrieMapSync<Fr, (CommitmentMmr, BlockNumber)>,
-    by_superseded_at: RedBlackTreeSetSync<(BlockNumber, Fr)>,
+    by_expiry: RedBlackTreeSetSync<(BlockNumber, Fr)>,
 }
 
 impl RecentRoots {
-    fn insert_mut(&mut self, root: Fr, mmr: CommitmentMmr, superseded_at: BlockNumber) {
+    fn insert_mut(&mut self, root: Fr, mmr: CommitmentMmr, expires_at: BlockNumber) {
         if let Some((_, previous)) = self.by_root.get(&root) {
-            self.by_superseded_at.remove_mut(&(*previous, root));
+            self.by_expiry.remove_mut(&(*previous, root));
         }
-        self.by_root.insert_mut(root, (mmr, superseded_at));
-        self.by_superseded_at.insert_mut((superseded_at, root));
+        self.by_root.insert_mut(root, (mmr, expires_at));
+        self.by_expiry.insert_mut((expires_at, root));
     }
 
     // Removes the roots other than `current` that cannot be referenced after
-    // `block`. Once a root of the order by block is recent the later ones are
+    // `block`. Once a root of the order by expiry is recent the later ones are
     // too, so the scan stops at the first one.
     fn expire_mut(&mut self, current: &Fr, block: BlockNumber) {
         let expired: Vec<(BlockNumber, Fr)> = self
-            .by_superseded_at
+            .by_expiry
             .iter()
-            .take_while(|(superseded_at, _)| !is_recent(*superseded_at, block))
+            .take_while(|(expires_at, _)| !is_recent(*expires_at, block))
             .filter(|(_, root)| root != current)
             .copied()
             .collect();
         for entry in &expired {
             self.by_root.remove_mut(&entry.1);
-            self.by_superseded_at.remove_mut(entry);
+            self.by_expiry.remove_mut(entry);
         }
     }
 }
@@ -1046,13 +1049,20 @@ impl NoteSets {
         Ok(self.update(index, added))
     }
 
-    pub fn end_block(mut self, block: BlockNumber) -> Result<Self, NoteSetError> {
+    /// Records the root of every set `block` changed. A root the block
+    /// supersedes stays referenceable while validating the `root_window`
+    /// blocks after it.
+    pub fn end_block(
+        mut self,
+        block: BlockNumber,
+        root_window: BlockNumber,
+    ) -> Result<Self, NoteSetError> {
         for index in self.changed.clone().iter().copied() {
             // `record_commitment_root` computes the commitment root of the set once.
             let set = self
                 .expect_set(index)
                 .clone()
-                .record_commitment_root(block)?;
+                .record_commitment_root(block, root_window)?;
             let leaf = self.leaf(index).expect("a changed set exists");
             self.eligible = self.eligible.update(
                 leaf,
@@ -1069,6 +1079,7 @@ impl NoteSets {
     pub fn end_block_with_updates(
         self,
         block: BlockNumber,
+        root_window: BlockNumber,
     ) -> Result<(Self, Vec<NoteSetUpdate>), NoteSetError> {
         let mut changed: Vec<(usize, NoteSetIndex)> = self
             .changed
@@ -1087,7 +1098,7 @@ impl NoteSets {
                 }
             })
             .collect();
-        Ok((self.end_block(block)?, updates))
+        Ok((self.end_block(block, root_window)?, updates))
     }
 
     #[must_use]
@@ -1493,7 +1504,7 @@ mod serde_recent_commitment_roots {
         #[serde(with = "serde_fr")]
         root: Fr,
         mmr: CommitmentMmr,
-        superseded_at: BlockNumber,
+        expires_at: BlockNumber,
     }
 
     pub fn serialize<S: Serializer>(roots: &RecentRoots, serializer: S) -> Result<S::Ok, S::Error> {
@@ -1501,10 +1512,10 @@ mod serde_recent_commitment_roots {
         let mut entries: Vec<Entry> = roots
             .by_root
             .iter()
-            .map(|(root, (mmr, superseded_at))| Entry {
+            .map(|(root, (mmr, expires_at))| Entry {
                 root: *root,
                 mmr: mmr.clone(),
-                superseded_at: *superseded_at,
+                expires_at: *expires_at,
             })
             .collect();
         entries.sort_by_key(|entry| entry.root);
@@ -1514,10 +1525,10 @@ mod serde_recent_commitment_roots {
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<RecentRoots, D::Error> {
-        // the order by block is rebuilt from the entries
+        // the order by expiry is rebuilt from the entries
         let mut roots = RecentRoots::default();
         for entry in Vec::<Entry>::deserialize(deserializer)? {
-            roots.insert_mut(entry.root, entry.mmr, entry.superseded_at);
+            roots.insert_mut(entry.root, entry.mmr, entry.expires_at);
         }
         Ok(roots)
     }
@@ -1571,51 +1582,51 @@ mod test {
             .clone()
             .execute_adding(&[note_commitment])
             .unwrap();
-        sets.update_ledger(set).end_block(block).unwrap()
+        sets.update_ledger(set).end_block(block, 1024).unwrap()
     }
 
-    // The recent roots of `set` with the block at whose end each was superseded,
-    // after checking the order by block holds the same entries.
+    // The recent roots of `set` with the first block that cannot reference each,
+    // after checking the order by expiry holds the same entries.
     fn recent_entries(set: &NoteSet) -> HashMap<Fr, BlockNumber> {
         let roots = &set.recent_commitment_roots;
         let entries: HashMap<Fr, BlockNumber> = roots
             .by_root
             .iter()
-            .map(|(root, (_, superseded_at))| (*root, *superseded_at))
+            .map(|(root, (_, expires_at))| (*root, *expires_at))
             .collect();
         let ordered: HashMap<Fr, BlockNumber> = roots
-            .by_superseded_at
+            .by_expiry
             .iter()
-            .map(|(superseded_at, root)| (*root, *superseded_at))
+            .map(|(expires_at, root)| (*root, *expires_at))
             .collect();
-        assert_eq!(roots.by_superseded_at.size(), entries.len());
+        assert_eq!(roots.by_expiry.size(), entries.len());
         assert_eq!(ordered, entries);
         entries
     }
 
     // The recent roots kept by scanning every one of them at the end of a block
-    // that changed the set.
+    // that changed the set, each with the expiry the block stamped.
     struct ScannedRoots {
         committed: Fr,
         roots: HashMap<Fr, BlockNumber>,
     }
 
     impl ScannedRoots {
-        fn record(&mut self, committed: Fr, block: BlockNumber) {
+        fn record(&mut self, committed: Fr, block: BlockNumber, root_window: BlockNumber) {
+            let expires_at = block + root_window;
             if self.roots.contains_key(&self.committed) {
-                self.roots.insert(self.committed, block);
+                self.roots.insert(self.committed, expires_at);
             }
             self.committed = committed;
-            self.roots.insert(committed, block);
-            self.roots.retain(|root, superseded_at| {
-                *root == committed || is_recent(*superseded_at, block)
-            });
+            self.roots.insert(committed, expires_at);
+            self.roots
+                .retain(|root, expires_at| *root == committed || is_recent(*expires_at, block));
         }
 
         fn accepts(&self, root: &Fr, block: BlockNumber) -> bool {
-            self.roots.get(root).is_some_and(|superseded_at| {
-                *root == self.committed || is_recent(*superseded_at, block)
-            })
+            self.roots
+                .get(root)
+                .is_some_and(|expires_at| *root == self.committed || is_recent(*expires_at, block))
         }
     }
 
@@ -1643,9 +1654,15 @@ mod test {
             } else {
                 set.execute_adding(&[commitment(block + 1)]).unwrap()
             };
-            sets = sets.update_ledger(set).end_block(block).unwrap();
+            // an era shortens the window halfway, which the roots superseded
+            // before it keep
+            let root_window = if block < 2000 { 1024 } else { 600 };
+            sets = sets
+                .update_ledger(set)
+                .end_block(block, root_window)
+                .unwrap();
             let set = sets.ledger();
-            scanned.record(set.commitment_root(), block);
+            scanned.record(set.commitment_root(), block, root_window);
             if !seen.contains(&set.commitment_root()) {
                 seen.push(set.commitment_root());
             }
@@ -1659,7 +1676,13 @@ mod test {
                 assert_eq!(recent_entries(&decoded), scanned.roots);
             }
             let set = sets.ledger();
-            for next in [block + 1, block + 1024, block + 1025] {
+            for next in [
+                block + 1,
+                block + 600,
+                block + 601,
+                block + 1024,
+                block + 1025,
+            ] {
                 for root in &seen {
                     assert_eq!(
                         set.recent_mmr(root, next).is_ok(),
@@ -1900,7 +1923,10 @@ mod test {
             .clone()
             .execute_adding(&[commitment(2)])
             .unwrap();
-        let sets = sets.update(channel, channel_set).end_block(10).unwrap();
+        let sets = sets
+            .update(channel, channel_set)
+            .end_block(10, 1024)
+            .unwrap();
         let set = sets.get(channel).unwrap();
         assert!(
             set.tx_commitment_root(&TxBuffer::new(), &empty, 1033)
@@ -2090,7 +2116,10 @@ mod test {
             .unwrap()
             .execute_spending(&[nullifier(3)])
             .unwrap();
-        let sets = sets.update(channel, channel_set).end_block(2).unwrap();
+        let sets = sets
+            .update(channel, channel_set)
+            .end_block(2, 1024)
+            .unwrap();
         assert!(
             serde_json::to_string(&sets).is_err(),
             "a pending block is not encoded"
@@ -2150,7 +2179,10 @@ mod test {
             .clone()
             .execute_spending(&[nullifier(7), nullifier(3)])
             .unwrap();
-        let sets = sets.update(channel, channel_set).end_block(0).unwrap();
+        let sets = sets
+            .update(channel, channel_set)
+            .end_block(0, 1024)
+            .unwrap();
         let store = in_memory_store();
         let moved = sets.move_to(Arc::clone(&store)).unwrap();
         assert_eq!(moved, sets);
@@ -2217,7 +2249,7 @@ mod test {
             .unwrap();
         let sets = sets.update(channel, channel_set).update_ledger(ledger);
 
-        let (sets, updates) = sets.end_block_with_updates(1).unwrap();
+        let (sets, updates) = sets.end_block_with_updates(1, 1024).unwrap();
         assert_eq!(
             updates,
             vec![
@@ -2240,7 +2272,7 @@ mod test {
             .unwrap();
         let (_, next) = sets
             .update_ledger(ledger)
-            .end_block_with_updates(2)
+            .end_block_with_updates(2, 1024)
             .unwrap();
         assert_eq!(
             next,

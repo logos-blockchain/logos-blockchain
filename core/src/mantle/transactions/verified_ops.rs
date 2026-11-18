@@ -124,7 +124,7 @@ mod tests {
         .into();
         let (channels, note_sets) =
             Channels::new().create_channel(channel_id, Slot::from(0u64), keys, NoteSets::new());
-        let note_sets = note_sets.end_block(0).unwrap();
+        let note_sets = note_sets.end_block(0, 1024).unwrap();
         let commitment_merkle_root = note_sets
             .channel(&channel_id)
             .expect("the channel holds a note set")

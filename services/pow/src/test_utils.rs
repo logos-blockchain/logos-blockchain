@@ -5,7 +5,10 @@ use std::{
     time::Duration,
 };
 
-use lb_core::{era::ForkDigest, mantle::gas::GasProfile};
+use lb_core::{
+    era::ForkDigest,
+    mantle::gas::{Gas, GasProfile},
+};
 use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use time::OffsetDateTime;
 
@@ -19,7 +22,30 @@ pub const SLOTS_PER_EPOCH: u64 = 100;
 pub const PAYLOAD_BODY_SIZE: usize = 17_752;
 
 /// The costs of the deployments' current gas profile.
-pub const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
+pub const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(10),
+    program_register: Gas::new(15114),
+    channel_config: Gas::new(24),
+    channel_inscribe: Gas::new(26),
+    channel_deposit: Gas::new(26),
+    channel_withdraw: Gas::new(33),
+    sdp_declare: Gas::new(1693),
+    sdp_withdraw: Gas::new(0),
+    sdp_active: Gas::new(15117),
+    claim_pow_reward: Gas::new(1506),
+    kilobyte: Gas::new(30),
+    note_set: Gas::new(8961),
+    proof: Gas::new(4177),
+    root: Gas::new(2332),
+    buffered: Gas::new(60),
+    nullifier: Gas::new(1758),
+    commitment: Gas::new(58),
+    signature: Gas::new(557),
+    user_step: Gas::new(28),
+    program_deposit: Gas::new(144),
+    program_step: Gas::new(13528),
+    opening: Gas::new(470),
+};
 
 /// A schedule with an era per reward window of `reward_windows`, era `i`
 /// starting at epoch `i` with the reward window `reward_windows[i]`, rewards

@@ -359,6 +359,7 @@ mod tests {
                 channels: &channels,
                 pending_withdrawals: PendingWithdrawals::new(),
                 block_slot: Slot::default(),
+                withdraw_delay: Slot::from(86_400u64),
             })
             .expect("the channel has a note set");
 
@@ -375,6 +376,7 @@ mod tests {
             channels: &channels,
             pending_withdrawals: PendingWithdrawals::new(),
             block_slot: Slot::default(),
+            withdraw_delay: Slot::from(86_400u64),
         });
 
         assert_eq!(

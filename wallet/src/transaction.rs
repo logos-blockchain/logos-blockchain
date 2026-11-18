@@ -392,7 +392,6 @@ mod tests {
     use std::collections::HashSet;
 
     use lb_core::mantle::{
-        gas::GasProfile,
         ops::{
             sdp::{SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -408,16 +407,12 @@ mod tests {
     use super::*;
     use crate::{
         DEFAULT_FEE_MARGIN_PERCENT,
-        test_utils::{FORK_DIGEST, known, nullifier, pk},
+        test_utils::{FORK_DIGEST, GAS_PROFILE, known, nullifier, pk},
     };
 
     fn free_context() -> OpsContext {
         OpsContext {
-            gas_context: OpsGasContext::new(
-                HashMap::new(),
-                GasPrices::new(0, 0),
-                GasProfile::MAINNET,
-            ),
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE),
         }
     }
 
@@ -687,7 +682,7 @@ mod tests {
             gas_context: OpsGasContext::new(
                 HashMap::new(),
                 GasPrices::new(execution, storage),
-                GasProfile::MAINNET,
+                GAS_PROFILE,
             ),
         };
         let (execution, storage) = (60_563_532, 753_662_110);

@@ -50,10 +50,9 @@ pub fn saved_tip_era(recovery_data: &RecoveryData) -> Result<Option<TipEra>, Dyn
 
 /// The state the chain service saves on a timer, to restart from.
 ///
-/// The state of the LIB is not in it: the nullifier store keeps it, in the
-/// anchor written with every finalization of its LIB (see
-/// [`lb_ledger::Anchor`]), the LIB the restart starts from. The LIB saved here
-/// may be older.
+/// It does not hold the ledger state of the LIB: that is the
+/// [`lb_ledger::LibState`] saved in the nullifier DB each time the LIB
+/// moves, which a restart starts from. The LIB saved here may be older.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CryptarchiaConsensusState {
     pub(crate) tip: HeaderId,
@@ -166,7 +165,6 @@ mod tests {
     use lb_binary_codec::bincode::SerializeOp as _;
     use lb_core::{
         era::AcceptedForkDigests,
-        mantle::gas::GasProfile,
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
@@ -179,7 +177,7 @@ mod tests {
     use super::*;
     use crate::{
         BlockProviderConfig, BootstrapConfig, OfflineGracePeriodConfig, SyncConfig,
-        tests::{genesis_block_with, ledger_config, note, single_era},
+        tests::{GAS_PROFILE, genesis_block_with, ledger_config, note, single_era},
     };
 
     const FORK_DIGEST: [u8; 32] = [0x22; 32];
@@ -260,6 +258,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -282,12 +282,13 @@ mod tests {
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
-            gas_profile: GasProfile::MAINNET,
+            gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -487,6 +488,8 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            root_window: 1024,
+            channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
                 fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -509,12 +512,13 @@ mod tests {
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
                 3_000_000_000_000_000_000,
                 120_000_000_000_000_000.try_into().unwrap(),
+                120.try_into().unwrap(),
                 10_512,
                 EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
                 lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
-            gas_profile: GasProfile::MAINNET,
+            gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -558,10 +562,10 @@ mod tests {
         );
 
         // Build the full Cryptarchia (with ledger) to get info() before save,
-        // its store finalized at the LIB with the anchor of the LIB.
+        // its DB finalized at the LIB with the LIB state of the LIB.
         let original = Cryptarchia {
             consensus: engine.clone(),
-            ledger: lb_ledger::Ledger::new_anchored(
+            ledger: lb_ledger::Ledger::new_with_lib_state(
                 lib_id,
                 lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
                 single_era(ledger_config.clone()),
@@ -583,12 +587,12 @@ mod tests {
         let saved_state = CryptarchiaConsensusState::from_bytes(&encoded_state).unwrap();
 
         // Restore (simulates initialize_cryptarchia on restart): a new
-        // Cryptarchia from the LIB of the anchor of the store.
+        // Cryptarchia from the LIB recorded in the LIB state of the DB.
         let eras = single_era(ledger_config);
         let mut restored = Cryptarchia::from_restored(
             lb_ledger::Ledger::restore(original.ledger.store(), Arc::clone(&eras))
                 .unwrap()
-                .expect("the store has an anchor"),
+                .expect("the store has a LIB state"),
             saved_state.genesis_id,
             *engine.state(),
         );

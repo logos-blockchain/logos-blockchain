@@ -2,7 +2,7 @@ use std::{array, iter};
 
 use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::{Deserialize, Serialize};
-use serde_big_array::BigArray;
+use serde_with::serde_as;
 
 use crate::{
     MAX_INPUTS, MAX_OUTPUTS, ZkProgramSpendChainInputsData, ZkProgramSpendWalletInputsData,
@@ -96,8 +96,9 @@ impl From<ZkProgramSpendWitnessInputs> for ZkProgramSpendInputsJson {
     }
 }
 
+#[serde_as]
 #[derive(Deserialize, Serialize)]
-pub struct ZkProgramSpendVerifierInputJson(#[serde(with = "BigArray")] [Groth16InputDeser; 37]);
+pub struct ZkProgramSpendVerifierInputJson(#[serde_as(as = "[_; 37]")] [Groth16InputDeser; 37]);
 
 /// Public inputs of the `ZkProgramSpend` verifier circuit as returned by the
 /// prover. This inputs are the ones that need to be fed into the verifier.

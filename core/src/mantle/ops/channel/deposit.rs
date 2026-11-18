@@ -222,7 +222,7 @@ mod test {
 
     use super::*;
     use crate::mantle::{
-        gas::test_utils::FixedThresholds,
+        gas::test_utils::{FixedThresholds, GAS_PROFILE},
         note_set::{CommitmentMmr, NoteSetError},
         ops::{
             channel::{NULL_CHANNEL_ID, UnverifiedChannelKeys},
@@ -265,8 +265,7 @@ mod test {
         for threshold in [0, 1, 3] {
             // 1 input, 1 output, nothing buffered: 26 + 4177 + 1758 + 58
             assert_eq!(
-                DepositOp::sample()
-                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                DepositOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(6_019))
             );
         }
@@ -302,7 +301,7 @@ mod test {
             .unwrap();
         (
             channels,
-            note_sets.update_ledger(ledger).end_block(0).unwrap(),
+            note_sets.update_ledger(ledger).end_block(0, 1024).unwrap(),
         )
     }
 

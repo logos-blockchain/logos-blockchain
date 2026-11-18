@@ -18,7 +18,7 @@ use lb_core::{
     mantle::{
         GenesisParameters, GenesisTime, Note, Op, OpProof, SignedOps, Value,
         channel::Channels,
-        gas::{GasProfile, TxGasCalculator as _},
+        gas::{Gas, GasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex},
         notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
@@ -371,7 +371,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     }
 
     // The store was finalized at `B1` before the restart.
-    anchor_at(&stored, &b1);
+    write_lib_state_at(&stored, &b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         tip_era: TipEra {
@@ -469,7 +469,7 @@ async fn recovery_chain_with_tip_ahead_of_current_slot() {
     let current_slot = b2.header().slot().checked_sub(1.into()).unwrap();
 
     // The store was finalized at `B1` before the restart.
-    anchor_at(&stored, b1);
+    write_lib_state_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         tip_era: TipEra {
@@ -592,7 +592,7 @@ async fn get_block_ids_past_recovered_lib() {
     let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
 
     // The store was finalized at `B1` before the restart.
-    anchor_at(&stored, b1);
+    write_lib_state_at(&stored, b1);
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
         tip_era: TipEra {
@@ -1378,6 +1378,32 @@ pub fn ledger_config_with_max_uncles(
     ledger_config_with_uncles(security_param, 12, max_uncles)
 }
 
+/// The costs of the deployments' current gas profile.
+pub const GAS_PROFILE: GasProfile = GasProfile {
+    transfer: Gas::new(10),
+    program_register: Gas::new(15114),
+    channel_config: Gas::new(24),
+    channel_inscribe: Gas::new(26),
+    channel_deposit: Gas::new(26),
+    channel_withdraw: Gas::new(33),
+    sdp_declare: Gas::new(1693),
+    sdp_withdraw: Gas::new(0),
+    sdp_active: Gas::new(15117),
+    claim_pow_reward: Gas::new(1506),
+    kilobyte: Gas::new(30),
+    note_set: Gas::new(8961),
+    proof: Gas::new(4177),
+    root: Gas::new(2332),
+    buffered: Gas::new(60),
+    nullifier: Gas::new(1758),
+    commitment: Gas::new(58),
+    signature: Gas::new(557),
+    user_step: Gas::new(28),
+    program_deposit: Gas::new(144),
+    program_step: Gas::new(13528),
+    opening: Gas::new(470),
+};
+
 /// [`ledger_config`] with `W`, the uncle reference window in blocks, and
 /// blocks carrying at most `max_uncles` uncles.
 fn ledger_config_with_uncles(
@@ -1431,6 +1457,8 @@ fn ledger_config_with_uncles(
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
         max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        root_window: 1024,
+        channel_withdraw_delay: 86_400.into(),
         execution_market: lb_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
             fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
@@ -1447,12 +1475,13 @@ fn ledger_config_with_uncles(
         block_rewards: lb_ledger::config::BlockRewardsConfig::new(
             3_000_000_000_000_000_000,
             120_000_000_000_000_000.try_into().unwrap(),
+            120.try_into().unwrap(),
             10_512,
             EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
             lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
-        gas_profile: GasProfile::MAINNET,
+        gas_profile: GAS_PROFILE,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<19>(),
@@ -1754,10 +1783,10 @@ pub const GENESIS_ID: [u8; 32] = [0; 32];
 
 /// A chain with only the genesis block, holding `note`.
 /// Finalizes the nullifier store of `stored` at `lib`, a child of genesis,
-/// with its anchor, as the pruning making it the LIB does.
-fn anchor_at(stored: &Cryptarchia, lib: &Block<SignedOps<Preverified, StandardMode>>) {
+/// with its LIB state, as the pruning making it the LIB does.
+fn write_lib_state_at(stored: &Cryptarchia, lib: &Block<SignedOps<Preverified, StandardMode>>) {
     let header = lib.header();
-    lb_ledger::Ledger::new_anchored(
+    lb_ledger::Ledger::new_with_lib_state(
         header.id(),
         stored.ledger.state(&header.id()).unwrap().clone(),
         Arc::clone(stored.ledger.era_schedule()),

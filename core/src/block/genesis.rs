@@ -897,8 +897,7 @@ fn genesis_ops(
 ) -> Result<Ops> {
     let distribution = InscriptionOp {
         channel_id: NULL_CHANNEL_ID,
-        inscription: Inscription::try_from(notes.encode_to_vec())
-            .expect("a distribution of 255 notes fits an inscription"),
+        inscription: Inscription::new_unchecked(notes.encode_to_vec()),
         parent: inscription.id(),
         signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("the null key is 32 bytes"),
         mini_blocks: MiniBlocks::default(),

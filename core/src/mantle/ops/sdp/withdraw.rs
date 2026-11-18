@@ -201,7 +201,7 @@ mod tests {
     use crate::{
         mantle::{
             TxHash,
-            gas::test_utils::FixedThresholds,
+            gas::test_utils::{FixedThresholds, GAS_PROFILE},
             note_set::{NoteSet, NoteSetError},
             notes::{
                 self, NoteCommitment, NoteNullifier, OutputCommitments, derive_note_nullifier,
@@ -349,7 +349,7 @@ mod tests {
             .clone()
             .execute_adding(&[NoteCommitment(Fr::from(1u64))])
             .unwrap();
-        let sets = NoteSets::new().update_sdp(sdp).end_block(0).unwrap();
+        let sets = NoteSets::new().update_sdp(sdp).end_block(0, 1024).unwrap();
         let deferred = verify_withdrawal(
             &preverified(
                 operation,
@@ -598,8 +598,7 @@ mod tests {
         // of the note alone, 2332 + 60
         for threshold in [0, 1, 3] {
             assert_eq!(
-                SDPWithdrawOp::sample()
-                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                SDPWithdrawOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(8_942))
             );
         }

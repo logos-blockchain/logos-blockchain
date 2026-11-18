@@ -445,9 +445,7 @@ mod tests {
     use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 
     use super::*;
-    use crate::mantle::fixtures::ops::op_values::FORK_DIGEST;
-
-    const GAS_PROFILE: GasProfile = GasProfile::MAINNET;
+    use crate::mantle::{fixtures::ops::op_values::FORK_DIGEST, gas::test_utils::GAS_PROFILE};
 
     const CONFIGURATION_THRESHOLD: ChannelKeyIndex = 3;
 

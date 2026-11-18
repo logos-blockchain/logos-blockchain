@@ -597,14 +597,11 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 mod tests {
     use core::{num::NonZero, time::Duration};
 
-    use lb_core::{
-        era::ForkDigest,
-        mantle::{gas::GasProfile, note_set::NoteSetIndex},
-    };
+    use lb_core::{era::ForkDigest, mantle::note_set::NoteSetIndex};
     use lb_groth16::Field as _;
 
     use super::*;
-    use crate::{DEFAULT_FEE_MARGIN_PERCENT, ServiceEraSchedule};
+    use crate::{DEFAULT_FEE_MARGIN_PERCENT, ServiceEraSchedule, tests::GAS_PROFILE};
 
     const EXPIRY_BLOCKS: u64 = 4;
 
@@ -629,7 +626,7 @@ mod tests {
             epoch_length: timing.epoch_length,
             security_param: NonZero::new(5).unwrap(),
             fork_digest: ForkDigest::new([0x11; 32]),
-            gas_profile: GasProfile::MAINNET,
+            gas_profile: GAS_PROFILE,
         })
     }
 
@@ -814,11 +811,7 @@ mod tests {
             .unwrap();
         let funding_pk = ZkPublicKey::new(Fr::ONE);
         let context = OpsContext {
-            gas_context: OpsGasContext::new(
-                HashMap::new(),
-                GasPrices::new(1, 1),
-                GasProfile::MAINNET,
-            ),
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1), GAS_PROFILE),
         };
 
         state

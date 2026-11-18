@@ -266,8 +266,11 @@ mod test {
 
     use super::{test_utils::prove_transfer, *};
     use crate::mantle::{
-        TxHash, gas::test_utils::FixedThresholds, note_set::CommitmentMmr,
-        notes::derive_note_nullifier, ops::op_proof::samples::SampleProof as _,
+        TxHash,
+        gas::test_utils::{FixedThresholds, GAS_PROFILE},
+        note_set::CommitmentMmr,
+        notes::derive_note_nullifier,
+        ops::op_proof::samples::SampleProof as _,
     };
 
     #[test]
@@ -275,8 +278,7 @@ mod test {
         for threshold in [0, 1, 3] {
             // 2 inputs, 2 outputs, nothing buffered: 10 + 4177 + 2 * 1758 + 2 * 58
             assert_eq!(
-                TransferOp::sample()
-                    .execution_gas(&GasProfile::MAINNET, &FixedThresholds(threshold)),
+                TransferOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(7_819))
             );
         }
@@ -297,7 +299,10 @@ mod test {
             .clone()
             .execute_adding(&[commitment(1)])
             .unwrap();
-        NoteSets::new().update_ledger(ledger).end_block(0).unwrap()
+        NoteSets::new()
+            .update_ledger(ledger)
+            .end_block(0, 1024)
+            .unwrap()
     }
 
     fn root() -> Fr {
@@ -509,7 +514,10 @@ mod test {
             .clone()
             .execute_adding(&[input.commitment()])
             .unwrap();
-        let sets = NoteSets::new().update_ledger(ledger).end_block(0).unwrap();
+        let sets = NoteSets::new()
+            .update_ledger(ledger)
+            .end_block(0, 1024)
+            .unwrap();
         let root = sets.ledger().commitment_root();
         assert_eq!(root, mmr.frontier_root());
         let output = Note::new(994, Fr::from(12u64), ZkPublicKey::new(Fr::from(2u64)));

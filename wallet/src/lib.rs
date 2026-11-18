@@ -856,12 +856,41 @@ pub struct WalletBalance {
 
 #[cfg(test)]
 pub(crate) mod test_utils {
-    use lb_core::era::ForkDigest;
+    use lb_core::{
+        era::ForkDigest,
+        mantle::gas::{Gas, GasProfile},
+    };
 
     use super::*;
 
     /// The fork digest the transactions of these tests carry.
     pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
+    /// The costs of the deployments' current gas profile.
+    pub const GAS_PROFILE: GasProfile = GasProfile {
+        transfer: Gas::new(10),
+        program_register: Gas::new(15114),
+        channel_config: Gas::new(24),
+        channel_inscribe: Gas::new(26),
+        channel_deposit: Gas::new(26),
+        channel_withdraw: Gas::new(33),
+        sdp_declare: Gas::new(1693),
+        sdp_withdraw: Gas::new(0),
+        sdp_active: Gas::new(15117),
+        claim_pow_reward: Gas::new(1506),
+        kilobyte: Gas::new(30),
+        note_set: Gas::new(8961),
+        proof: Gas::new(4177),
+        root: Gas::new(2332),
+        buffered: Gas::new(60),
+        nullifier: Gas::new(1758),
+        commitment: Gas::new(58),
+        signature: Gas::new(557),
+        user_step: Gas::new(28),
+        program_deposit: Gas::new(144),
+        program_step: Gas::new(13528),
+        opening: Gas::new(470),
+    };
 
     pub fn pk(v: u64) -> ZkPublicKey {
         ZkPublicKey::new(Fr::from(v))
@@ -894,8 +923,12 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             Op,
-            gas::{GasCost, GasProfile},
-            ops::{channel::inscribe::InscriptionOp, pow::PowNullifier, sdp::SDPDeclareOp},
+            gas::GasCost,
+            ops::{
+                channel::inscribe::{Inscription, InscriptionOp},
+                pow::PowNullifier,
+                sdp::SDPDeclareOp,
+            },
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
     };
@@ -903,7 +936,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_utils::{FORK_DIGEST, known, nullifier, pk},
+        test_utils::{FORK_DIGEST, GAS_PROFILE, known, nullifier, pk},
         transaction::{WitnessContext, op_witnesses},
     };
 
@@ -1245,7 +1278,7 @@ mod tests {
 
     fn context(gas_prices: GasPrices) -> OpsContext {
         OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), gas_prices, GasProfile::MAINNET),
+            gas_context: OpsGasContext::new(HashMap::new(), gas_prices, GAS_PROFILE),
         }
     }
 
@@ -1922,7 +1955,7 @@ mod tests {
         // Add a costly inscription
         let tx_builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
-                inscription: [0xAB; 1000].into(),
+                inscription: Inscription::new_unchecked(vec![0xAB; 1000]),
                 ..InscriptionOp::sample()
             }))
             .unwrap();
