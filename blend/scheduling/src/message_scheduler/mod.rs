@@ -132,8 +132,8 @@ where
         // A generated message goes out at the start of the round after the one
         // it was generated in, so none generated in this epoch goes out in its
         // first round, which starts with the epoch. The clock starts at the
-        // second round: a node whose clock runs behind ours by less than a round
-        // has entered the epoch by then.
+        // second round: a node whose clock runs behind ours by less than a
+        // round has entered the epoch by then.
         let round_clock = Box::new(
             IntervalStream::new(interval)
                 .enumerate()
