@@ -739,6 +739,170 @@ mod tests {
         );
     }
 
+    // The inscription of the next three tests. The channel holds a note of
+    // Alice (5) and one of Bob (4). In its first mini-block Alice pays Carol 2,
+    // which creates `carol_note` and `alice_change`. Its second mini-block
+    // comes behind those two notes.
+    const ALICE: u64 = 1;
+    const BOB: u64 = 2;
+    const CAROL: u64 = 3;
+
+    fn mini_block_channel() -> NoteSetIndex {
+        NoteSetIndex::Channel(ChannelId::from([3; 32]))
+    }
+
+    fn alice_note() -> Note {
+        Note::new(5, Fr::from(1u64), pk(ALICE))
+    }
+
+    fn bob_note() -> Note {
+        Note::new(4, Fr::from(2u64), pk(BOB))
+    }
+
+    fn carol_note() -> Note {
+        Note::new(2, Fr::from(3u64), pk(CAROL))
+    }
+
+    fn alice_change() -> Note {
+        Note::new(3, Fr::from(4u64), pk(ALICE))
+    }
+
+    // The root of the channel on chain, extended with `appended`.
+    fn mini_block_root(appended: &[NoteCommitment]) -> Fr {
+        [alice_note().commitment(), bob_note().commitment()]
+            .iter()
+            .chain(appended)
+            .fold(CommitmentMmr::new(), |mmr, commitment| {
+                mmr.push(*commitment).unwrap()
+            })
+            .frontier_root()
+    }
+
+    // The step of the holder `pk` whose wallet knows `known`, paying `value`
+    // behind `appended`: the notes it spends and creates, the root it names
+    // and the root it is proven against.
+    fn mini_block_step(
+        holder: u64,
+        known: &KnownNotes,
+        appended: &[NoteCommitment],
+        value: Value,
+    ) -> Result<(ZkTransferOpening, Fr, Fr), WalletError> {
+        let channel = mini_block_channel();
+        let state = WalletState::from_genesis(known, &[], &[], Epoch::new(0))?.apply_block(
+            known,
+            &crate::WalletBlock {
+                id: [1; 32].into(),
+                parent: [0; 32].into(),
+                epoch: Epoch::new(0),
+                updates: vec![lb_core::mantle::note_set::NoteSetUpdate {
+                    note_set: channel,
+                    nullifiers: vec![],
+                    commitments: vec![alice_note().commitment(), bob_note().commitment()],
+                }],
+                revealed: vec![],
+                withdrawals: vec![],
+            },
+        )?;
+        let (nullifiers, opening, named_root) = state.note_set_spend(
+            NoteSetSpend {
+                note_set: channel,
+                appended: appended.to_vec(),
+                outputs: vec![Note::new(value, Fr::from(8u64), pk(9))],
+                excess: 0,
+                change_pk: pk(holder),
+                change_nonce: Fr::from(9u64),
+                holder_pks: vec![pk(holder)],
+            },
+            known,
+            &HashSet::new(),
+        )?;
+        let proven_root = step_witness(
+            &state,
+            known,
+            channel,
+            appended,
+            &nullifiers,
+            &opening,
+            Fr::from(77u64),
+        )
+        .unwrap()
+        .witness
+        .tx_commitment_root();
+        Ok((opening, named_root, proven_root))
+    }
+
+    // Mini-block 1: Alice spends her note on chain, proven against the root on
+    // chain.
+    #[test]
+    fn a_first_mini_block_step_is_proven_against_the_root_on_chain() {
+        let known = known(&[(alice_note(), mini_block_channel(), nullifier(ALICE))]);
+
+        let (opening, named_root, proven_root) = mini_block_step(ALICE, &known, &[], 2).unwrap();
+
+        assert_eq!(opening.inputs, vec![alice_note()]);
+        assert_eq!(
+            opening
+                .outputs
+                .iter()
+                .map(|note| note.value)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(named_root, mini_block_root(&[]));
+        assert_eq!(proven_root, mini_block_root(&[]));
+    }
+
+    // Mini-block 2, old note: Bob spends his note on chain behind the notes
+    // Alice's step created, which he knows nothing of but their commitments.
+    #[test]
+    fn a_later_mini_block_step_spends_a_note_on_chain_behind_the_earlier_outputs() {
+        let known = known(&[(bob_note(), mini_block_channel(), nullifier(BOB))]);
+        let appended = [carol_note().commitment(), alice_change().commitment()];
+
+        let (opening, named_root, proven_root) =
+            mini_block_step(BOB, &known, &appended, 1).unwrap();
+
+        assert_eq!(opening.inputs, vec![bob_note()]);
+        assert_eq!(
+            named_root,
+            mini_block_root(&[]),
+            "it names the root on chain"
+        );
+        assert_eq!(proven_root, mini_block_root(&appended));
+        assert_ne!(proven_root, named_root);
+    }
+
+    // Mini-block 2, new note: Carol holds nothing on chain. She imported the
+    // opening of the note Alice's step pays her, and spends it in the same
+    // inscription.
+    #[test]
+    fn a_later_mini_block_step_spends_a_note_an_earlier_one_created() {
+        let known = known(&[(carol_note(), mini_block_channel(), nullifier(CAROL))]);
+        let appended = [carol_note().commitment(), alice_change().commitment()];
+
+        let (opening, named_root, proven_root) =
+            mini_block_step(CAROL, &known, &appended, 2).unwrap();
+
+        assert_eq!(opening.inputs, vec![carol_note()]);
+        assert_eq!(
+            named_root,
+            mini_block_root(&[]),
+            "it names the root on chain"
+        );
+        assert_eq!(proven_root, mini_block_root(&appended));
+
+        // not before the inscription creates it
+        assert_eq!(
+            mini_block_step(CAROL, &known, &[], 2).unwrap_err(),
+            WalletError::InsufficientFunds { available: 0 }
+        );
+        // nor behind the outputs of somebody else alone
+        assert_eq!(
+            mini_block_step(CAROL, &known, &[alice_change().commitment()], 2).unwrap_err(),
+            WalletError::InsufficientFunds { available: 0 }
+        );
+    }
+
     #[test]
     fn op_witness_at_needs_no_opening_for_the_other_operations() {
         let owned = Note::new(1_000, Fr::from(1u64), pk(1));
