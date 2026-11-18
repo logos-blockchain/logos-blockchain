@@ -29,4 +29,8 @@ pub struct ChannelDepositResponseBody {
     /// The note paid to the holder in the channel. A holder whose wallet is not
     /// this node's imports it to withdraw it.
     pub holder_note: Note,
+    /// The change paid to `change_public_key`, if the funding returned any.
+    /// A change key of another wallet imports it to spend it: its nonce is
+    /// random, so the key alone cannot recreate it.
+    pub change_note: Option<Note>,
 }

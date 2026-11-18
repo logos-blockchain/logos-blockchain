@@ -324,8 +324,9 @@ where
         Ok(rx.await??)
     }
 
-    /// The signed transfer of `amount` to `recipient_pk`, and the note it
-    /// creates for the sender to hand over.
+    /// The signed transfer of `amount` to `recipient_pk`, the note it creates
+    /// for the sender to hand over, and the change it returns to `change_pk`,
+    /// for its owner to import when it is a key of another wallet.
     pub async fn transfer_funds(
         &self,
         tip: Option<HeaderId>,
@@ -333,21 +334,34 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<TipResponse<(SignedOps<Preverified, StandardMode>, Note)>, WalletApiError> {
+    ) -> Result<
+        TipResponse<(SignedOps<Preverified, StandardMode>, Note, Option<Note>)>,
+        WalletApiError,
+    > {
         let note = Note::new(amount, crate::random_nonce(), recipient_pk);
         if self.get_known_addresses().await?.contains(&recipient_pk) {
             self.import_note(note, NoteSetIndex::Ledger).await?;
         }
         let mantle_tx_builder = MantleTxBuilder::new().add_ledger_output(note)?;
         let funded_tx_builder = self
-            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, None, None)
+            .fund_tx(
+                tip,
+                mantle_tx_builder.clone(),
+                change_pk,
+                funding_pks,
+                None,
+                None,
+            )
             .await?;
+        let change_note = funded_tx_builder
+            .response
+            .change_note(&mantle_tx_builder, change_pk);
         let TipResponse { tip, response } = self
             .sign_tx(Some(funded_tx_builder.tip), funded_tx_builder.response)
             .await?;
         Ok(TipResponse {
             tip,
-            response: (response, note),
+            response: (response, note, change_note),
         })
     }
 

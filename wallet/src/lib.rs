@@ -1682,6 +1682,46 @@ mod tests {
         );
     }
 
+    /// A change key of another wallet learns its note only from the opening:
+    /// the nonce is random, so its secret key cannot recreate the commitment.
+    #[test]
+    fn the_change_note_to_another_wallet_opens_the_funding_output() {
+        let (alice, bob) = (pk(1), pk(2));
+        let wallet_state = wallet_state_of(&[(
+            Note::new(10000, Fr::from(1u64), alice),
+            NoteSetIndex::Ledger,
+            nullifier(1),
+        )]);
+        let context = context(GasPrices::new(1, 1));
+        let recipient = Note::new(100, Fr::from(4u64), alice);
+        let base = MantleTxBuilder::new().add_ledger_output(recipient).unwrap();
+
+        let funded = wallet_state
+            .fund_tx(
+                &base,
+                bob,
+                Fr::from(3u64),
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            )
+            .unwrap();
+
+        let change = funded
+            .change_note(&base, bob)
+            .expect("the funding returns change");
+        assert_eq!((change.public_key, change.nonce), (bob, Fr::from(3u64)));
+        // What the input does not pay to the recipient or the fee.
+        assert_eq!(i128::from(change.value), 10000 - 100 - funded.net_balance());
+        // The recipient note was the caller's, not the change.
+        assert_eq!(funded.change_note(&base, alice), None);
+        let outputs = funding_transfer(funded).outputs;
+        assert!(outputs.contains(&change.commitment()));
+        // Without a funding, there is no change.
+        assert_eq!(base.change_note(&base, bob), None);
+    }
+
     #[test]
     fn test_fund_tx_with_priority_fee_percentage() {
         let alice = pk(1);

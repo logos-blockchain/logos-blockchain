@@ -197,6 +197,18 @@ impl MantleTxBuilder {
         Ok(self)
     }
 
+    /// The change note a funding of `base` into `self` returns to
+    /// `change_pk`: a ledger output `base` does not create. Its random nonce
+    /// is derived from no key, so this opening is the only way its owner can
+    /// spend it.
+    #[must_use]
+    pub fn change_note(&self, base: &Self, change_pk: ZkPublicKey) -> Option<Note> {
+        self.funding_outputs
+            .iter()
+            .find(|note| note.public_key == change_pk && !base.funding_outputs.contains(note))
+            .copied()
+    }
+
     /// Return a positive change output while reserving the requested
     /// priority fee above the final transaction's mandatory fee.
     pub fn return_change(

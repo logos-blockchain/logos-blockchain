@@ -142,6 +142,10 @@ pub mod transfer_funds {
         /// The note paid to the recipient. A recipient whose wallet is not this
         /// node's imports it to spend it.
         pub recipient_note: Note,
+        /// The change paid to `change_public_key`, if the funding returned any.
+        /// A change key of another wallet imports it to spend it: its nonce is
+        /// random, so the key alone cannot recreate it.
+        pub change_note: Option<Note>,
     }
 
     impl IntoResponse for WalletTransferFundsResponseBody {
@@ -166,7 +170,7 @@ pub mod fund {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            OpProof,
+            Note, OpProof,
             gas::GasCost,
             transactions::{Ops, builder::MantleTxBuilder},
         },
@@ -210,6 +214,10 @@ pub mod fund {
         /// funded transaction hash. `None` if funding required no transfer
         /// (zero fee and no inputs pulled in).
         pub transfer_proof: Option<OpProof>,
+        /// The change paid to `change_public_key`, if the funding returned any.
+        /// A change key of another wallet imports it to spend it: its nonce is
+        /// random, so the key alone cannot recreate it.
+        pub change_note: Option<Note>,
     }
 }
 

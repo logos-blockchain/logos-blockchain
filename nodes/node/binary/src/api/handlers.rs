@@ -1090,6 +1090,10 @@ fn channel_response(result: Result<Option<ChannelState>, DynError>) -> Response 
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The deposit is split, built, funded and submitted in one flow."
+)]
 pub async fn channel_deposit<WalletService, StorageAdapter, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(req): Json<ChannelDepositRequestBody>,
@@ -1211,13 +1215,12 @@ where
                 Some(req.max_tx_fee),
             )
             .await?;
-
+        let change_note = funded_tx_builder.change_note(&tx_builder, req.change_public_key);
         let reserved = added_nullifiers(&tx_builder, &funded_tx_builder)
             .into_iter()
             .chain(split_builder.nullifiers_consumed())
             .collect();
         check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
-
         let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
         let tx_hash = signed_tx.hash();
 
@@ -1234,6 +1237,7 @@ where
         Ok::<_, overwatch::DynError>(ChannelDepositResponseBody {
             hash: tx_hash,
             holder_note,
+            change_note,
         })
     })
 }
@@ -2194,7 +2198,7 @@ pub mod wallet {
 
         match transfer_funds {
             Ok(lb_wallet_service::TipResponse {
-                response: (transaction, recipient_note),
+                response: (transaction, recipient_note, change_note),
                 ..
             }) => {
                 let hash = transaction.hash();
@@ -2219,6 +2223,7 @@ pub mod wallet {
                 WalletTransferFundsResponseBody {
                     hash,
                     recipient_note,
+                    change_note,
                 }
                 .into_response()
             }
@@ -2352,6 +2357,7 @@ pub mod wallet {
             // request, so only the notes the funding added are released.
             let reserved = added_nullifiers(&req.tx_builder, &funded_tx_builder);
             check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
+            let change_note = funded_tx_builder.change_note(&req.tx_builder, req.change_public_key);
 
             let (funded_tx, transfer_proof) = wallet
                 .prove_funding(Some(tip), funded_tx_builder)
@@ -2362,6 +2368,7 @@ pub mod wallet {
                 tip,
                 funded_tx,
                 transfer_proof,
+                change_note,
             })
         })
     }

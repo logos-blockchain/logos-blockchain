@@ -148,6 +148,7 @@ async fn channel_deposit() {
     let ChannelDepositResponseBody {
         hash: deposit_tx_hash,
         holder_note,
+        ..
     } = response
         .json::<ChannelDepositResponseBody>()
         .await

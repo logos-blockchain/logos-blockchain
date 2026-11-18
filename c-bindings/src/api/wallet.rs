@@ -697,7 +697,7 @@ pub(crate) fn transfer_funds_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
     amount: u64,
-) -> StatusResult<(SignedOps<Preverified, StandardMode>, Note)> {
+) -> StatusResult<(SignedOps<Preverified, StandardMode>, Note, Option<Note>)> {
     let runtime_handle = node.get_runtime_handle()?;
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -707,7 +707,7 @@ pub(crate) fn transfer_funds_sync(
         // `post_transactions_transfer_funds`. TODO: Abstract into a common API
         // The created recipient note is returned with the transfer: only the
         // wallet's own recipient keys adopt it, another recipient imports it.
-        let (signed_tx, recipient_note) = api
+        let (signed_tx, recipient_note, change_note) = api
             .transfer_funds(
                 Some(tip),
                 change_public_key,
@@ -730,13 +730,15 @@ pub(crate) fn transfer_funds_sync(
                 format!("Failed to add transaction to mempool: {error}"),
             ));
         }
-        Ok((signed_tx, recipient_note))
+        Ok((signed_tx, recipient_note, change_note))
     })
 }
 
-/// A submitted transfer and the nonce of the note it creates for the
-/// recipient, who needs it, with the amount and its public key, to import
-/// the note.
+/// A submitted transfer, and the openings of the notes it creates.
+///
+/// The recipient needs the nonce of its note, with the amount and its public
+/// key, to import the note. The owner of the change key imports the change the
+/// same way when it is a key of another wallet.
 #[repr(C)]
 #[derive(Default)]
 pub struct TransferFunds {
@@ -744,6 +746,11 @@ pub struct TransferFunds {
     pub hash: Hash,
     /// The recipient note's nonce, a little-endian field element.
     pub recipient_note_nonce: Hash,
+    /// The value of the change note, `0` when the transfer returned none.
+    pub change_note_value: u64,
+    /// The change note's nonce, a little-endian field element, zero when the
+    /// transfer returned no change.
+    pub change_note_nonce: Hash,
 }
 
 pub type FfiTransferFundsResult = FfiStatusResult<TransferFunds>;
@@ -807,7 +814,7 @@ pub unsafe extern "C" fn transfer_funds(
         unwrap_or_return_error!(unsafe { parse_public_key(arguments.recipient_public_key) });
     let amount = Value::from(arguments.amount);
 
-    let (transaction, recipient_note) = unwrap_or_return_error!(transfer_funds_sync(
+    let (transaction, recipient_note, change_note) = unwrap_or_return_error!(transfer_funds_sync(
         node,
         tip,
         change_public_key,
@@ -818,6 +825,8 @@ pub unsafe extern "C" fn transfer_funds(
     FfiTransferFundsResult::ok(TransferFunds {
         hash: transaction.hash().0,
         recipient_note_nonce: fr_to_bytes(&recipient_note.nonce),
+        change_note_value: change_note.map_or(0, |note| note.value),
+        change_note_nonce: change_note.map_or_else(Hash::default, |note| fr_to_bytes(&note.nonce)),
     })
 }
 
@@ -1215,6 +1224,8 @@ pub(crate) fn wallet_fund_tx_sync(
             return Err(error);
         }
 
+        let change_note =
+            funded_tx_builder.change_note(&request.tx_builder, request.change_public_key);
         let (funded_tx, transfer_proof) = api
             .prove_funding(Some(tip), funded_tx_builder)
             .await
@@ -1230,6 +1241,7 @@ pub(crate) fn wallet_fund_tx_sync(
             tip,
             funded_tx,
             transfer_proof,
+            change_note,
         })
     })
 }
