@@ -1,17 +1,17 @@
-use core::time::Duration;
+use core::{num::NonZero, time::Duration};
 
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        GenesisParameters, GenesisTime,
+        GenesisParameters, GenesisTime, Value,
         note_set::CommitmentMmr,
         notes::InputNullifiers,
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
-        transactions::{Distribution, GenesisAllocation, UNITS_PER_LGO},
+        transactions::{Distribution, GenesisAllocation},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
@@ -31,6 +31,25 @@ pub const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
 const LEADER_KEY_PREFIX: &[u8] = b"ld";
 const SDP_KEY_PREFIX: &[u8] = b"sdp";
 const KEY_MATERIAL_LEN: usize = 16;
+
+/// Units of `10^-9` LGO in 1 LGO, the unit the amounts of a test chain are
+/// stated in.
+pub const UNITS_PER_LGO: u64 = 1_000_000_000;
+
+/// The supply cap of a test chain, that of the deployments.
+pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
+
+/// The balance the `PoW` reward pool of a test chain starts with, that of the
+/// deployments.
+pub const GENESIS_POW_REWARD_POOL: Value = 50_000_000_000_000_000;
+
+/// The balance the rewards reserve of a test chain starts with, that of the
+/// deployments.
+pub const GENESIS_REWARDS_RESERVE: Value = 1_000_000_000_000_000_000;
+
+/// The storage gas price and the execution base fee a test chain starts with,
+/// those of the deployments.
+pub const GENESIS_GAS_PRICE: NonZero<u64> = NonZero::new(UNITS_PER_LGO).unwrap();
 
 const REGULAR_NOTE_VALUE: u64 = 100_000 * UNITS_PER_LGO;
 /// The amount each Blend provider of a test chain declares at genesis.
@@ -202,6 +221,11 @@ fn inscription_for_current_test(
                 chain_id,
                 start_time: genesis_time,
                 epoch_nonce: Fr::ZERO,
+                max_supply: MAX_SUPPLY,
+                pow_reward_pool: GENESIS_POW_REWARD_POOL,
+                rewards_reserve: GENESIS_REWARDS_RESERVE,
+                storage_gas_price: GENESIS_GAS_PRICE,
+                execution_gas_price: GENESIS_GAS_PRICE,
             }
             .encode_to_vec(),
         ),
