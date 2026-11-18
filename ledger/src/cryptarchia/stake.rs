@@ -90,7 +90,6 @@ mod tests {
     use super::*;
     use crate::{
         Config,
-        config::EmissionRatio,
         mantle::sdp::{ServiceRewardsParameters, rewards::blend},
         test_utils::{FORK_DIGEST, single_era},
     };
@@ -237,12 +236,25 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: crate::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                crate::config::BlockRewardsParameters {
+                    max_emission_rate: lb_utils::math::ProperFraction::new(
+                        1,
+                        100.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
+                        .unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
+                        .unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                NonNegativeRatio::new(1, 30.try_into().unwrap()),
             )
             .unwrap(),
             gas_profile: crate::cryptarchia::tests::GAS_PROFILE,

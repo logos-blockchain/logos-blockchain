@@ -1,8 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display},
+    io,
     num::NonZero,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use futures::StreamExt as _;
@@ -20,7 +21,7 @@ use lb_core::{
         channel::Channels,
         gas::{Gas, GasProfile, TxGasCalculator as _},
         ledger::verification_mode::StandardMode,
-        note_set::{CommitmentMmr, NoteSetIndex},
+        note_set::{CommitmentMmr, NoteSetError, NoteSetIndex},
         notes::{OutputCommitments, derive_note_nullifier},
         ops::{
             ZkTransferProof,
@@ -49,16 +50,18 @@ use lb_core::{
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
+use lb_imt::store::ImtError;
 use lb_key_management_system_keys::keys::{
     Ed25519Key, UnverifiedEd25519PublicKey, ZkKey, ZkPublicKey,
 };
 use lb_kv_store::MemKv;
 use lb_ledger::{
-    GENESIS_STAKE_SUPPLY, LedgerState,
+    LedgerError, LedgerState,
     config::{
-        BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig,
-        RewardPoWConfig, config_for_slot,
+        BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+        config_for_slot,
     },
+    genesis_stake_supply,
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_mmr::MerklePath;
@@ -81,13 +84,16 @@ use tokio::{
 
 use crate::{
     BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
-    CryptarchiaConsensusState, Error, OfflineGracePeriodConfig, TipEra,
+    CryptarchiaConsensusState, Error, LibInfo, OfflineGracePeriodConfig, TipEra,
+    api::{ApiError, apply_block_api_error},
     relays::CryptarchiaConsensusRelays,
-    service::{get_block_ids, process_block},
+    service::{get_block_ids, go_online, process_block, store_immutable_blocks_index},
 };
 
-#[test]
-fn cryptarchia_switch_to_online() {
+/// A bootstrapping chain `G -- B1 -- B2 -- B3` with `k = 1`, and the slots and
+/// IDs of its blocks: going online finalizes `B2` and prunes `G` and `B1` as
+/// immutable.
+fn bootstrapping_chain_of_three_blocks() -> (Cryptarchia, Vec<(Slot, HeaderId)>) {
     let k = NonZero::<u32>::new(1).unwrap();
     let config = ledger_config(k);
 
@@ -95,21 +101,20 @@ fn cryptarchia_switch_to_online() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
     .unwrap();
 
-    // Add 3 new blocks to the chain
-    let mut block_ids = vec![genesis_id];
+    let mut blocks = vec![(Slot::genesis(), genesis_id)];
     let mut slot = Slot::new(1);
-    while block_ids.len() < 4 {
+    while blocks.len() < 4 {
         // TODO: Use a mock proof system instead of expensive real proof generation,
         // by refactoring `Cryptarchia`.
         let (block, _) = try_build_block(
             &cryptarchia,
-            *block_ids.last().unwrap(),
+            blocks.last().unwrap().1,
             &note,
             secret_key,
             slot,
@@ -126,13 +131,21 @@ fn cryptarchia_switch_to_online() {
         assert!(pruned_blocks.is_empty());
         assert!(reorged_blocks.is_empty());
 
-        block_ids.push(block_header_id);
+        blocks.push((block_header_slot, block_header_id));
         slot = block_header_slot.strict_add(1.into());
     }
+    (cryptarchia, blocks)
+}
+
+#[test]
+fn cryptarchia_switch_to_online() {
+    let (cryptarchia, blocks) = bootstrapping_chain_of_three_blocks();
+    let block_ids = blocks.iter().map(|(_, id)| *id).collect::<Vec<_>>();
 
     // Now, the chain is [G, B1, B2, B3].
     // We now switch to Online and check that LIB advances to B2.
-    let (cryptarchia, pruned_blocks) = cryptarchia.online();
+    let (mut cryptarchia, pruned_blocks) = cryptarchia.online();
+    cryptarchia.prune_ledger_states(&pruned_blocks);
     assert_eq!(cryptarchia.lib(), block_ids[2]);
     // All immutable blocks (G, B1, excluding LIB) should have been pruned
     assert_eq!(
@@ -146,6 +159,117 @@ fn cryptarchia_switch_to_online() {
     // Check the ledger states of immutable blocks have been pruned
     assert!(cryptarchia.ledger.state(&block_ids[0]).is_none());
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
+}
+
+/// An immutable index write as the storage received it.
+struct IndexWrite {
+    ids: BTreeMap<Slot, HeaderId>,
+    // The LIB of the anchor of the nullifier store when the write arrived.
+    anchor: Option<HeaderId>,
+}
+
+/// A storage that only takes immutable index writes, failing the first
+/// `failures` of them.
+struct IndexStorage {
+    api: StorageApi<SignedOps<Preverified, StandardMode>>,
+    writes: Arc<Mutex<Vec<IndexWrite>>>,
+    stored: Arc<Mutex<BTreeMap<Slot, HeaderId>>>,
+}
+
+impl IndexStorage {
+    fn spawn(cryptarchia: &Cryptarchia, mut failures: usize) -> Self {
+        let store = Arc::clone(cryptarchia.ledger.store());
+        let era_schedule = Arc::clone(cryptarchia.ledger.era_schedule());
+        let (storage_tx, mut storage_rx) = mpsc::channel(10);
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let stored = Arc::new(Mutex::new(BTreeMap::new()));
+        let (task_writes, task_stored) = (Arc::clone(&writes), Arc::clone(&stored));
+        tokio::spawn(async move {
+            while let Some(msg) = storage_rx.recv().await {
+                let StorageMsg::StoreImmutableBlockIds { ids, response_tx } = msg else {
+                    panic!("only immutable index writes are expected, got {msg:?}");
+                };
+                let anchor = lb_ledger::Ledger::<HeaderId>::restore::<LibInfo>(
+                    &store,
+                    Arc::clone(&era_schedule),
+                )
+                .unwrap()
+                .map(|restored| restored.lib);
+                let result = if failures > 0 {
+                    failures -= 1;
+                    Err("the index write failed".to_owned())
+                } else {
+                    task_stored.lock().unwrap().extend(ids.clone());
+                    Ok(())
+                };
+                task_writes.lock().unwrap().push(IndexWrite { ids, anchor });
+                drop(response_tx.send(result));
+            }
+        });
+        Self {
+            api: StorageApi::new(OutboundRelay::new(storage_tx)),
+            writes,
+            stored,
+        }
+    }
+
+    fn stored(&self) -> BTreeMap<Slot, HeaderId> {
+        self.stored.lock().unwrap().clone()
+    }
+}
+
+fn anchored_lib(cryptarchia: &Cryptarchia) -> Option<HeaderId> {
+    lb_ledger::Ledger::<HeaderId>::restore::<LibInfo>(
+        cryptarchia.ledger.store(),
+        Arc::clone(cryptarchia.ledger.era_schedule()),
+    )
+    .unwrap()
+    .map(|restored| restored.lib)
+}
+
+// A restart replays the chain above the anchor, so a stop between the two
+// writes switches to online again, and indexes the blocks again.
+#[tokio::test]
+async fn going_online_stores_the_immutable_index_before_the_anchor() {
+    let (cryptarchia, blocks) = bootstrapping_chain_of_three_blocks();
+    let storage = IndexStorage::spawn(&cryptarchia, 0);
+
+    let (cryptarchia, _, failed) = go_online(cryptarchia, &BTreeMap::new(), &storage.api).await;
+
+    assert!(failed.is_empty());
+    let writes = core::mem::take(&mut *storage.writes.lock().unwrap());
+    let [write] = writes.as_slice() else {
+        panic!("one index write is expected, got {}", writes.len());
+    };
+    // `G`, `B1` and the new LIB, `B2`.
+    let finalized = blocks[..3].iter().copied().collect::<BTreeMap<_, _>>();
+    assert_eq!(write.ids, finalized);
+    // Still the old LIB: the new one is anchored once the index is stored.
+    assert_eq!(write.anchor, Some(blocks[0].1));
+    assert_eq!(anchored_lib(&cryptarchia), Some(blocks[2].1));
+    assert_eq!(storage.stored(), finalized);
+}
+
+#[tokio::test]
+async fn a_failed_immutable_index_write_is_retried_whole() {
+    let (cryptarchia, blocks) = bootstrapping_chain_of_three_blocks();
+    let storage = IndexStorage::spawn(&cryptarchia, 1);
+
+    let (cryptarchia, _, failed) = go_online(cryptarchia, &BTreeMap::new(), &storage.api).await;
+
+    let finalized = blocks[..3].iter().copied().collect::<BTreeMap<_, _>>();
+    assert_eq!(failed, finalized);
+    // The ledger is finalized all the same.
+    assert_eq!(anchored_lib(&cryptarchia), Some(blocks[2].1));
+    assert!(storage.stored().is_empty());
+
+    // The next index write carries the failed entries with its own.
+    let later = (Slot::new(1000), HeaderId::from([9; 32]));
+    let failed = store_immutable_blocks_index(BTreeMap::from([later]), &failed, &storage.api).await;
+    assert!(failed.is_empty());
+    let mut expected = finalized;
+    expected.insert(later.0, later.1);
+    assert_eq!(storage.stored(), expected);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -174,7 +298,7 @@ async fn get_block_ids_from_memory_and_storage() {
     let (secret_key, note) = note();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     )
@@ -373,6 +497,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         lib_block_uncle_slots: UncleSlots::default(),
         genesis_id: GENESIS_ID.into(),
         storage_blocks_to_remove: HashSet::new(),
+        immutable_blocks_to_index: BTreeMap::new(),
         last_engine_state: None,
     };
     let bootstrap_config = BootstrapConfig {
@@ -561,6 +686,7 @@ async fn get_block_ids_past_recovered_lib() {
         lib_block_uncle_slots: UncleSlots::default(),
         genesis_id: GENESIS_ID.into(),
         storage_blocks_to_remove: HashSet::new(),
+        immutable_blocks_to_index: BTreeMap::new(),
         last_engine_state: None,
     };
     let bootstrap_config = BootstrapConfig {
@@ -643,6 +769,89 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert!(lib_rx.try_recv().is_err());
 }
 
+/// A storage failure is no verdict on the block: it reaches the network as
+/// [`ApiError::Storage`], and the same block is applied once the storage
+/// recovers.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_block_failing_to_be_stored_is_applied_once_the_storage_recovers() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, mut storage_rx) = mpsc::channel(10);
+    let (backend_tx, backend_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(backend_rx);
+    // Fails the first block write, and forwards every other request.
+    tokio::spawn(async move {
+        let mut failed = false;
+        while let Some(msg) = storage_rx.recv().await {
+            match msg {
+                StorageMsg::StoreBlockData { response_tx, .. } if !failed => {
+                    failed = true;
+                    drop(response_tx.send(Err("the disk is full".to_owned())));
+                }
+                msg => backend_tx.send(msg).await.unwrap(),
+            }
+        }
+    });
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::<SignedOps<Preverified, StandardMode>>::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    );
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let initial_info = cryptarchia.info();
+    let (id, slot) = (block.header().id(), block.header().slot());
+
+    let err = verify_and_process_block(
+        &mut cryptarchia,
+        block.clone(),
+        slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .err()
+    .expect("the block write fails");
+    assert!(matches!(
+        apply_block_api_error(err, id),
+        ApiError::Storage { id: failed, .. } if failed == id
+    ));
+    assert_eq!(cryptarchia.info(), initial_info);
+
+    verify_and_process_block(
+        &mut cryptarchia,
+        block,
+        slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .expect("the storage recovered");
+    assert_eq!(cryptarchia.tip(), id);
+}
+
+/// The nullifier tree reads its store while a block is applied: a failure there
+/// is a storage failure, while a nullifier the tree refuses is the block's.
+#[test]
+fn a_nullifier_store_failure_is_a_storage_error() {
+    let id = HeaderId::from([1; 32]);
+    let imt_error = |error| Error::Ledger(LedgerError::NoteSet(NoteSetError::Imt(error)));
+
+    let failure = ImtError::Storage(Arc::new(io::Error::other("the disk is gone")));
+    assert!(matches!(
+        apply_block_api_error(imt_error(failure), id),
+        ApiError::Storage { id: failed, .. } if failed == id
+    ));
+    assert!(matches!(
+        apply_block_api_error(imt_error(ImtError::Full), id),
+        ApiError::Unexpected(_)
+    ));
+}
+
 /// `tx`, carried by a block at `slot`.
 const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
     TxInBlock { tx, slot }
@@ -678,7 +887,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
     let paths = commitment_paths(&genesis_notes);
     let genesis = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0),
+        LedgerState::from_notes(genesis_notes, &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     )
@@ -774,7 +983,7 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -820,7 +1029,7 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
     let paths = commitment_paths(&genesis_notes);
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0),
+        LedgerState::from_notes(genesis_notes, &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -870,8 +1079,8 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
         panic!("expected the copy to be rejected");
     };
     assert!(matches!(
-        crate::api::apply_block_api_error(err, id),
-        crate::api::ApiError::InvalidOperationProof(block_id) if block_id == id
+        apply_block_api_error(err, id),
+        ApiError::InvalidOperationProof(block_id) if block_id == id
     ));
     assert_eq!(cryptarchia.tip(), genesis_id);
 
@@ -910,7 +1119,7 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
     let paths = commitment_paths(&genesis_notes);
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0),
+        LedgerState::from_notes(genesis_notes, &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -998,8 +1207,8 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
         panic!("expected the copy to be rejected");
     };
     assert!(matches!(
-        crate::api::apply_block_api_error(err, id),
-        crate::api::ApiError::InvalidOperationProof(block_id) if block_id == id
+        apply_block_api_error(err, id),
+        ApiError::InvalidOperationProof(block_id) if block_id == id
     ));
     assert_eq!(cryptarchia.tip(), parent_id);
 
@@ -1018,7 +1227,7 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     let (secret_key, note) = note();
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -1038,7 +1247,7 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
         cryptarchia
             .verify_header(header.clone(), UncleHeaders::empty(), current_slot)
             .map(|_| ())
-            .map_err(crate::api::ApiError::from)
+            .map_err(ApiError::from)
     };
 
     check(header, slot).expect("the genuine header must pass");
@@ -1054,7 +1263,7 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     );
     assert!(matches!(
         check(&forged, slot),
-        Err(crate::api::ApiError::InvalidLeaderProof)
+        Err(ApiError::InvalidLeaderProof)
     ));
 
     let unknown_parent: HeaderId = [1; 32].into();
@@ -1066,14 +1275,14 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     );
     assert!(matches!(
         check(&orphan, slot),
-        Err(crate::api::ApiError::ParentMissing { parent, .. }) if parent == unknown_parent
+        Err(ApiError::ParentMissing { parent, .. }) if parent == unknown_parent
     ));
 
     // The forged header reaches this error only if the wallclock check runs
     // before the proof.
     assert!(matches!(
         check(&forged, Slot::genesis()),
-        Err(crate::api::ApiError::FutureBlock { block_slot, current_slot })
+        Err(ApiError::FutureBlock { block_slot, current_slot })
             if block_slot == slot && current_slot == Slot::genesis()
     ));
 }
@@ -1099,7 +1308,7 @@ fn transfer_tx_with_fake_sig(
     let mut output_note = Note::new(1, Fr::ZERO, fake_key.to_public_key());
     let gas_context = OpsGasContext::from_channels(
         &Channels::new(),
-        GasPrices::default(),
+        GasPrices::new(1_000_000_000, 1_000_000_000),
         ledger_config(NonZero::new(1).unwrap()).gas_profile,
     );
     let fees = transfer_tx(note, output_note, fake_key, 0)
@@ -1223,7 +1432,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let (secret_key, note) = note();
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     )
@@ -1342,6 +1551,24 @@ pub fn ledger_config_with_max_uncles(
 }
 
 /// The costs of the deployments' current gas profile.
+/// The supply cap of a test chain, that of the deployments.
+pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
+
+/// The genesis parameters of a test chain: the supply cap and the genesis gas
+/// prices of the deployments.
+pub fn genesis_parameters() -> GenesisParameters {
+    GenesisParameters {
+        chain_id: "test".to_owned().try_into().unwrap(),
+        start_time: GenesisTime::new(0),
+        epoch_nonce: Fr::ZERO,
+        max_supply: MAX_SUPPLY,
+        pow_reward_pool: 0,
+        rewards_reserve: 1_000_000_000_000_000_000,
+        storage_gas_price: NonZero::new(1_000_000_000).unwrap(),
+        execution_gas_price: NonZero::new(1_000_000_000).unwrap(),
+    }
+}
+
 pub const GAS_PROFILE: GasProfile = GasProfile {
     transfer: Gas::new(10),
     program_register: Gas::new(15114),
@@ -1436,12 +1663,22 @@ fn ledger_config_with_uncles(
                 .unwrap(),
         },
         block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-            3_000_000_000_000_000_000,
-            120_000_000_000_000_000.try_into().unwrap(),
-            120.try_into().unwrap(),
-            10_512,
-            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            lb_ledger::config::BlockRewardsParameters {
+                max_emission_rate: lb_utils::math::ProperFraction::new(1, 100.try_into().unwrap())
+                    .unwrap(),
+                min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
+                    .unwrap(),
+                pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                pooled_fees_window: 120.try_into().unwrap(),
+                blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
+                    .unwrap(),
+            },
+            10_000_000_000_000_000_000,
+            1.try_into().unwrap(),
+            NonNegativeRatio::new(1, 30.try_into().unwrap()),
         )
         .unwrap(),
         gas_profile: GAS_PROFILE,
@@ -1491,11 +1728,11 @@ fn a_block_overstating_its_reward_is_condemned_after_a_valid_proof() {
     let err = cryptarchia.try_apply_block(block, slot).err().unwrap();
     assert!(matches!(
         err,
-        Error::Ledger(lb_ledger::LedgerError::WrongRewardValue { .. })
+        Error::Ledger(LedgerError::WrongRewardValue { .. })
     ));
     assert!(matches!(
-        crate::api::apply_block_api_error(err, id),
-        crate::api::ApiError::Unexpected(_)
+        apply_block_api_error(err, id),
+        ApiError::Unexpected(_)
     ));
 }
 
@@ -1728,7 +1965,7 @@ fn write_lib_state_at(stored: &Cryptarchia, lib: &Block<SignedOps<Preverified, S
         header.id(),
         stored.ledger.state(&header.id()).unwrap().clone(),
         Arc::clone(stored.ledger.era_schedule()),
-        &crate::LibInfo {
+        &LibInfo {
             parent: header.parent(),
             slot: header.slot(),
             length: 1,
@@ -1747,7 +1984,7 @@ pub fn genesis_cryptarchia_on(note: Note, era_schedule: Arc<EraScheduledConfig>)
     let genesis_config = era_schedule.genesis().parameters.clone();
     Cryptarchia::from_genesis(
         GENESIS_ID.into(),
-        LedgerState::from_notes([note], &genesis_config, 0),
+        LedgerState::from_notes([note], &genesis_config, &genesis_parameters()),
         era_schedule,
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -1767,7 +2004,13 @@ pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
                     public_key: note.public_key,
                 })
                 .chain([GenesisAllocation {
-                    value: GENESIS_STAKE_SUPPLY - distributed,
+                    value: genesis_stake_supply(
+                        MAX_SUPPLY,
+                        genesis_parameters().pow_reward_pool,
+                        genesis_parameters().rewards_reserve,
+                    )
+                    .unwrap()
+                        - distributed,
                     public_key: ZkPublicKey::new(Fr::from(1u64)),
                 }]),
         )
@@ -1777,8 +2020,7 @@ pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
             inscription: Inscription::new_unchecked(
                 GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    start_time: GenesisTime::new(0),
-                    epoch_nonce: Fr::ZERO,
+                    ..genesis_parameters()
                 }
                 .encode_to_vec(),
             ),

@@ -11,8 +11,9 @@ use std::{
 
 use lb_chain_service::Epoch;
 use lb_common_http_client::Error;
+use lb_config::consensus::UNITS_PER_LGO;
 use lb_core::{
-    mantle::{Value, transactions::UNITS_PER_LGO},
+    mantle::Value,
     sdp::{Declaration, DeclarationId, Locator, ServiceType},
 };
 use lb_node::config::{

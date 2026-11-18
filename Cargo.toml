@@ -109,7 +109,7 @@ members = [
   "zk/proofs/error",
   "zk/proofs/pol",
   "zk/proofs/poq",
-  "zk/proofs/program_spend",
+  "zk/proofs/program-spend",
   "zk/proofs/zktransfer",
 ]
 resolver = "2"
@@ -170,7 +170,7 @@ lb-pol                             = { default-features = false, package = "logo
 lb-poq                             = { default-features = false, package = "logos-blockchain-poq", path = "./zk/proofs/poq" }
 lb-poseidon2                       = { default-features = false, package = "logos-blockchain-poseidon2", path = "./zk/poseidon2" }
 lb-pow-service                     = { default-features = false, package = "logos-blockchain-pow-service", path = "./services/pow" }
-lb-program-spend                   = { default-features = false, package = "logos-blockchain-program-spend", path = "./zk/proofs/program_spend" }
+lb-program-spend                   = { default-features = false, package = "logos-blockchain-program-spend", path = "./zk/proofs/program-spend" }
 lb-sdp-service                     = { default-features = false, package = "logos-blockchain-sdp-service", path = "./services/sdp" }
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }

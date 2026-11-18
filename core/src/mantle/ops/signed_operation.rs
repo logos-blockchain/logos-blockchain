@@ -22,8 +22,13 @@ pub struct SignedOperation<T: ProvableOperation, State: VerificationState, Mode:
 impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
     SignedOperation<T, State, Mode>
 {
+    /// Converts a `SignedOperation<T, State, Mode>` into a
+    /// `SignedOperation<T, NewState, Mode>` without performing any
+    /// verification.
     #[must_use]
-    fn into_state<NewState: VerificationState>(self) -> SignedOperation<T, NewState, Mode> {
+    pub(crate) fn into_state<NewState: VerificationState>(
+        self,
+    ) -> SignedOperation<T, NewState, Mode> {
         let Self {
             operation,
             proof,
@@ -45,17 +50,6 @@ impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
     #[must_use]
     pub const fn proof(&self) -> &T::Proof {
         &self.proof
-    }
-
-    /// Converts a `SignedOperation<T, State, Mode>` into a
-    /// `SignedOperation<T, NewState, Mode>` without performing any
-    /// verification.
-    #[cfg(not(any(test, feature = "test-utils")))]
-    #[must_use]
-    pub(crate) fn into_state_trusted<NewState: VerificationState>(
-        self,
-    ) -> SignedOperation<T, NewState, Mode> {
-        self.into_state()
     }
 
     /// Converts a `SignedOperation<T, State, Mode>` into a

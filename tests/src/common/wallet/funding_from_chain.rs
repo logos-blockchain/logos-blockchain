@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use lb_common_http_client::Error as HttpClientError;
-use lb_config::deployment::GAS_PROFILE;
+use lb_config::{consensus::GENESIS_GAS_PRICE, deployment::GAS_PROFILE};
 use lb_core::mantle::{
     Op, OpProof, SignedOps, TxHash,
     ledger::verification_mode::StandardMode,
@@ -117,7 +117,11 @@ async fn fund_and_sign(
         .expect("funding wallet source should sync from chain");
 
     let tx_context = OpsContext {
-        gas_context: OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE),
+        gas_context: OpsGasContext::new(
+            HashMap::new(),
+            GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
+            GAS_PROFILE,
+        ),
     };
 
     let spend_state = accounting.spend_state();

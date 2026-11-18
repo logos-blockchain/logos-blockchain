@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::SystemTime};
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::SystemTime,
+};
 
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{era::ForkDigest, header::HeaderId};
@@ -71,6 +74,11 @@ pub struct CryptarchiaConsensusState {
     /// been deleted from the persistence layer because of some unexpected
     /// error.
     pub(crate) storage_blocks_to_remove: HashSet<HeaderId>,
+    /// The immutable index entries of finalized blocks a write failed to store.
+    /// The anchor of the nullifier store may already be above them, so a
+    /// restart, which replays the chain above the anchor, doesn't index them
+    /// again: they are retried instead.
+    pub(crate) immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
     /// Last engine state and timestamp for offline grace period tracking
     pub(crate) last_engine_state: Option<LastEngineState>,
 }
@@ -86,10 +94,11 @@ impl CryptarchiaConsensusState {
     ///
     /// Furthermore, it allows to specify blocks deleted from the cryptarchia
     /// engine (hence not tracked anymore) but that should be deleted from the
-    /// persistence layer.
+    /// persistence layer, and the immutable index entries still to store.
     pub(crate) fn from_cryptarchia_and_unpruned_blocks(
         cryptarchia: &Cryptarchia,
         storage_blocks_to_remove: HashSet<HeaderId>,
+        immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
         fork_digests: &EraSchedule<ForkDigest>,
     ) -> Result<Self, DynError> {
         let lib = cryptarchia.consensus.lib_branch();
@@ -112,6 +121,7 @@ impl CryptarchiaConsensusState {
             lib_block_slot,
             lib_block_uncle_slots,
             storage_blocks_to_remove,
+            immutable_blocks_to_index,
             last_engine_state: Some(LastEngineState {
                 timestamp: SystemTime::now(),
                 state: *cryptarchia.consensus.state(),
@@ -143,6 +153,7 @@ impl ServiceState for CryptarchiaConsensusState {
             lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
+            immutable_blocks_to_index: BTreeMap::new(),
             last_engine_state: None,
         })
     }
@@ -169,7 +180,7 @@ mod tests {
     };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, EmissionRatio, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -280,12 +291,25 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                lb_ledger::config::BlockRewardsParameters {
+                    max_emission_rate: lb_utils::math::ProperFraction::new(
+                        1,
+                        100.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
+                        .unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
+                        .unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                NonNegativeRatio::new(1, 30.try_into().unwrap()),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -397,7 +421,11 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
+            lb_ledger::LedgerState::from_notes(
+                [],
+                &ledger_config,
+                &crate::tests::genesis_parameters(),
+            ),
             single_era(ledger_config),
         )
         .unwrap();
@@ -415,6 +443,7 @@ mod tests {
                 genesis_id: genesis_header_id,
             },
             pruned_stale_blocks.clone(),
+            BTreeMap::new(),
             &fork_digests,
         )
         .unwrap();
@@ -510,12 +539,25 @@ mod tests {
                     .unwrap(),
             },
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                lb_ledger::config::BlockRewardsParameters {
+                    max_emission_rate: lb_utils::math::ProperFraction::new(
+                        1,
+                        100.try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
+                        .unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
+                        .unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                NonNegativeRatio::new(1, 30.try_into().unwrap()),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -567,7 +609,11 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new_with_lib_state(
                 lib_id,
-                lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
+                lb_ledger::LedgerState::from_notes(
+                    [],
+                    &ledger_config,
+                    &crate::tests::genesis_parameters(),
+                ),
                 single_era(ledger_config.clone()),
                 &crate::LibInfo::of(engine.lib_branch()),
             )
@@ -580,6 +626,7 @@ mod tests {
         let saved_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
             &original,
             HashSet::new(),
+            BTreeMap::new(),
             &fork_digests(original.ledger.era_schedule()),
         )
         .unwrap();

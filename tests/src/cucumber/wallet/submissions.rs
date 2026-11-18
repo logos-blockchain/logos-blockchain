@@ -1766,6 +1766,7 @@ fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<Stri
 #[cfg(test)]
 mod cache_removal_tests {
     use lb_chain_service::Epoch;
+    use lb_config::consensus::GENESIS_GAS_PRICE;
     use lb_core::{era::ForkDigest, header::HeaderId};
     use lb_groth16::Fr;
     use lb_mmr::MerklePath;
@@ -1952,8 +1953,8 @@ mod cache_removal_tests {
                 prepared_at_tip: HeaderId::from([0; 32]),
                 prepared_at_epoch: Epoch::new(2),
                 valid_through_epoch: Epoch::new(valid_through_epoch),
-                live_prices: GasPrices::default(),
-                ceiling_prices: GasPrices::default(),
+                live_prices: GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
+                ceiling_prices: GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
             },
             priority_fee_percent: 0,
         }

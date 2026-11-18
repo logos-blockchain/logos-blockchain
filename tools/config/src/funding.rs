@@ -1,10 +1,22 @@
 use std::collections::{HashMap, HashSet};
 
-use lb_core::mantle::transactions::{Distribution, GenesisAllocation};
+use lb_core::mantle::{
+    Value,
+    transactions::{Distribution, GenesisAllocation},
+};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-pub use lb_ledger::GENESIS_STAKE_SUPPLY;
+use lb_ledger::genesis_stake_supply;
 
-use crate::consensus::{GENESIS_DISTRIBUTION_LIMIT, SdpFundingConfig};
+use crate::consensus::{
+    GENESIS_DISTRIBUTION_LIMIT, GENESIS_POW_REWARD_POOL, GENESIS_REWARDS_RESERVE, MAX_SUPPLY,
+    SdpFundingConfig,
+};
+
+/// What the distribution and the declarations of the genesis of a test chain
+/// hold together.
+pub const GENESIS_STAKE_SUPPLY: Value =
+    genesis_stake_supply(MAX_SUPPLY, GENESIS_POW_REWARD_POOL, GENESIS_REWARDS_RESERVE)
+        .expect("the reserves of a test chain fit its supply");
 
 /// Adds scenario wallets and adjusts SDP funding before genesis is signed. This
 /// operates on protocol data, without native node configuration.

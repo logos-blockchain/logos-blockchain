@@ -25,7 +25,7 @@ use lb_core::{
             pow::PowTarget,
             transfer::{TransferExecutionContext, TransferOp},
         },
-        transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Verified},
+        transactions::{GenesisParameters, states::Verified},
     },
     proofs::leader_proof::LeaderPublic,
     sdp::Declarations,
@@ -849,20 +849,20 @@ impl LedgerState {
         initial_notes: &[notes::Note],
         total_stake: Value,
         config: &Config,
-        epoch_nonce: Fr,
+        parameters: &GenesisParameters,
     ) -> Self {
         Self::from_commitments(
             initial_notes.iter().map(notes::Note::commitment),
             total_stake,
             config,
-            epoch_nonce,
+            parameters,
         )
     }
 
     pub fn from_notes(
         notes: impl IntoIterator<Item = notes::Note>,
         config: &Config,
-        nonce: Fr,
+        parameters: &GenesisParameters,
     ) -> Self {
         let notes = notes.into_iter().collect::<Vec<_>>();
         let total_stake = notes.iter().map(|note| note.value).sum::<Value>().max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
@@ -870,7 +870,7 @@ impl LedgerState {
             notes.iter().map(notes::Note::commitment),
             total_stake,
             config,
-            nonce,
+            parameters,
         )
     }
 
@@ -878,8 +878,9 @@ impl LedgerState {
         commitments: impl IntoIterator<Item = NoteCommitment>,
         total_stake: Value,
         config: &Config,
-        nonce: Fr,
+        parameters: &GenesisParameters,
     ) -> Self {
+        let nonce = parameters.epoch_nonce;
         let commitments = commitments.into_iter().collect::<Vec<_>>();
         let note_sets = NoteSets::new();
         let ledger_set = note_sets
@@ -923,11 +924,15 @@ impl LedgerState {
             },
             block_density,
             // The genesis values of Block Rewards.
-            block_rewards: BlockRewards::genesis(config.block_rewards.pooled_fees_window()),
+            block_rewards: BlockRewards::genesis(
+                parameters.rewards_reserve,
+                config.block_rewards.pooled_fees_window(),
+            ),
             average_execution_gas: 0.into(),
-            execution_base_fee: GENESIS_EXECUTION_GAS_PRICE,
+            // The markets start at the prices the genesis inscribes.
+            execution_base_fee: GasPrice::new(parameters.execution_gas_price.get()),
             storage_gas_ema: 0.into(),
-            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
+            storage_gas_price: GasPrice::new(parameters.storage_gas_price.get()),
             storage_gas_consumed_in_epoch: 0.into(),
         }
     }
@@ -1009,7 +1014,7 @@ pub mod tests {
         crypto::{Digest as _, Hasher},
         era::AcceptedForkDigests,
         mantle::{
-            SignedOps,
+            GenesisTime, SignedOps,
             gas::GasProfile,
             note_set::CommitmentMmr,
             notes::{NoteNullifier, derive_note_nullifier},
@@ -1031,7 +1036,7 @@ pub mod tests {
     use super::*;
     use crate::{
         Ledger,
-        config::EmissionRatio,
+        config::BlockRewardsParameters,
         mantle::{
             pow::tx_density::ClosedEpochLoad,
             sdp::{
@@ -1321,12 +1326,19 @@ pub mod tests {
                 ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                BlockRewardsParameters {
+                    max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                NonNegativeRatio::new(1, 30.try_into().unwrap()),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -1346,6 +1358,37 @@ pub mod tests {
 
     /// The balance the `PoW` reward pool of a test chain starts with.
     pub const GENESIS_POW_REWARD_POOL: lb_core::mantle::ops::pow::PowReward = 1_000_000_000;
+
+    /// The supply cap of a test chain, that of the deployments.
+    pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
+
+    /// The balance the rewards reserve of a test chain starts with, that of the
+    /// deployments.
+    pub const GENESIS_REWARDS_RESERVE: Value = 1_000_000_000_000_000_000;
+
+    /// What the distribution and the declarations of the genesis of a test
+    /// chain hold together.
+    pub const GENESIS_STAKE_SUPPLY: Value =
+        MAX_SUPPLY - GENESIS_POW_REWARD_POOL - GENESIS_REWARDS_RESERVE;
+
+    /// The storage gas price and the execution base fee a test chain starts
+    /// with, those of the deployments.
+    pub const GENESIS_GAS_PRICE: NonZero<u64> = NonZero::new(1_000_000_000).unwrap();
+
+    /// The genesis parameters of a test chain.
+    #[must_use]
+    pub fn genesis_parameters() -> GenesisParameters {
+        GenesisParameters {
+            chain_id: "test".to_owned().try_into().unwrap(),
+            start_time: GenesisTime::new(0),
+            epoch_nonce: Fr::ZERO,
+            max_supply: MAX_SUPPLY,
+            pow_reward_pool: GENESIS_POW_REWARD_POOL,
+            rewards_reserve: GENESIS_REWARDS_RESERVE,
+            storage_gas_price: GENESIS_GAS_PRICE,
+            execution_gas_price: GENESIS_GAS_PRICE,
+        }
+    }
 
     /// The costs of the deployments' current gas profile.
     pub const GAS_PROFILE: GasProfile = GasProfile {
@@ -1399,7 +1442,7 @@ pub mod tests {
 
     #[must_use]
     pub fn genesis_state(utxos: &[notes::Note]) -> LedgerState {
-        LedgerState::from_notes(utxos.iter().copied(), &config(), Fr::ZERO)
+        LedgerState::from_notes(utxos.iter().copied(), &config(), &genesis_parameters())
     }
 
     fn full_ledger_state(cryptarchia_ledger: LedgerState, config: &Config) -> crate::LedgerState {
@@ -2125,7 +2168,7 @@ pub mod tests {
             notes::Note::new(100, Fr::from(1u64), public_key),
             notes::Note::new(200, Fr::from(2u64), public_key),
         ];
-        let state = LedgerState::from_notes(notes, &config(), Fr::ZERO);
+        let state = LedgerState::from_notes(notes, &config(), &genesis_parameters());
         let expected = CommitmentMmr::new()
             .push(notes[0].commitment())
             .unwrap()
@@ -2148,7 +2191,7 @@ pub mod tests {
     fn distribute_then_append_leader_reward_updates_the_note_set_and_the_reward_state() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-        let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
+        let state = LedgerState::from_notes([genesis_note], &config(), &genesis_parameters());
         let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
         let (state, blend_share, leader_reward) = state
@@ -2182,7 +2225,7 @@ pub mod tests {
     fn service_reward_notes_enter_the_ledger_set_and_settle_the_blend_share() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-        let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
+        let state = LedgerState::from_notes([genesis_note], &config(), &genesis_parameters());
         let (state, blend_share, _) = state
             .distribute_block_reward::<()>(0, 0, &config().block_rewards)
             .unwrap();
@@ -2311,7 +2354,7 @@ pub mod tests {
     fn try_apply_transfer_spends_adds_and_returns_the_excess() {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
-        let state = LedgerState::from_notes([genesis_note], &config(), Fr::ZERO);
+        let state = LedgerState::from_notes([genesis_note], &config(), &genesis_parameters());
         let root = state.latest_note_sets().ledger().commitment_root();
         let operation = TransferOp::new(
             [NoteNullifier(Fr::from(3u64))].into(),
@@ -2347,7 +2390,8 @@ pub mod tests {
     #[test]
     fn genesis_notes_enter_the_ledger_set() {
         let notes = [note(), note()];
-        let state = LedgerState::from_genesis_notes(&notes, 3_000, &config(), Fr::ZERO);
+        let state =
+            LedgerState::from_genesis_notes(&notes, 3_000, &config(), &genesis_parameters());
         let expected = CommitmentMmr::new()
             .push(notes[0].commitment())
             .unwrap()
@@ -2650,8 +2694,8 @@ pub mod tests {
     /// expensive.
     #[test]
     fn storage_price_rises_under_sustained_heavy_usage() {
-        let genesis_price = GENESIS_STORAGE_GAS_PRICE.into_inner();
-        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let genesis_price = GENESIS_GAS_PRICE.get();
+        let mut price = GasPrice::new(genesis_price);
         let mut ema: Gas = 0.into();
         let heavy_usage: Gas = 1_000_000.into();
 
@@ -2670,7 +2714,7 @@ pub mod tests {
     /// price back up.
     #[test]
     fn storage_price_recovers_when_usage_returns_after_quiet_epochs() {
-        let mut price = GENESIS_STORAGE_GAS_PRICE;
+        let mut price = GasPrice::new(GENESIS_GAS_PRICE.get());
         let mut ema: Gas = 0.into();
         let heavy_usage: Gas = 1_000_000.into();
 
@@ -2777,7 +2821,7 @@ pub mod tests {
     #[test]
     fn test_execution_market_update() {
         // Create a base ledger first
-        let mut ledger = LedgerState::from_notes([], &config(), Fr::ZERO);
+        let mut ledger = LedgerState::from_notes([], &config(), &genesis_parameters());
 
         // 1) G_avg = (1_700_000 + 9*1_568_899)/10 = 1_582_009
         // price = ceil(10_000 * (10_982_293 + 1_582_009) / 12_551_192) = 10_011

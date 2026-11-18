@@ -168,7 +168,7 @@ mod tests {
     use lb_core::{
         era::{AcceptedForkDigests, ForkDigest},
         mantle::{
-            Note,
+            GenesisParameters, GenesisTime, Note,
             gas::{Gas, GasProfile},
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -177,7 +177,7 @@ mod tests {
     use lb_key_management_system_keys::keys::ZkPublicKey;
     use lb_ledger::{
         Intent,
-        config::{BlendPoWConfig, EmissionRatio, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
     use lb_utils::math::{NonNegativeRatio, PositiveF64};
@@ -431,6 +431,21 @@ mod tests {
         ));
     }
 
+    /// The genesis parameters of a test chain: the supply cap and the genesis
+    /// gas prices of the deployments.
+    fn genesis_parameters() -> GenesisParameters {
+        GenesisParameters {
+            chain_id: "test".to_owned().try_into().unwrap(),
+            start_time: GenesisTime::new(0),
+            epoch_nonce: Fr::ZERO,
+            max_supply: 10_000_000_000_000_000_000,
+            pow_reward_pool: 0,
+            rewards_reserve: 1_000_000_000_000_000_000,
+            storage_gas_price: 1_000_000_000.try_into().unwrap(),
+            execution_gas_price: 1_000_000_000.try_into().unwrap(),
+        }
+    }
+
     fn config(interval: u64) -> Config {
         Config {
             status_check_interval_in_tip_changes: interval.try_into().unwrap(),
@@ -533,6 +548,32 @@ mod tests {
         ledger_state([])
     }
 
+    /// The block rewards of the specification, on the supply cap of the
+    /// deployments and a block every 30 seconds.
+    const BLOCK_REWARDS: lb_ledger::config::BlockRewardsConfig =
+        lb_ledger::config::BlockRewardsConfig::new(
+            lb_ledger::config::BlockRewardsParameters {
+                max_emission_rate: lb_utils::math::ProperFraction::new(
+                    1,
+                    NonZero::new(100).unwrap(),
+                )
+                .unwrap(),
+                min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
+                stake_target: lb_utils::math::ProperFraction::new(3, NonZero::new(10).unwrap())
+                    .unwrap(),
+                pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+                pooled_fees_window: NonZero::new(120).unwrap(),
+                blend_share: lb_utils::math::ProperFraction::new(6, NonZero::new(10).unwrap())
+                    .unwrap(),
+            },
+            10_000_000_000_000_000_000,
+            NonZero::new(1).unwrap(),
+            NonNegativeRatio::new(1, NonZero::new(30).unwrap()),
+        )
+        .unwrap();
+
     fn ledger_state(notes: impl IntoIterator<Item = Note>) -> LedgerState {
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(2).unwrap(),
@@ -610,15 +651,7 @@ mod tests {
                     )
                     .unwrap(),
                 },
-                block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                    3_000_000_000_000_000_000,
-                    120_000_000_000_000_000.try_into().unwrap(),
-                    120.try_into().unwrap(),
-                    10_512,
-                    EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                    lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
-                )
-                .unwrap(),
+                block_rewards: BLOCK_REWARDS,
                 gas_profile: GAS_PROFILE,
                 pow_config: PoWConfig {
                     reward: disabled_reward_config(),
@@ -632,7 +665,7 @@ mod tests {
                 },
                 accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
             },
-            0,
+            &genesis_parameters(),
         )
     }
 }

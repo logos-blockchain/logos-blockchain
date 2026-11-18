@@ -9,11 +9,10 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
-use lb_ledger::config::EmissionRatio;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio, ProperFraction};
 
 use super::{
-    BlendPoWConfig, BlockRewardsConfig, EpochConfig, ExecutionMarketConfig, MaxGasPerBlock,
+    BlendPoWConfig, BlockRewardsParameters, EpochConfig, ExecutionMarketConfig, MaxGasPerBlock,
     PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters, Settings, SlotActivationCoeff,
     StorageMarketConfig,
 };
@@ -41,15 +40,16 @@ pub fn fixture_settings() -> Settings {
             max_adjustment_factor: ProperFraction::new(48, 49.try_into().unwrap()).unwrap(),
             ema_smoothing_factor: ProperFraction::new(50, 51.try_into().unwrap()).unwrap(),
         },
-        block_rewards: BlockRewardsConfig::new(
-            53,
-            NonZero::new(54).unwrap(),
-            NonZero::new(84).unwrap(),
-            55,
-            EmissionRatio::new(56, NonZeroU64::new(57).unwrap()),
-            ProperFraction::new(58, NonZeroU32::new(59).unwrap()).unwrap(),
-        )
-        .unwrap(),
+        block_rewards: BlockRewardsParameters {
+            max_emission_rate: ProperFraction::new(53, NonZeroU32::new(54).unwrap()).unwrap(),
+            min_emission_rate: NonNegativeRatio::new(55, NonZeroU32::new(56).unwrap()),
+            stake_target: ProperFraction::new(57, NonZeroU32::new(58).unwrap()).unwrap(),
+            pooled_fees_target: NonNegativeRatio::new(59, NonZeroU32::new(85).unwrap()),
+            stake_deviation_weight: NonNegativeRatio::new(86, NonZeroU32::new(87).unwrap()),
+            pooled_fees_weight: NonNegativeRatio::new(88, NonZeroU32::new(89).unwrap()),
+            pooled_fees_window: NonZero::new(84).unwrap(),
+            blend_share: ProperFraction::new(90, NonZeroU32::new(91).unwrap()).unwrap(),
+        },
         gas_profile: GasProfile {
             transfer: Gas::new(60),
             program_register: Gas::new(61),
@@ -144,8 +144,8 @@ pub const SETTINGS_HEX: &str = "
     2100000000000000 2200000000000000 2300000000000000 2400000000000000 2500000000000000
     2600000000000000 2700000000000000 2800000000000000 2900000000000000
     2b00000000000000 2c000000 2d000000 2e000000 2f000000 30000000 31000000 32000000 33000000
-    3500000000000000 3600000000000000 5400 3700000000000000 3800000000000000
-    3900000000000000 3a000000 3b000000
+    35000000 36000000 37000000 38000000 39000000 3a000000 3b000000 55000000
+    56000000 57000000 58000000 59000000 5400 5a000000 5b000000
     3c00000000000000 3d00000000000000 3e00000000000000 3f00000000000000 4000000000000000
     4100000000000000 4200000000000000 4300000000000000 4400000000000000 4500000000000000
     4600000000000000 4700000000000000 4800000000000000 4900000000000000 4a00000000000000

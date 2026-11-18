@@ -978,6 +978,8 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 /// - `CommsFailure`: relay failure has nothing to do with block validity; a
 ///   blanket "reject" here would poison the cache whenever chain-service is
 ///   temporarily unreachable.
+/// - `Storage`: a local storage failure says nothing of the block either, which
+///   is applied again once the storage recovers.
 /// - `InvalidLeaderProof` / `InvalidOperationProof`: a bad copy, discarded
 ///   without a verdict against the block ID, which does not cover these proofs.
 ///   The genuine block shares the ID.
@@ -1003,7 +1005,8 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
                 | ApiError::InvalidLeaderProof
                 | ApiError::InvalidOperationProof(_)
                 | ApiError::InvalidUncles(_)
-                | ApiError::InvalidBody(_),
+                | ApiError::InvalidBody(_)
+                | ApiError::Storage { .. },
         ),
     )
 }
@@ -1381,6 +1384,18 @@ mod tests {
                 }
                 .to_string()
             )
+        )));
+    }
+
+    /// A local storage failure is no verdict on the block, which is applied
+    /// again once the storage recovers.
+    #[test]
+    fn local_storage_failure_is_not_cached_by_orphan_downloader() {
+        assert!(is_recoverable_apply_error(&Error::Cryptarchia(
+            ApiError::Storage {
+                id: HeaderId::from([1; 32]),
+                reason: "the disk is full".to_owned(),
+            }
         )));
     }
 }

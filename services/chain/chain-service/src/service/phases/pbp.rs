@@ -7,18 +7,13 @@ use lb_core::mantle::{
     traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
     transactions::states::Preverified,
 };
-use lb_cryptarchia_engine::{PrunedBlocks, Slot};
-use lb_cryptarchia_sync::HeaderId;
-use lb_storage_service::api::StorageApi;
 use serde::{Serialize, de::DeserializeOwned};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use super::{Following, Phase, PhaseTag};
 use crate::{
-    ConsensusMsg, Error, LOG_TARGET,
-    service::{
-        Service, delete_stale_blocks_from_storage, immutable_blocks_index, reject_chain_sync_event,
-    },
+    ConsensusMsg, LOG_TARGET,
+    service::{Service, delete_stale_blocks_from_storage, go_online, reject_chain_sync_event},
 };
 
 /// `ProlongedBootstrapPeriod` phase: Apply blocks until PBP is over.
@@ -100,23 +95,17 @@ where
     /// Switch `Cryptarchia` to online, notify subscribers,
     /// and prune the stale part of the chain from memory and storage.
     async fn switch_to_online(mut self) -> Self {
-        let (cryptarchia, pruned_blocks) = self.cryptarchia.online();
+        let (cryptarchia, pruned_blocks, immutable_blocks_to_index) = go_online(
+            self.cryptarchia,
+            &self.immutable_blocks_to_index,
+            self.relays.storage(),
+        )
+        .await;
         self.cryptarchia = cryptarchia;
+        self.immutable_blocks_to_index = immutable_blocks_to_index;
         info!(target: LOG_TARGET, "chain switched to online");
 
         self.chain_online_notifier.notify();
-
-        if let Err(err) = Self::store_immutable_blocks_index(
-            &pruned_blocks,
-            None,
-            self.cryptarchia.lib(),
-            self.cryptarchia.lib_branch().slot(),
-            self.relays.storage(),
-        )
-        .await
-        {
-            error!(target: LOG_TARGET, %err, "failed to store immutable block IDs");
-        }
 
         self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
@@ -126,24 +115,5 @@ where
         .await;
 
         self
-    }
-
-    /// Store immutable block IDs to storage, including the new LIB if needed.
-    /// If `prev_lib` is None, always includes the new LIB.
-    /// If `prev_lib` is Some, only includes new LIB if it changed.
-    async fn store_immutable_blocks_index(
-        pruned_blocks: &PrunedBlocks<HeaderId>,
-        prev_lib: Option<HeaderId>,
-        new_lib: HeaderId,
-        new_lib_slot: Slot,
-        storage: &StorageApi<Tx>,
-    ) -> Result<(), Error> {
-        let immutable_blocks =
-            immutable_blocks_index(pruned_blocks, prev_lib, new_lib, new_lib_slot);
-
-        storage
-            .store_immutable_block_ids(immutable_blocks)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
     }
 }

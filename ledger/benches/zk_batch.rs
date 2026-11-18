@@ -28,7 +28,7 @@ use lb_core::{
     era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
-        Op, OpProof, SignedOps,
+        GenesisParameters, GenesisTime, Op, OpProof, SignedOps,
         batch::DeferredProofs,
         gas::{Gas, GasProfile},
         ledger::verification_mode::StandardMode,
@@ -51,9 +51,7 @@ use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveF64};
 use logos_blockchain_ledger::{
     Config, LedgerState,
-    config::{
-        BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
-    },
+    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use time::OffsetDateTime;
@@ -210,7 +208,7 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
     }
     let root = mmr.frontier_root();
 
-    let genesis = LedgerState::from_notes(notes.iter().copied(), &config, 0);
+    let genesis = LedgerState::from_notes(notes.iter().copied(), &config, &genesis_parameters());
     assert_eq!(genesis.latest_note_sets().ledger().commitment_root(), root);
 
     let txs = notes
@@ -356,6 +354,42 @@ const GAS_PROFILE: GasProfile = GasProfile {
     program_step: Gas::new(13528),
     opening: Gas::new(470),
 };
+/// The genesis parameters of the benchmark chain: the supply cap and the
+/// genesis gas prices of the deployments.
+fn genesis_parameters() -> GenesisParameters {
+    GenesisParameters {
+        chain_id: "bench".to_owned().try_into().unwrap(),
+        start_time: GenesisTime::new(0),
+        epoch_nonce: Fr::ZERO,
+        max_supply: 10_000_000_000_000_000_000,
+        pow_reward_pool: 0,
+        rewards_reserve: 1_000_000_000_000_000_000,
+        storage_gas_price: NonZero::new(1_000_000_000).unwrap(),
+        execution_gas_price: NonZero::new(1_000_000_000).unwrap(),
+    }
+}
+
+/// The block rewards of the specification, on the supply cap of the
+/// deployments and a block every 30 seconds.
+const BLOCK_REWARDS: logos_blockchain_ledger::config::BlockRewardsConfig =
+    logos_blockchain_ledger::config::BlockRewardsConfig::new(
+        logos_blockchain_ledger::config::BlockRewardsParameters {
+            max_emission_rate: lb_utils::math::ProperFraction::new(1, NonZero::new(100).unwrap())
+                .unwrap(),
+            min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
+            stake_target: lb_utils::math::ProperFraction::new(3, NonZero::new(10).unwrap())
+                .unwrap(),
+            pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+            stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
+            pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+            pooled_fees_window: NonZero::new(120).unwrap(),
+            blend_share: lb_utils::math::ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
+        },
+        10_000_000_000_000_000_000,
+        NonZero::new(1).unwrap(),
+        NonNegativeRatio::new(1, NonZero::new(30).unwrap()),
+    )
+    .unwrap();
 
 fn config() -> Config {
     let epoch_config = EpochConfig {
@@ -418,15 +452,7 @@ fn config() -> Config {
             ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
                 .unwrap(),
         },
-        block_rewards: logos_blockchain_ledger::config::BlockRewardsConfig::new(
-            3_000_000_000_000_000_000,
-            120_000_000_000_000_000.try_into().unwrap(),
-            120.try_into().unwrap(),
-            10_512,
-            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
-        )
-        .unwrap(),
+        block_rewards: BLOCK_REWARDS,
         gas_profile: GAS_PROFILE,
         pow_config: PoWConfig {
             blend: BlendPoWConfig {

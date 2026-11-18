@@ -2,6 +2,7 @@ use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use futures::StreamExt as _;
 use lb_common_http_client::ProcessedBlockEvent;
+use lb_config::consensus::UNITS_PER_LGO;
 use lb_core::{
     events::{Event, Events, TxEvent, TxEventPayload},
     header::HeaderId,
@@ -21,7 +22,7 @@ use lb_core::{
             zk_transfer::defer_zk_transfer,
         },
         traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpProofs, UNITS_PER_LGO, hash::TxHash},
+        transactions::{MantleTxBuilder, OpProofs, hash::TxHash},
     },
 };
 use lb_groth16::Fr;
