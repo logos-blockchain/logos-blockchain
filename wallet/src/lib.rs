@@ -333,6 +333,33 @@ impl WalletState {
         excluded: &HashSet<NoteNullifier>,
         priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
+        self.fund_tx_from(
+            tx_builder,
+            &[],
+            change_pk,
+            change_nonce,
+            pks,
+            context,
+            excluded,
+            priority_fee,
+        )
+    }
+
+    /// As [`Self::fund_tx`], also funding from `created`: ledger notes the
+    /// Operations of `tx_builder` create, which its funding Transfer spends
+    /// through the buffer of the transaction, such as the change of a split.
+    #[expect(clippy::too_many_arguments, reason = "the funding inputs")]
+    pub fn fund_tx_from(
+        &self,
+        tx_builder: &MantleTxBuilder,
+        created: &[FundingNote],
+        change_pk: ZkPublicKey,
+        change_nonce: Fr,
+        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        context: &OpsContext,
+        excluded: &HashSet<NoteNullifier>,
+        priority_fee: impl Into<PriorityFee>,
+    ) -> Result<MantleTxBuilder, WalletError> {
         let priority_fee = priority_fee.into();
         // Get the ledger notes owned by the provided PKs, excluding the ones
         // the tx already consumes and the ones excluded by the caller (e.g.
@@ -342,7 +369,22 @@ impl WalletState {
             .nullifiers_consumed()
             .chain(excluded.iter().copied())
             .collect::<HashSet<_>>();
-        let mut notes = self.funding_candidates(pks, &excluded);
+        let mut notes = self
+            .funding_candidates(pks, &excluded)
+            .into_iter()
+            .map(|owned| FundingNote {
+                note: owned.note,
+                nullifier: owned.nullifier,
+            })
+            .chain(
+                created
+                    .iter()
+                    .filter(|funding| !excluded.contains(&funding.nullifier))
+                    .copied(),
+            )
+            .collect::<Vec<_>>();
+        // Consume large valued notes first to ensure we converge.
+        notes.sort_by_key(|funding| -i128::from(funding.note.value));
         // A ZkTransfer spends at most four notes.
         notes.truncate(MAX_INPUTS.saturating_sub(tx_builder.funding_inputs().len()));
         let funding_root = self.ledger_root();
@@ -372,13 +414,9 @@ impl WalletState {
         }
 
         for i in 0..notes.len() {
-            let funded_tx_builder = tx_builder.clone().extend_funding_inputs(
-                funding_root,
-                notes[..=i].iter().map(|owned| FundingNote {
-                    note: owned.note,
-                    nullifier: owned.nullifier,
-                }),
-            )?;
+            let funded_tx_builder = tx_builder
+                .clone()
+                .extend_funding_inputs(funding_root, notes[..=i].iter().copied())?;
 
             let funding_delta =
                 funded_tx_builder.funding_delta_with_priority_fee(context, priority_fee)?;
@@ -493,10 +531,12 @@ impl WalletState {
     }
 }
 
-fn total_value(notes: &[OwnedNote]) -> Result<Value, WalletError> {
+fn total_value(notes: &[FundingNote]) -> Result<Value, WalletError> {
     notes
         .iter()
-        .try_fold(0, |total: Value, owned| total.checked_add(owned.note.value))
+        .try_fold(0, |total: Value, funding| {
+            total.checked_add(funding.note.value)
+        })
         .ok_or_else(|| GasOverflow.into())
 }
 
@@ -748,15 +788,43 @@ impl<KeyId> Wallet<KeyId> {
         excluded: &HashSet<NoteNullifier>,
         priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.spend_state(tip)?.fund_tx(
+        let funding_pks = funding_pks
+            .into_iter()
+            .map(|pk| *pk.borrow())
+            .collect::<Vec<_>>();
+        let created = self.created_ledger_notes(tx_builder, &funding_pks);
+        self.spend_state(tip)?.fund_tx_from(
             tx_builder,
+            &created,
             change_pk,
             change_nonce,
-            funding_pks,
+            &funding_pks,
             context,
             excluded,
             priority_fee,
         )
+    }
+
+    // The ledger notes under `pks` the Operations of `tx_builder` create, whose
+    // opening the wallet knows, such as the change of a split: the funding
+    // Transfer, after them, can spend them.
+    fn created_ledger_notes(
+        &self,
+        tx_builder: &MantleTxBuilder,
+        pks: &[ZkPublicKey],
+    ) -> Vec<FundingNote> {
+        tx_builder
+            .op_openings()
+            .values()
+            .flat_map(|opening| &opening.outputs)
+            .filter(|note| pks.contains(&note.public_key))
+            .filter_map(|note| self.known_notes.get(&note.commitment()))
+            .filter(|known| known.note_set == NoteSetIndex::Ledger)
+            .map(|known| FundingNote {
+                note: known.note,
+                nullifier: known.nullifier,
+            })
+            .collect()
     }
 
     pub fn wallet_state_at(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
@@ -1467,6 +1535,108 @@ mod tests {
                 .unwrap();
         }
         wallet
+    }
+
+    /// A wallet holding one note covering an exact amount and the fees: the
+    /// split of the exact amount consumes the note, and the funding spends the
+    /// change of the split through the buffer of the transaction.
+    #[test]
+    fn the_fees_of_a_split_are_funded_from_its_change() {
+        let (alice, bob) = (pk(1), pk(2));
+        let note = Note::new(100_000, Fr::from(1u64), alice);
+        let mut known = known(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
+        let mut wallet =
+            Wallet::from_genesis([(alice, 1)], known.clone(), block_id(0), &[note], &[]).unwrap();
+        let state = wallet.spend_state(block_id(0)).unwrap();
+        let (split, opening) = state
+            .exact_note_split(
+                100,
+                alice,
+                Fr::from(2u64),
+                alice,
+                Fr::from(3u64),
+                [alice],
+                &HashSet::new(),
+            )
+            .unwrap();
+        let [exact, change] = opening.outputs[..] else {
+            panic!("the split creates the exact note and its change");
+        };
+        let split_notes = [
+            KnownNote {
+                note: exact,
+                note_set: NoteSetIndex::Ledger,
+                nullifier: nullifier(2),
+            },
+            KnownNote {
+                note: change,
+                note_set: NoteSetIndex::Ledger,
+                nullifier: nullifier(3),
+            },
+        ];
+        wallet.add_known_notes(split_notes);
+        known.extend(split_notes.map(|known| (known.note.commitment(), known)));
+        // The exact note is spent on, as a deposit or a declaration spends it.
+        let paid = Note::new(100, Fr::from(4u64), bob);
+        let builder = MantleTxBuilder::new()
+            .push_op_with_opening(Op::Transfer(split), opening)
+            .unwrap()
+            .push_op_with_opening(
+                Op::Transfer(TransferOp::new(
+                    [nullifier(2)].into(),
+                    [paid.commitment()].into(),
+                    state.ledger_root(),
+                    0,
+                )),
+                ZkTransferOpening {
+                    inputs: vec![exact],
+                    outputs: vec![paid],
+                },
+            )
+            .unwrap();
+        let context = context(GasPrices::new(1, 1));
+
+        let funded = wallet
+            .fund_tx(
+                block_id(0),
+                &builder,
+                alice,
+                Fr::from(5u64),
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            )
+            .unwrap();
+
+        assert_eq!(
+            funded.funding_inputs(),
+            [FundingNote {
+                note: change,
+                nullifier: nullifier(3)
+            }]
+        );
+        let fee = funded.minimum_gas_cost(&context).unwrap().into_inner();
+        assert_eq!(funded.net_balance(), i128::from(fee));
+        // What the note held is paid, burned as the fee, or returned as change.
+        let returned = funding_transfer(funded.clone()).outputs;
+        let fee_change = Note::new(change.value - fee, Fr::from(5u64), alice);
+        assert_eq!(returned, [fee_change.commitment()].into());
+        assert_eq!(paid.value + fee + fee_change.value, note.value);
+        // The funding Transfer is proven over the change the split appended.
+        let openings = funded.openings();
+        let witnesses = op_witnesses(
+            &state,
+            &known,
+            &funded.build(FORK_DIGEST).unwrap(),
+            &openings,
+            &WitnessContext::default(),
+            Fr::from(77u64),
+        )
+        .unwrap();
+        assert_eq!(witnesses.len(), 3);
+        let input = &witnesses[2].witness.inputs()[0];
+        assert_eq!((input.nonce, input.value), (change.nonce, change.value));
     }
 
     #[test]

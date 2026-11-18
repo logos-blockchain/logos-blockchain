@@ -343,6 +343,13 @@ impl MantleTxBuilder {
         &self.funding_inputs
     }
 
+    /// The `ZkTransfer` openings of the Operations by Op Index, without the one
+    /// of the funding Transfer.
+    #[must_use]
+    pub const fn op_openings(&self) -> &BTreeMap<usize, ZkTransferOpening> {
+        &self.openings
+    }
+
     // The ZkTransfer openings by Op Index, with the funding Transfer's at the
     // index `build` appends it.
     #[must_use]
