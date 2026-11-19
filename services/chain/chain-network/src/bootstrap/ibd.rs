@@ -61,13 +61,9 @@ where
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {
-        crate::apply_block_and_reconcile_mempool::<_, Mempool>(
-            block,
-            &self.cryptarchia,
-            &self.mempool_adapter,
-        )
-        .await
-        .map_err(Error::from)
+        crate::apply_block_and_reconcile_mempool(block, &self.cryptarchia, &self.mempool_adapter)
+            .await
+            .map_err(Error::from)
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {
