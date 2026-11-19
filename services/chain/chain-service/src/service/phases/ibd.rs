@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug};
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, future::OptionFuture};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
@@ -78,7 +78,7 @@ where
                         self.process_query(query).await;
                     }
                     ConsensusMsg::ApplyBlock { block, reply_channel } => {
-                        self.apply_block_and_reply(*block, reply_channel).await;
+                        self.apply_block(*block, reply_channel);
                     }
                     ConsensusMsg::ChainSync(event) => reject_chain_sync_event(event).await,
                     ConsensusMsg::IbdCompleted => {
@@ -86,6 +86,9 @@ where
                         return;
                     }
                 },
+                Some(verification) = OptionFuture::from(self.block_under_verification.as_mut()) => {
+                    self.finish_block(verification).await;
+                }
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }
