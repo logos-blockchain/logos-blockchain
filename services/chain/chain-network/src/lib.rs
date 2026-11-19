@@ -950,6 +950,13 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 /// - `CommsFailure`: relay failure has nothing to do with block validity; a
 ///   blanket "reject" here would poison the cache whenever chain-service is
 ///   temporarily unreachable.
+/// - `DeferredProofVerification`: a ZK signature or leader claim proof that
+///   fails verification locally is not proof that the block ID is invalid (on
+///   testnet, nodes rejected canonical blocks this way that the rest of the
+///   network accepted). The cache also rejects any block whose parent is
+///   cached, so a single such entry rejects every descendant and strands the
+///   node on a fork. The failed block is still not applied; it is judged again
+///   if it arrives later, e.g. through chain sync.
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
@@ -960,7 +967,8 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
             ApiError::ParentMissing { .. }
                 | ApiError::FutureBlock { .. }
                 | ApiError::AlreadyApplied(_)
-                | ApiError::CommsFailure(_),
+                | ApiError::CommsFailure(_)
+                | ApiError::DeferredProofVerification(_),
         ),
     )
 }
@@ -1287,6 +1295,28 @@ mod tests {
 
         verify_proposal_and_cache_rejected(&genuine, &mut orphan_downloader)
             .expect("genuine proposal must pass");
+    }
+
+    /// A failed deferred proof check must not put the block ID in the
+    /// rejected cache. Transaction hashes don't commit to their proofs, so a
+    /// block reconstructed with a bad local copy of a transaction fails this
+    /// check under the same ID as the valid block, and caching that ID would
+    /// reject all of the valid block's descendants.
+    #[test]
+    fn deferred_proof_verification_failure_is_not_cached() {
+        for err in [
+            lb_core::mantle::batch::Error::InvalidZkSignatures,
+            lb_core::mantle::batch::Error::MalformedZkSignature(String::new()),
+            lb_core::mantle::batch::Error::InvalidLeaderClaimProofs,
+            lb_core::mantle::batch::Error::MalformedLeaderClaimProof(String::new()),
+        ] {
+            assert!(is_recoverable_apply_error(&Error::Cryptarchia(
+                ApiError::DeferredProofVerification(err)
+            )));
+        }
+        assert!(!is_recoverable_apply_error(&Error::Cryptarchia(
+            ApiError::Unexpected(String::new())
+        )));
     }
 
     /// A network adapter that the orphan downloader holds but never calls here.
