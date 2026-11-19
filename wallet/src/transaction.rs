@@ -610,6 +610,7 @@ mod tests {
                         commitments: vec![small.commitment(), large.commitment()],
                     }],
                     revealed: vec![],
+                    payouts: vec![],
                     withdrawals: vec![],
                 },
             )
@@ -703,6 +704,7 @@ mod tests {
                         commitments: vec![on_chain.commitment()],
                     }],
                     revealed: vec![],
+                    payouts: vec![],
                     withdrawals: vec![],
                 },
             )
@@ -837,6 +839,7 @@ mod tests {
                     commitments: vec![alice_note().commitment(), bob_note().commitment()],
                 }],
                 revealed: vec![],
+                payouts: vec![],
                 withdrawals: vec![],
             },
         )?;

@@ -165,6 +165,7 @@ impl ScannerAccounting {
             epoch: 0.into(),
             updates,
             revealed,
+            payouts: vec![],
             withdrawals: vec![],
         })?;
         self.tip = id;

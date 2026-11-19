@@ -196,6 +196,19 @@ pub struct ProgramFollowRequestBody {
     pub program_id: ProgramId,
 }
 
+/// A payout of `value` a program owes to `public_key`, a key of the node's
+/// wallet.
+#[derive(Serialize, Deserialize)]
+pub struct ProgramPayoutExpectRequestBody {
+    pub channel_id: ChannelId,
+    pub public_key: ZkPublicKey,
+    /// The staking key the rule of the program fixes for the payout,
+    /// `public_key` unless it names another one.
+    #[serde(default)]
+    pub stake_public_key: Option<ZkPublicKey>,
+    pub value: Value,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct ProgramRegisterResponseBody {
     pub hash: TxHash,

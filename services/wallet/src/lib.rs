@@ -90,8 +90,8 @@ use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
 pub use crate::channel::{
-    BuiltProgramStep, ChannelStep, ChannelStepRequest, ChannelWithdrawal, ProgramOutput,
-    ProgramPayment, ProgramPayout, ProgramSpendRequest, ProgramStepRequest,
+    BuiltProgramStep, ChannelStep, ChannelStepRequest, ChannelWithdrawal, ExpectedPayout,
+    ProgramOutput, ProgramPayment, ProgramPayout, ProgramSpendRequest, ProgramStepRequest,
 };
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
@@ -274,6 +274,10 @@ pub enum WalletMsg {
         program_id: ProgramId,
         resp_tx: Sender<()>,
     },
+    ExpectPayout {
+        payout: ExpectedPayout,
+        resp_tx: Sender<Result<(), WalletServiceError>>,
+    },
     ProveChannelStep {
         tip: Option<HeaderId>,
         request: ChannelStepRequest,
@@ -412,6 +416,7 @@ impl WalletMsg {
             | Self::NewLeaderReward { .. }
             | Self::ImportNote { .. }
             | Self::FollowProgram { .. }
+            | Self::ExpectPayout { .. }
             | Self::GetKnownAddresses { .. }
             | Self::ReleasePendingNotes { .. } => None,
         }
@@ -1031,6 +1036,17 @@ where
                 state.follow_program(program_id);
                 if resp_tx.send(()).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to FollowProgram");
+                }
+            }
+            WalletMsg::ExpectPayout { payout, resp_tx } => {
+                let result = if state.wallet().known_keys().contains_key(&payout.public_key) {
+                    state.expect_payout(payout);
+                    Ok(())
+                } else {
+                    Err(WalletServiceError::UnknownKey(payout.public_key))
+                };
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to ExpectPayout");
                 }
             }
             WalletMsg::ProveChannelStep {
@@ -1909,6 +1925,24 @@ where
             }
             let known_note = Self::known_note(kms, key_id, *note, *note_set).await?;
             state.add_known_notes([known_note]);
+        }
+        // The payouts the wallet expects, whose notes it recomputes from the
+        // steps paying them.
+        for payouts in &block.payouts {
+            for expected in state.expected_payouts().to_vec() {
+                if channel_note_set(expected.channel_id) != Some(payouts.note_set) {
+                    continue;
+                }
+                let Some(note) = payouts.note_paid_to(
+                    expected.public_key,
+                    expected.stake_public_key.unwrap_or(expected.public_key),
+                    expected.value,
+                ) else {
+                    continue;
+                };
+                Self::import_note(note, payouts.note_set, state, kms).await?;
+                state.payout_seen(&expected);
+            }
         }
         Ok(())
     }

@@ -26,9 +26,9 @@ use lb_http_api_common::{
         chain::{ChainForkResponseBody, ChainIdResponseBody},
         channel::{
             ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
-            ChannelWithdrawResponseBody, ProgramFollowRequestBody, ProgramRegisterRequestBody,
-            ProgramRegisterResponseBody, ProgramStepProveRequestBody, ProgramStepProveResponseBody,
-            ProgramStepRequestBody, ProgramStepResponseBody,
+            ChannelWithdrawResponseBody, ProgramFollowRequestBody, ProgramPayoutExpectRequestBody,
+            ProgramRegisterRequestBody, ProgramRegisterResponseBody, ProgramStepProveRequestBody,
+            ProgramStepProveResponseBody, ProgramStepRequestBody, ProgramStepResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
@@ -45,8 +45,8 @@ use lb_http_api_common::{
         CHANNEL_PROGRAM_STEP, CHANNEL_PROGRAM_STEP_PROVE, CHANNEL_STEP, CHANNEL_WITHDRAW,
         CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES,
         MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
-        MEMPOOL_ADD_TX, NODE_VERSION, PROGRAM_FOLLOW, PROGRAM_REGISTER, SDP_POST_DECLARATION,
-        TIME_INFO,
+        MEMPOOL_ADD_TX, NODE_VERSION, PROGRAM_FOLLOW, PROGRAM_PAYOUT_EXPECT, PROGRAM_REGISTER,
+        SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -820,6 +820,20 @@ impl CommonHttpClient {
     ) -> Result<(), Error> {
         let request_url = base_url
             .join(PROGRAM_FOLLOW.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Have the node's wallet adopt a payout a program owes to one of its
+    /// keys, once a program step pays it.
+    pub async fn program_payout_expect(
+        &self,
+        base_url: Url,
+        body: ProgramPayoutExpectRequestBody,
+    ) -> Result<(), Error> {
+        let request_url = base_url
+            .join(PROGRAM_PAYOUT_EXPECT.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

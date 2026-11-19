@@ -18,7 +18,10 @@ use lb_core::{
         gas::GasOverflow,
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex, NoteSetUpdate},
-        notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
+        notes::{
+            InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments,
+            derive_program_output_nonce,
+        },
         ops::{OpProofRef, OpRef, StepProof, channel::inscribe::Step, transfer::TransferOp},
         traits::{MantleTx, SignedMantleTx},
         transactions::{
@@ -131,8 +134,71 @@ pub struct WalletBlock {
     pub updates: Vec<NoteSetUpdate>,
     // openings the block reveals, adopted only once registered as known notes
     pub revealed: Vec<(NoteSetIndex, Note)>,
+    // the user notes the program steps of the block pay with a derived nonce
+    pub payouts: Vec<ProgramPayouts>,
     // the inputs of each channel withdrawal the block posts
     pub withdrawals: Vec<InputNullifiers>,
+}
+
+/// The user notes a program step consuming a note of its program pays. Their
+/// nonces derive from `first_input`, so a payee knowing the value of its
+/// payout recomputes its note alone.
+pub struct ProgramPayouts {
+    pub note_set: NoteSetIndex,
+    pub first_input: NoteNullifier,
+    // the index of the first user note among the outputs of the step
+    pub first_output: usize,
+    pub commitments: Vec<NoteCommitment>,
+}
+
+impl ProgramPayouts {
+    /// The note of `value` the step pays to `public_key`, if it pays one.
+    #[must_use]
+    pub fn note_paid_to(
+        &self,
+        public_key: ZkPublicKey,
+        stake_public_key: ZkPublicKey,
+        value: Value,
+    ) -> Option<Note> {
+        self.commitments
+            .iter()
+            .enumerate()
+            .find_map(|(payout, commitment)| {
+                let nonce = derive_program_output_nonce(
+                    &self.first_input,
+                    self.first_output + payout,
+                    value,
+                    &public_key,
+                );
+                let note = Note {
+                    stake_public_key,
+                    ..Note::new(value, nonce, public_key)
+                };
+                (note.commitment() == *commitment).then_some(note)
+            })
+    }
+}
+
+// The payouts of the program steps of `op` that consume a note of their
+// program: a step consuming none picks the nonces of its outputs.
+fn program_payouts(op: OpRef<'_>) -> Vec<ProgramPayouts> {
+    let OpRef::ChannelInscribe(op) = op else {
+        return Vec::new();
+    };
+    let Some(note_set) = channel_note_set(op.channel_id) else {
+        return Vec::new();
+    };
+    op.steps()
+        .filter_map(|step| match step {
+            Step::Program(step) if !step.outputs.is_empty() => Some(ProgramPayouts {
+                note_set,
+                first_input: *step.inputs.first()?,
+                first_output: step.program_outputs.len(),
+                commitments: step.outputs.to_vec(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 impl WalletBlock {
@@ -161,6 +227,11 @@ impl WalletBlock {
                 program_notes(tx.op_refs_iter().zip(tx.signed_ops().op_proof_refs_iter()))
             }))
             .collect(),
+            payouts: block
+                .transactions_iter()
+                .flat_map(MantleTx::op_refs_iter)
+                .flat_map(program_payouts)
+                .collect(),
             withdrawals: block
                 .transactions_iter()
                 .flat_map(MantleTx::op_refs_iter)
@@ -1183,7 +1254,9 @@ mod tests {
             Op,
             gas::GasCost,
             ops::{
+                ChannelInscribeProof,
                 channel::inscribe::{Inscription, InscriptionOp},
+                op_proof::samples::SampleProof as _,
                 pow::PowNullifier,
                 sdp::SDPDeclareOp,
             },
@@ -1209,6 +1282,7 @@ mod tests {
             epoch: Epoch::new(epoch),
             updates,
             revealed: vec![],
+            payouts: vec![],
             withdrawals: vec![],
         }
     }
@@ -1579,6 +1653,7 @@ mod tests {
             .apply_block(
                 &known,
                 &WalletBlock {
+                    payouts: vec![],
                     withdrawals: vec![
                         [nullifier(1)].into(),
                         [nullifier(3), nullifier(9)].into(),
@@ -1668,6 +1743,51 @@ mod tests {
             )
             .unwrap();
         assert_eq!(opening.inputs, vec![large]);
+    }
+
+    #[test]
+    fn program_notes_come_from_the_openings_of_program_steps() {
+        let op = InscriptionOp::sample_with_step();
+        let proof = ChannelInscribeProof {
+            step_proofs: op
+                .steps()
+                .map(|step| StepProof::sample_for(step.into()))
+                .collect(),
+            ..ChannelInscribeProof::sample()
+        };
+        let StepProof::ProgramStep(step_proof) = &proof.step_proofs[2] else {
+            panic!("the last step of the sample is a program step");
+        };
+        assert_eq!(
+            program_notes(std::iter::once((
+                OpRef::ChannelInscribe(&op),
+                OpProofRef::ChannelInscribe(&proof)
+            )))
+            .collect::<Vec<_>>(),
+            vec![(
+                NoteSetIndex::Channel(op.channel_id),
+                step_proof.program_notes[0].note(Fr::from(0x34u64))
+            )]
+        );
+    }
+
+    #[test]
+    fn a_payee_recomputes_the_note_of_its_payout() {
+        let first_input = nullifier(7);
+        let paid = |output: usize, value: Value, key: u64| {
+            let nonce = derive_program_output_nonce(&first_input, output, value, &pk(key));
+            Note::new(value, nonce, pk(key))
+        };
+        let payouts = ProgramPayouts {
+            note_set: NoteSetIndex::Ledger,
+            first_input,
+            first_output: 1,
+            commitments: vec![paid(1, 5, 1).commitment(), paid(2, 9, 2).commitment()],
+        };
+        assert_eq!(payouts.note_paid_to(pk(2), pk(2), 9), Some(paid(2, 9, 2)));
+        // another value, or another staking key, is another note
+        assert_eq!(payouts.note_paid_to(pk(2), pk(2), 8), None);
+        assert_eq!(payouts.note_paid_to(pk(2), pk(3), 9), None);
     }
 
     #[test]

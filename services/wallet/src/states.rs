@@ -24,7 +24,7 @@ use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::{KeyId, WalletServiceError, WalletServiceSettings};
+use crate::{ExpectedPayout, KeyId, WalletServiceError, WalletServiceSettings};
 
 pub type Wallet = lb_wallet::Wallet<KeyId>;
 
@@ -120,6 +120,8 @@ pub struct RecoveryState {
     // the programs whose notes the wallet adopts from the blocks opening them
     #[serde(with = "serde_fr_vec")]
     followed_programs: Vec<ProgramId>,
+    // the payouts of programs the wallet has not seen paid yet
+    expected_payouts: Vec<ExpectedPayout>,
 }
 
 impl RecoveryState {
@@ -138,6 +140,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
             known_notes: KnownNotes::new(),
             next_reward_key_index: 0,
             followed_programs: Vec::new(),
+            expected_payouts: Vec::new(),
         })
     }
 }
@@ -146,6 +149,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 pub struct ServiceState<'u> {
     next_reward_key_index: u64,
     followed_programs: Vec<ProgramId>,
+    expected_payouts: Vec<ExpectedPayout>,
     wallet: Wallet,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
@@ -171,6 +175,7 @@ impl<'u> ServiceState<'u> {
             known_notes,
             next_reward_key_index,
             followed_programs,
+            expected_payouts,
             ..
         } = state;
         let wallet =
@@ -180,6 +185,7 @@ impl<'u> ServiceState<'u> {
             lib,
             next_reward_key_index,
             followed_programs,
+            expected_payouts,
             settings,
             updater,
         )
@@ -199,6 +205,7 @@ impl<'u> ServiceState<'u> {
             mut known_notes,
             next_reward_key_index,
             followed_programs,
+            expected_payouts,
             ..
         } = state;
         known_notes.extend(
@@ -218,6 +225,7 @@ impl<'u> ServiceState<'u> {
             genesis,
             next_reward_key_index,
             followed_programs,
+            expected_payouts,
             settings,
             updater,
         ))
@@ -228,12 +236,14 @@ impl<'u> ServiceState<'u> {
         lib: HeaderId,
         next_reward_key_index: u64,
         followed_programs: Vec<ProgramId>,
+        expected_payouts: Vec<ExpectedPayout>,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
         Self {
             next_reward_key_index,
             followed_programs,
+            expected_payouts,
             wallet,
             lib,
             updater,
@@ -273,6 +283,23 @@ impl<'u> ServiceState<'u> {
     pub fn follow_program(&mut self, program_id: ProgramId) {
         if !self.follows_program(&program_id) {
             self.followed_programs.push(program_id);
+            self.update_state();
+        }
+    }
+
+    pub fn expected_payouts(&self) -> &[ExpectedPayout] {
+        &self.expected_payouts
+    }
+
+    pub fn expect_payout(&mut self, payout: ExpectedPayout) {
+        self.expected_payouts.push(payout);
+        self.update_state();
+    }
+
+    // The payout is paid: its note is a known note of the wallet.
+    pub fn payout_seen(&mut self, payout: &ExpectedPayout) {
+        if let Some(seen) = self.expected_payouts.iter().position(|p| p == payout) {
+            self.expected_payouts.remove(seen);
             self.update_state();
         }
     }
@@ -458,6 +485,7 @@ impl<'u> ServiceState<'u> {
             known_notes: self.wallet.known_notes().clone(),
             next_reward_key_index: self.next_reward_key_index,
             followed_programs: self.followed_programs.clone(),
+            expected_payouts: self.expected_payouts.clone(),
         }));
     }
 }
@@ -521,6 +549,7 @@ mod tests {
             known_notes: HashMap::from([(note.note.commitment(), note)]),
             next_reward_key_index: 4,
             followed_programs: Vec::new(),
+            expected_payouts: Vec::new(),
         };
         let decoded: RecoveryState =
             serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
@@ -586,6 +615,7 @@ mod tests {
             known_notes: HashMap::new(),
             next_reward_key_index: 0,
             followed_programs: Vec::new(),
+            expected_payouts: Vec::new(),
         };
         let genesis = HeaderId::from([0; 32]);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
@@ -661,6 +691,7 @@ mod tests {
             known_notes: HashMap::new(),
             next_reward_key_index: 0,
             followed_programs: Vec::new(),
+            expected_payouts: Vec::new(),
         };
 
         let genesis = HeaderId::from([0; 32]);
@@ -700,6 +731,7 @@ mod tests {
             known_notes: HashMap::new(),
             next_reward_key_index: 0,
             followed_programs: Vec::new(),
+            expected_payouts: Vec::new(),
         };
         let known_note = |value| KnownNote {
             note: Note::new(value, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),

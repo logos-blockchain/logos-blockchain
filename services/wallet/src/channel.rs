@@ -27,6 +27,7 @@ use lb_wallet::{
     KnownNote, KnownNotes, NoteSetSpend, SpentNullifier, WalletError, WalletState,
     transaction::{OpWitness, step_witness},
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{WalletServiceError, random_nonce, states::ServiceState};
 
@@ -88,6 +89,18 @@ pub struct ProgramPayout {
     pub public_key: ZkPublicKey,
     /// The staking key of the note, `public_key` unless the payee named
     /// another one.
+    pub stake_public_key: Option<ZkPublicKey>,
+    pub value: Value,
+}
+
+/// A payout of `value` a program owes to `public_key`, a key of the wallet,
+/// which adopts its note from the step paying it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectedPayout {
+    pub channel_id: ChannelId,
+    pub public_key: ZkPublicKey,
+    /// The staking key the rule of the program fixes for the payout,
+    /// `public_key` unless it names another one.
     pub stake_public_key: Option<ZkPublicKey>,
     pub value: Value,
 }

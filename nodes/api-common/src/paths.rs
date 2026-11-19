@@ -28,6 +28,7 @@ pub const CHANNEL_PROGRAM_STEP: &str = "/channel/program-step";
 pub const CHANNEL_PROGRAM_STEP_PROVE: &str = "/channel/program-step/prove";
 pub const PROGRAM_REGISTER: &str = "/program/register";
 pub const PROGRAM_FOLLOW: &str = "/program/follow";
+pub const PROGRAM_PAYOUT_EXPECT: &str = "/program/payout/expect";
 pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";
 pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";

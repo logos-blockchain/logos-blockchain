@@ -30,7 +30,7 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    AgedNote, BuiltProgramStep, ChannelStep, ChannelStepRequest, ChannelWithdrawal,
+    AgedNote, BuiltProgramStep, ChannelStep, ChannelStepRequest, ChannelWithdrawal, ExpectedPayout,
     LeaderAgedNotesInfo, ProgramSpendRequest, ProgramStepRequest, TipResponse, WalletMsg,
     WalletServiceError, WalletServiceSettings,
 };
@@ -293,6 +293,16 @@ where
             })
             .await?;
         Ok(rx.await?)
+    }
+
+    /// Adopts the note a program step pays to a key of the wallet with a
+    /// derived nonce, once a block holds the step.
+    pub async fn expect_payout(&self, payout: ExpectedPayout) -> Result<(), WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ExpectPayout { payout, resp_tx })
+            .await?;
+        Ok(rx.await??)
     }
 
     /// A user step, or a program deposit, spending the channel notes of the

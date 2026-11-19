@@ -52,9 +52,9 @@ use lb_http_api_common::{
         channel::{
             ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
             ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
-            ProgramFollowRequestBody, ProgramRegisterRequestBody, ProgramRegisterResponseBody,
-            ProgramStepProveRequestBody, ProgramStepProveResponseBody, ProgramStepRequestBody,
-            ProgramStepResponseBody,
+            ProgramFollowRequestBody, ProgramPayoutExpectRequestBody, ProgramRegisterRequestBody,
+            ProgramRegisterResponseBody, ProgramStepProveRequestBody, ProgramStepProveResponseBody,
+            ProgramStepRequestBody, ProgramStepResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
@@ -81,8 +81,8 @@ use lb_tx_service::{
 };
 use lb_version::BuildVersionInfo;
 use lb_wallet_service::{
-    ChannelStepRequest, ProgramOutput, ProgramPayment, ProgramPayout, ProgramSpendRequest,
-    ProgramStepRequest,
+    ChannelStepRequest, ExpectedPayout, ProgramOutput, ProgramPayment, ProgramPayout,
+    ProgramSpendRequest, ProgramStepRequest,
     api::{WalletApi, WalletServiceData, added_nullifiers},
 };
 use overwatch::{
@@ -1560,6 +1560,38 @@ where
             handle.relay::<WalletService>().await?,
         );
         wallet.follow_program(req.program_id).await?;
+        Ok::<_, DynError>(())
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = paths::PROGRAM_PAYOUT_EXPECT,
+    responses(
+        (status = 200, description = "The wallet adopts the payout once a program step pays it"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn program_payout_expect<WalletService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ProgramPayoutExpectRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+        wallet
+            .expect_payout(ExpectedPayout {
+                channel_id: req.channel_id,
+                public_key: req.public_key,
+                stake_public_key: req.stake_public_key,
+                value: req.value,
+            })
+            .await?;
         Ok::<_, DynError>(())
     })
 }
