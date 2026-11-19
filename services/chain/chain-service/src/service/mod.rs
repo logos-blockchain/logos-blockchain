@@ -691,12 +691,22 @@ where
                 uncle_headers,
                 reply_channel,
             } => {
-                let result =
-                    self.cryptarchia
-                        .verify_header(*header, *uncle_headers, self.current_slot);
-                reply_channel.send(result).unwrap_or_else(|_| {
-                    error!(target: LOG_TARGET, "Could not send header verification result through channel");
-                });
+                // The header's leader proof and its uncles' take a while to
+                // check, so they're checked on the blocking pool, against the
+                // chain as it is now.
+                let cryptarchia = self.cryptarchia.clone();
+                let current_slot = self.current_slot;
+                self.pending_queries.push(Box::pin(async move {
+                    let result = spawn_blocking(
+                        "logos/chain/header-verification-blocking",
+                        move || cryptarchia.verify_header(*header, *uncle_headers, current_slot),
+                    )
+                    .await
+                    .expect("Header verification should not fail");
+                    reply_channel.send(result).unwrap_or_else(|_| {
+                        error!(target: LOG_TARGET, "Could not send header verification result through channel");
+                    });
+                }));
             }
             Query::SelectUncles {
                 parent,
