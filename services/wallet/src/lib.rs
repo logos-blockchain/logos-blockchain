@@ -1769,26 +1769,27 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         era_schedule: &ServiceEraSchedule,
     ) -> Result<(), WalletServiceError> {
-        let mut stale = HashSet::new();
-        let mut blocks = Vec::new();
+        // The commitments are taken before any message is opened: opening the
+        // message of a block forgets it, and a commitment can be in a block of
+        // each branch of a fork.
+        let pending = state.pending_delivery_commitments();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let mut applied = Vec::new();
         for header_id in state.wallet().applied_blocks() {
             let block = Self::load_block(header_id, storage).await?;
             let events = Self::load_block_events(header_id, storage).await;
-            let wallet_block = WalletBlock::from_block(
+            applied.push(WalletBlock::from_block(
                 &block,
                 era_schedule.epoch_for_slot(block.header().slot()),
                 &events,
-            );
-            let delivers = wallet_block
-                .updates
-                .iter()
-                .any(|update| !state.pending_deliveries_of(&update.commitments).is_empty());
-            if delivers || stale.contains(&wallet_block.parent) {
-                stale.insert(header_id);
-                // Opens the messages of the block while every state is still held.
-                Self::add_revealed_notes(&wallet_block, state, kms).await?;
-                blocks.push(wallet_block);
-            }
+            ));
+        }
+        let blocks = blocks_delivered_late(applied, &pending);
+        for block in &blocks {
+            // Opens the messages of the block while every state is still held.
+            Self::add_revealed_notes(block, state, kms).await?;
         }
         if blocks.is_empty() {
             return Ok(());
@@ -2329,6 +2330,31 @@ fn log_lib_update(lib_update: &LibUpdate) {
 // A fresh nonce for a note the wallet creates.
 // The storage key of the note of `commitment` the wallet created for someone
 // else.
+// The blocks to apply again for the delivery messages of `pending`: each block
+// that appends one of these commitments, on whichever branch, and the
+// descendants of such a block. `blocks` holds each block after its parent.
+fn blocks_delivered_late(
+    blocks: Vec<WalletBlock>,
+    pending: &HashSet<NoteCommitment>,
+) -> Vec<WalletBlock> {
+    let mut again = HashSet::new();
+    blocks
+        .into_iter()
+        .filter(|block| {
+            let delivers = block
+                .updates
+                .iter()
+                .flat_map(|update| &update.commitments)
+                .any(|commitment| pending.contains(commitment));
+            let applied_again = delivers || again.contains(&block.parent);
+            if applied_again {
+                again.insert(block.id);
+            }
+            applied_again
+        })
+        .collect()
+}
+
 fn sent_note_key(commitment: &NoteCommitment) -> Bytes {
     [
         SENT_NOTE_KEY_PREFIX,
@@ -2385,6 +2411,44 @@ mod tests {
     use lb_groth16::CompressedGroth16Proof;
 
     use super::*;
+
+    // A transaction can be in a block of each branch of a fork when its
+    // delivery message arrives. Every one of these blocks is applied again:
+    // applying only the first found left the note out of the other branch.
+    #[test]
+    fn a_late_delivery_reapplies_the_block_of_every_branch_that_holds_its_commitment() {
+        use lb_core::mantle::note_set::NoteSetUpdate;
+
+        let id = |byte: u8| HeaderId::from([byte; 32]);
+        let commitment = |value: u64| NoteCommitment(Fr::from(value));
+        let block = |block: u8, parent: u8, appended: u64| WalletBlock {
+            id: id(block),
+            parent: id(parent),
+            epoch: Epoch::from(0),
+            updates: vec![NoteSetUpdate {
+                note_set: NoteSetIndex::Ledger,
+                nullifiers: Vec::new(),
+                commitments: vec![commitment(appended)],
+            }],
+            revealed: Vec::new(),
+        };
+        // 1 -> 2 -> 4, and 1 -> 3 -> 5: blocks 2 and 3 append the delivered
+        // commitment, each on its branch, and 6 is on a third branch.
+        let applied = vec![
+            block(2, 1, 7),
+            block(3, 1, 7),
+            block(4, 2, 8),
+            block(5, 3, 9),
+            block(6, 1, 10),
+        ];
+
+        let again = blocks_delivered_late(applied, &HashSet::from([commitment(7)]));
+
+        assert_eq!(
+            again.iter().map(|block| block.id).collect::<Vec<_>>(),
+            [id(2), id(3), id(4), id(5)]
+        );
+    }
 
     /// The costs of the deployments' current gas profile.
     pub const GAS_PROFILE: GasProfile = GasProfile {

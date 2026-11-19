@@ -347,6 +347,11 @@ impl<'u> ServiceState<'u> {
         self.pending_deliveries.of(commitments)
     }
 
+    // The commitments a delivery message is kept for.
+    pub fn pending_delivery_commitments(&self) -> HashSet<NoteCommitment> {
+        self.pending_deliveries.messages.keys().copied().collect()
+    }
+
     pub fn forget_pending_deliveries(&mut self, commitments: &[NoteCommitment]) {
         self.pending_deliveries.forget(commitments);
     }
