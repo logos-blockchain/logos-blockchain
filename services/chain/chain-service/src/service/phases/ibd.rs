@@ -86,8 +86,8 @@ where
                         return;
                     }
                 },
-                Some(verification) = OptionFuture::from(self.block_under_verification.as_mut()) => {
-                    self.finish_block(verification).await;
+                Some(preparation) = OptionFuture::from(self.block_underway.as_mut()) => {
+                    self.finish_block(preparation).await;
                 }
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
