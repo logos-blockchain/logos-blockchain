@@ -68,6 +68,55 @@ pub type MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId> = TxMempo
     RuntimeServiceId,
 >;
 
+/// The ledger at `tip`, or at the current tip: its state and the config of
+/// its era.
+struct LedgerAtTip {
+    tip: HeaderId,
+    state: lb_ledger::LedgerState,
+    config: lb_ledger::Config,
+}
+
+async fn ledger_at_tip<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    tip: Option<HeaderId>,
+) -> Result<LedgerAtTip, super::DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    let tip = match tip {
+        Some(tip) => tip,
+        None => {
+            cryptarchia_info::<RuntimeServiceId>(handle)
+                .await?
+                .cryptarchia_info
+                .tip
+        }
+    };
+    let state = chain_api
+        .get_ledger_state(tip)
+        .await?
+        .ok_or("ledger state not found for block")?;
+    let config = chain_api.get_ledger_config(state.slot()).await?;
+    Ok(LedgerAtTip { tip, state, config })
+}
+
+/// The ledger config of the era of the current tip: what a transaction must
+/// fit, and what its Operations cost.
+pub async fn ledger_config_at_tip<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+) -> Result<lb_ledger::Config, super::DynError>
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    Ok(ledger_at_tip::<RuntimeServiceId>(handle, None)
+        .await?
+        .config)
+}
+
 /// The fee of a transaction at a tip.
 pub struct TxFeeAtTip {
     pub tip: HeaderId,
@@ -85,24 +134,12 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
-    let tip = match tip {
-        Some(tip) => tip,
-        None => {
-            cryptarchia_info::<RuntimeServiceId>(handle)
-                .await?
-                .cryptarchia_info
-                .tip
-        }
-    };
-    let ledger_state = chain_api
-        .get_ledger_state(tip)
-        .await?
-        .ok_or("ledger state not found for block")?;
-    let config = chain_api.get_ledger_config(ledger_state.slot()).await?;
-    let fee = tx_builder.funded_gas_cost(&ledger_state.tx_context(config.gas_profile))?;
-    Ok(TxFeeAtTip { tip, fee })
+    let ledger = ledger_at_tip::<RuntimeServiceId>(handle, tip).await?;
+    let fee = tx_builder.funded_gas_cost(&ledger.state.tx_context(ledger.config.gas_profile))?;
+    Ok(TxFeeAtTip {
+        tip: ledger.tip,
+        fee,
+    })
 }
 
 pub async fn channel_state<RuntimeServiceId>(

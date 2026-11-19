@@ -54,7 +54,7 @@ use crate::{
         free_cstring,
         keys::{KeyType, add_key, generate_key, remove_key},
         lifecycle::{shutdown_node, start_lb_node},
-        mantle::mantle_tx_fee,
+        mantle::{mantle_limits, mantle_tx_fee},
         metrics::get_open_metrics,
         network::get_network_info,
         peer::get_peer_id,
@@ -216,6 +216,7 @@ mod no_node {
             assert_eq!(code(get_network_info(node)), np);
             assert_eq!(code(get_channel_state(node, id.as_ptr())), np);
             assert_eq!(code(get_time_info(node)), np);
+            assert_eq!(code(mantle_limits(node)), np);
             assert_eq!(code(get_open_metrics(node)), np);
             assert_eq!(code(get_cryptarchia_info(node)), np);
             assert_eq!(code(get_block_events(node, &raw const id)), np);
@@ -770,6 +771,10 @@ mod with_node {
             );
             assert_eq!(
                 string_result("get_fork_digest", get_fork_digest(node)),
+                OperationStatusCode::Ok
+            );
+            assert_eq!(
+                string_result("mantle_limits", mantle_limits(node)),
                 OperationStatusCode::Ok
             );
 

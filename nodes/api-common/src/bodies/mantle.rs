@@ -1,7 +1,7 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        gas::{GasCost, GasPrice},
+        gas::{GasCost, GasPrice, GasProfile},
         transactions::MantleTxBuilder,
     },
 };
@@ -15,12 +15,21 @@ pub struct GasPricesResponseBody {
     pub storage_gas_price: GasPrice,
 }
 
-/// What a transaction must fit in the era of the node's current slot.
+/// What a transaction must fit in the era of the current tip, and what its
+/// Operations cost there.
 #[derive(Serialize, Deserialize)]
 pub struct LimitsResponseBody {
     /// The most bytes of data an Operation may carry: an inscription, or a
     /// deposit's metadata.
     pub max_op_data_size: u32,
+    /// The most bytes a block's transactions may take in their canonical
+    /// encoding.
+    pub max_transactions_size: u32,
+    /// The most execution gas a block may consume.
+    pub max_gas_per_block: u64,
+    /// The execution gas of the era's Operations: the context a transaction
+    /// is priced under, with the gas prices of a tip.
+    pub gas_profile: GasProfile,
 }
 
 /// A transaction to price as a wallet would fund it, at `tip` or the current
