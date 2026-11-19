@@ -249,9 +249,15 @@ fully described by its `len` and `root`.
 - `contains(n)`: the `index` overlay, then `NullifierKey` in the KV, counted
   only if its `leaf_index < len`.
 - `low_leaf(n) -> Option<LowLeaf>`: the greater of the overlay's
-  `range(..n).next_back()` and the KV's `get_prev(N, n)`. Base entries at or
-  past `len` are skipped by repeating `get_prev`. Then the leaf is read from
-  `pending`, or by walking the committed nodes from `root`.
+  `range(..n).next_back()` and the KV's `get_prev(N, n)`. A valid first base
+  entry returns directly. After the first entry at or past `len`, read the
+  base length once. If `base_len.saturating_sub(len)` is greater than
+  `(len + 1) * (len + H / 2)`, scan this state's leaves for the greatest
+  nullifier below `n`; otherwise keep skipping newer entries with `get_prev`.
+  The length includes the sentinel. This heuristic compares total base
+  growth with the state size; it does not bound the number of skipped
+  entries. Then the selected leaf is read from `pending`, or by walking the
+  committed nodes from `root`.
 - `leaf(i)` / `path(i)`: a walk of H levels from `root`, or from the sealed
   pending root.
 - `root()`: O(1) once sealed; before `seal`, the pending block is hashed on the
@@ -708,6 +714,8 @@ holding the trees (core, ledger) depend on the trait only.
 Symbols:
 
 - N: finalized nullifiers
+- L: leaves in the queried state, including the sentinel
+- d: newer base entries skipped during predecessor lookup
 - H = 40: tree height
 - b: inserts per block
 - k: blocks since the LIB
@@ -720,9 +728,10 @@ Symbols:
 | **Memory** | O(B · b): nullifier overlays and `BlockRecord`s only (about 50 MB at B = 2200, b = 100). O(1) per state otherwise |
 | **Disk** | O(N), about 250 B raw per nullifier, plus O(B · b · (H − log b)) nodes and stale records for the fork window |
 | `clone` | O(1) |
-| `contains` / low-leaf lookup | O(log(k·b) + r); a state below the base pays one more `get_prev` per newer nullifier between its predecessor and the bound |
+| `contains` | O(log(k·b) + r) |
+| low-leaf lookup | O(log(k·b) + (H + d) · r) when seeking; the base-growth heuristic above instead selects an O(log(k·b) + (H + L) · r) leaf scan after one seek and one metadata read |
 | `leaf(i)` / `path(i)` | O(H · r) |
-| `insert` | O(log(k·b) + H · r) |
+| `insert` | low-leaf lookup plus O(H · r) |
 | `seal` | O(b · (H − log b)) reads of the dirty committed nodes, plus O(b · H · h) hashing |
 | `commit` | one batch of about b·(H − log b) nodes, plus as many stale records; no reads |
 | `finalize` (per finalized block) | b index puts and 1 `G` key; no reads |

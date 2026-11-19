@@ -499,10 +499,11 @@ where
         Ok(entry.leaf_index.as_u64() < self.len)
     }
 
-    // The greatest nullifier of the base index lower than `key` and in this
-    // state, skipping those inserted after it.
+    // Find the predecessor through the base index, skipping entries added
+    // after this state, or search the state's leaves when growth favors a scan.
     fn base_predecessor(&self, key: NullifierKey) -> Result<Option<IndexedNullifier>, ImtError> {
         let mut bound = key;
+        let mut considered_snapshot_scan = false;
         loop {
             let Some(found) = self
                 .store
@@ -520,8 +521,54 @@ where
             if found.entry.leaf_index.as_u64() < self.len {
                 return Ok(Some(found));
             }
+            // Consider scanning once, after the first newer entry. A valid
+            // first result can return without reading the base metadata.
+            if !considered_snapshot_scan {
+                considered_snapshot_scan = true;
+                if self.should_scan_snapshot()? {
+                    return self.scanned_predecessor(key).map(Some);
+                }
+            }
             bound = found.key;
         }
+    }
+
+    fn should_scan_snapshot(&self) -> Result<bool, ImtError> {
+        let base_len = Self::base_meta(&self.store)?.len;
+        let newer_entries = u128::from(base_len.saturating_sub(self.len));
+        let snapshot_len = u128::from(self.len);
+
+        // With uniform nullifiers, the gap from a random target to its
+        // predecessor in the snapshot covers 1 / (snapshot_len + 1)
+        // of the key space on average. Use that fraction of the newer
+        // entries to estimate how many the index walk will skip.
+        //
+        // A scan visits roughly 2 * snapshot_len + HEIGHT nodes.
+        // Count one index seek as two node reads to compare the costs.
+        let scan_cost = snapshot_len + (HEIGHT / 2) as u128;
+
+        // Compare newer_entries / (snapshot_len + 1) to scan_cost
+        // without rounding the estimated skip count.
+        Ok(newer_entries > (snapshot_len + 1) * scan_cost)
+    }
+
+    fn scanned_predecessor(&self, key: NullifierKey) -> Result<IndexedNullifier, ImtError> {
+        self.leaves()?
+            .into_iter()
+            .enumerate()
+            .filter(|(_, leaf)| leaf.nullifier < key.nullifier)
+            .max_by_key(|(_, leaf)| leaf.nullifier)
+            .map(|(index, leaf)| IndexedNullifier {
+                key: NullifierKey {
+                    nullifier: leaf.nullifier,
+                },
+                entry: IndexEntry {
+                    leaf_index: LeafIndex::new(index as u64),
+                },
+            })
+            .ok_or_else(|| {
+                ImtError::Corrupted("no nullifier below, not even the sentinel".to_owned())
+            })
     }
 
     // The leaf of the greatest nullifier lower than `nullifier`.
