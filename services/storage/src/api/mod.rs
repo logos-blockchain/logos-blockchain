@@ -18,7 +18,7 @@ use lb_binary_codec::{
 use lb_core::{
     block::Block,
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId},
     mantle::{
         TxHash,
         traits::{Hashable, StorageSize},
@@ -175,6 +175,16 @@ impl<Tx> StorageApi<Tx> {
             response_tx,
         })
         .await
+    }
+
+    /// Read the header of a stored block. The header leads the block's
+    /// encoding, so the rest is left undecoded, its transactions unchecked.
+    pub async fn try_get_block_header(&self, id: &HeaderId) -> Result<Option<Header>, DynError> {
+        self.get_block_bytes(id)
+            .await?
+            .map(|bytes| Header::decode(&bytes, &()).map(|(_, header)| header))
+            .transpose()
+            .map_err(Into::into)
     }
 
     pub async fn get_block_parent(&self, id: &HeaderId) -> Option<HeaderId> {

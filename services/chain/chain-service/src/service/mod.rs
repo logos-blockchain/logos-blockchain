@@ -11,7 +11,11 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _, future::join_all, stream};
+use futures::{
+    Stream, StreamExt as _,
+    future::join_all,
+    stream::{self, FuturesUnordered},
+};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
@@ -26,7 +30,7 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId, ServiceType},
 };
-use lb_cryptarchia_engine::{Epoch, EraSchedule, PrunedBlocks, Slot};
+use lb_cryptarchia_engine::{Branch, Epoch, EraSchedule, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse, TipResponseFailureReason};
 use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
@@ -98,6 +102,12 @@ struct PreparedBlock<Tx> {
 // limits also protect the diagnostic path during a long LIB stall.
 const MAX_QUERY_SOURCES_PER_TIP: usize = 8;
 const MAX_QUERY_SOURCE_TIPS: usize = 64;
+
+/// How many blocks wait for the one being prepared, and how many queries are
+/// served off the loop at once, before the service stops taking messages. Its
+/// senders then wait on the relay, as when it served each message in full.
+const MAX_QUEUED_BLOCKS: usize = 16;
+const MAX_PENDING_QUERIES: usize = 64;
 
 /// Shared implementation for the live-tip and finalized-LIB declaration
 /// queries. The test fixture exercises these same methods against two state
@@ -281,9 +291,12 @@ where
     genesis_block: Box<GenesisBlock>,
     /// The block being prepared, if any, which the service loop polls along
     /// with its other inputs.
-    block_underway: Option<Pin<Box<dyn Future<Output = BlockPreparation<Tx>> + Send + Sync>>>,
+    block_underway: Option<Pin<Box<dyn Future<Output = BlockPreparation<Tx>> + Send>>>,
     /// The blocks waiting for it.
     queued_blocks: VecDeque<(BlockWithVerifiedHeader<Tx>, ApplyBlockReply<Tx>)>,
+    /// The queries waiting on storage, which the service loop polls along with
+    /// its other inputs.
+    pending_queries: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl<Phase, Tx> Service<Phase, Tx>
@@ -327,7 +340,15 @@ where
             genesis_block: self.genesis_block,
             block_underway: self.block_underway,
             queued_blocks: self.queued_blocks,
+            pending_queries: self.pending_queries,
         }
+    }
+
+    /// Whether the service takes messages, or leaves them on the relay until
+    /// its queues have room.
+    fn takes_messages(&self) -> bool {
+        self.queued_blocks.len() < MAX_QUEUED_BLOCKS
+            && self.pending_queries.len() < MAX_PENDING_QUERIES
     }
 
     /// Apply a block whose header is verified to the chain, once the blocks
@@ -500,9 +521,15 @@ where
         self.epoch_state_query_sources.retire_behind_lib(lib_slot);
     }
 
-    /// Serve a read-only query. Available in every phase.
+    /// Serve a read-only query. Available in every phase. A query that has to
+    /// wait for storage is answered by a future the service loop polls along
+    /// with its other inputs.
+    ///
+    /// Queries see the committed chain only. One that comes while a block is
+    /// being prepared is answered without it, as the block joins the chain
+    /// only once it's committed.
     #[expect(clippy::too_many_lines, reason = "TODO: refactor into funcs")]
-    async fn process_query(&mut self, query: Query) {
+    fn process_query(&mut self, query: Query) {
         match query {
             Query::Info { reply_channel } => {
                 reply_channel
@@ -651,10 +678,13 @@ where
                 });
             }
             Query::GetBlockEvents { id, reply_channel } => {
-                let events = self.relays.storage().get_block_events(&id).await;
-                reply_channel.send(events).unwrap_or_else(|_| {
-                    error!(target: LOG_TARGET, "Could not send block events through channel");
-                });
+                let storage = self.relays.storage().clone();
+                self.pending_queries.push(Box::pin(async move {
+                    let events = storage.get_block_events(&id).await;
+                    reply_channel.send(events).unwrap_or_else(|_| {
+                        error!(target: LOG_TARGET, "Could not send block events through channel");
+                    });
+                }));
             }
             Query::VerifyHeader {
                 header,
@@ -673,10 +703,22 @@ where
                 slot,
                 reply_channel,
             } => {
-                let uncles = self.select_uncles(parent, slot).await;
-                reply_channel.send(uncles).unwrap_or_else(|_| {
-                    error!(target: LOG_TARGET, "Could not send uncles through channel");
-                });
+                let candidates = self.uncle_candidates(parent, slot);
+                let max_uncles = self
+                    .cryptarchia
+                    .ledger
+                    .era_schedule()
+                    .at_slot(slot)
+                    .parameters
+                    .consensus_config
+                    .max_uncles();
+                let storage = self.relays.storage().clone();
+                self.pending_queries.push(Box::pin(async move {
+                    let uncles = load_uncles(&candidates, max_uncles, &storage).await;
+                    reply_channel.send(uncles).unwrap_or_else(|_| {
+                        error!(target: LOG_TARGET, "Could not send uncles through channel");
+                    });
+                }));
             }
             Query::SubscribeChainOnline { sender } => {
                 sender
@@ -700,39 +742,18 @@ where
             .record(query_result.source_tip_id, query_source);
     }
 
-    /// Selects uncles for a new block extending `parent` at `slot`, at most as
-    /// many as the era of `slot` allows.
-    async fn select_uncles(&self, parent: HeaderId, slot: Slot) -> UncleHeaders {
+    /// The blocks that a new block extending `parent` at `slot` can carry as
+    /// uncles.
+    fn uncle_candidates(&self, parent: HeaderId, slot: Slot) -> Vec<HeaderId> {
         let Some(parent_branch) = self.cryptarchia.consensus.branches().get(&parent) else {
-            return UncleHeaders::empty();
+            return Vec::new();
         };
-
-        let mut uncles = Vec::new();
-        for candidate in self
-            .cryptarchia
+        self.cryptarchia
             .consensus
             .select_uncles(parent_branch, slot)
-        {
-            // Every block accepted into the block tree is persisted, so a
-            // candidate must be loadable. Even if not, a proposal is still
-            // valid with fewer uncles.
-            let Some(block) = self.relays.storage().get_block(&candidate.id()).await else {
-                error!(target: LOG_TARGET, candidate = ?candidate.id(), "uncle candidate not found in storage");
-                continue;
-            };
-            uncles.push(block.header().clone());
-        }
-
-        let max_uncles = self
-            .cryptarchia
-            .ledger
-            .era_schedule()
-            .at_slot(slot)
-            .parameters
-            .consensus_config
-            .max_uncles();
-        UncleHeaders::try_new(uncles, max_uncles)
-            .expect("at most as many uncles as the era allows are selected")
+            .into_iter()
+            .map(Branch::id)
+            .collect()
     }
 
     /// Record the current service state.
@@ -1278,6 +1299,38 @@ async fn commit_block<Tx>(
     outcome
 }
 
+/// The headers of the `candidates`, as many of them as a block can carry, which
+/// is at most `max_uncles`.
+///
+/// Every block accepted into the block tree is stored, so a candidate should be
+/// there. If it isn't, a proposal is still valid with fewer uncles.
+async fn load_uncles<Tx>(
+    candidates: &[HeaderId],
+    max_uncles: u8,
+    storage: &StorageApi<Tx>,
+) -> UncleHeaders {
+    // Only their headers are read, as only those go into the proposal.
+    let uncles = join_all(candidates.iter().map(async |block_id| {
+        match storage.try_get_block_header(block_id).await {
+            Ok(Some(header)) => Some(header),
+            Ok(None) => {
+                warn!(target: LOG_TARGET, %block_id, "Could not load an uncle from storage");
+                None
+            }
+            Err(error) => {
+                warn!(target: LOG_TARGET, %block_id, %error, "Could not load an uncle from storage");
+                None
+            }
+        }
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
+    UncleHeaders::try_new(uncles, max_uncles)
+        .expect("at most as many uncles as the era allows are selected")
+}
+
 /// Blocks of `block_ids`, loaded from storage.
 async fn load_blocks<'a, Tx>(
     block_ids: impl Iterator<Item = &'a HeaderId>,
@@ -1786,7 +1839,8 @@ mod tests {
         CryptarchiaInfo,
         sync::config::BlockProviderConfig,
         tests::{
-            genesis_block_with, genesis_cryptarchia, note, spawn_storage_service, try_build_block,
+            genesis_block_with, genesis_cryptarchia, note, signed_header, spawn_storage_service,
+            try_build_block,
         },
     };
 
@@ -1805,6 +1859,10 @@ mod tests {
     }
 
     impl ServiceHandle {
+        async fn send(&self, message: ConsensusMsg<TestTx>) {
+            assert!(self.relay.send(message).await.is_ok());
+        }
+
         async fn apply(
             &self,
             block: TestBlock,
@@ -1929,6 +1987,7 @@ mod tests {
             genesis_block: Box::new(genesis_block_with(&[])),
             block_underway: None,
             queued_blocks: VecDeque::new(),
+            pending_queries: FuturesUnordered::new(),
             cryptarchia,
         };
         let handle = ServiceHandle {
@@ -2032,6 +2091,132 @@ mod tests {
             ));
             assert_eq!(replied(applied).await.unwrap().tip, first_id);
         });
+    }
+
+    #[tokio::test]
+    async fn a_query_waiting_on_storage_leaves_the_service_free() {
+        let (_, note) = note();
+        let chain = genesis_cryptarchia(note);
+        let genesis = chain.tip();
+        let (storage_tx, mut storage_rx) = mpsc::channel(16);
+        let (service, handle) = service_on_storage(
+            storage_tx,
+            Following,
+            chain,
+            Slot::genesis(),
+            Duration::ZERO,
+        );
+        tokio::spawn(service.process_following());
+
+        let (reply_channel, events) = oneshot::channel();
+        handle
+            .send(
+                Query::GetBlockEvents {
+                    id: genesis,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await;
+        let request = timeout(REPLY_TIMEOUT, storage_rx.recv()).await.unwrap();
+        let Some(StorageMsg::GetBlockEvents { response_tx, .. }) = request else {
+            panic!("the events should be read");
+        };
+
+        assert_eq!(handle.info().await.tip, genesis);
+
+        response_tx.send(None).unwrap();
+        assert!(replied(events).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn serving_chain_sync_leaves_the_service_free() {
+        let (_, note) = note();
+        let chain = genesis_cryptarchia(note);
+        let genesis = chain.tip();
+        let (storage_tx, mut storage_rx) = mpsc::channel(16);
+        let (service, handle) = service_on_storage(
+            storage_tx,
+            Following,
+            chain,
+            Slot::genesis(),
+            Duration::ZERO,
+        );
+        tokio::spawn(service.process_following());
+
+        let (reply_sender, mut reply) = mpsc::channel(1);
+        handle
+            .send(ConsensusMsg::ChainSync(ChainSyncEvent::BlocksRequest {
+                target_block: HeaderId::from([9; 32]),
+                requester_tip: genesis,
+                latest_immutable_block: genesis,
+                additional_blocks: HashSet::new(),
+                reply_sender,
+            }))
+            .await;
+        let lookup = timeout(REPLY_TIMEOUT, storage_rx.recv())
+            .await
+            .unwrap()
+            .expect("the blocks should be looked up");
+
+        assert_eq!(handle.info().await.tip, genesis);
+
+        // A storage that can't answer: the request is turned down.
+        drop(lookup);
+        tokio::spawn(async move { while storage_rx.recv().await.is_some() {} });
+        assert!(matches!(
+            timeout(REPLY_TIMEOUT, reply.recv()).await.unwrap(),
+            Some(ProviderResponse::Unavailable { .. })
+        ));
+    }
+
+    /// The uncle has a slot of its own: a block can't take as an uncle one in
+    /// a slot its chain has filled.
+    #[tokio::test]
+    async fn a_fork_off_an_ancestor_is_offered_as_an_uncle() {
+        let (secret_key, note) = note();
+        let chain = genesis_cryptarchia(note);
+        let genesis = chain.tip();
+        let block_from = |start_slot| {
+            try_build_block(
+                &chain,
+                genesis,
+                &note,
+                secret_key,
+                start_slot,
+                UncleHeaders::empty(),
+            )
+            .expect("should find a winning slot")
+            .0
+        };
+        let uncle = block_from(Slot::new(1));
+        let parent = block_from(uncle.header().slot().strict_add(1.into()));
+        let (parent_id, next_slot) = (
+            parent.header().id(),
+            parent.header().slot().strict_add(1.into()),
+        );
+        let (service, handle) =
+            service_in(Following, chain, parent.header().slot(), Duration::ZERO);
+        tokio::spawn(service.process_following());
+        assert!(replied(handle.apply(parent).await).await.is_ok());
+        assert!(replied(handle.apply(uncle.clone()).await).await.is_ok());
+
+        let (reply_channel, uncles) = oneshot::channel();
+        handle
+            .send(
+                Query::SelectUncles {
+                    parent: parent_id,
+                    slot: next_slot,
+                    reply_channel,
+                }
+                .into(),
+            )
+            .await;
+
+        assert_eq!(
+            replied(uncles).await.iter().collect::<Vec<_>>(),
+            [&signed_header(&uncle)]
+        );
     }
 
     /// Storing is the one round trip a block on the tip takes.
