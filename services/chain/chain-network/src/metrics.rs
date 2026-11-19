@@ -29,6 +29,7 @@ pub fn consensus_observe_apply_block_ok(duration: Duration) {
 pub fn consensus_observe_apply_block_err(err: &Error) {
     let reason = match err {
         Error::Cryptarchia(ApiError::ParentMissing { .. }) => "parent_missing",
+        Error::Cryptarchia(ApiError::DeferredProofVerification(_)) => "deferred_proof",
         _ => "other",
     };
     consensus_apply_block_failed_total(reason);

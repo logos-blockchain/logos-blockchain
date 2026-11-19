@@ -53,6 +53,10 @@ pub enum ApiError {
     AlreadyApplied(HeaderId),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
+    /// The block's deferred ZK signatures or leader claim proofs failed batch
+    /// verification.
+    #[error("Deferred proof verification failed: {0}")]
+    DeferredProofVerification(lb_core::mantle::batch::Error),
     #[error("Unexpected Error: {0}")]
     Unexpected(String),
 }
@@ -487,6 +491,9 @@ where
                     current_slot,
                 },
                 crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
+                crate::Error::BatchDeferredProofVerification(err) => {
+                    ApiError::DeferredProofVerification(err)
+                }
                 err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
             })
     }
