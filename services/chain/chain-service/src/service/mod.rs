@@ -40,8 +40,8 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
-    AppliedBlock, BlockWithVerifiedHeader, ChainServiceInfo, ConsensusMsg, Cryptarchia,
-    CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
+    AppliedBlock, BlendRewards, BlockWithVerifiedHeader, ChainServiceInfo, ConsensusMsg,
+    Cryptarchia, CryptarchiaConsensusState, EpochStateQueryResult, Error, LOG_TARGET, LibUpdate,
     ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
@@ -507,6 +507,15 @@ where
                     error!(target: LOG_TARGET, "Could not send SDP snapshot through channel");
                 });
             }
+            Query::GetBlendRewards {
+                declaration_id,
+                reply_channel,
+            } => {
+                let rewards = self.blend_rewards(&declaration_id);
+                reply_channel.send(rewards).unwrap_or_else(|_| {
+                    error!(target: LOG_TARGET, "Could not send Blend rewards through channel");
+                });
+            }
             Query::GetEpochState {
                 slot,
                 reply_channel,
@@ -581,6 +590,18 @@ where
         };
         self.epoch_state_query_sources
             .record(query_result.source_tip_id, query_source);
+    }
+
+    /// The Blend rewards at the tip of the declaration `declaration_id`
+    fn blend_rewards(&self, declaration_id: &DeclarationId) -> Option<BlendRewards> {
+        let tip = self.cryptarchia.tip();
+        let ledger_state = self.cryptarchia.ledger.state(&tip)?;
+        let sdp_ledger = ledger_state.mantle_ledger().sdp_ledger();
+        let declaration = sdp_ledger.get_declaration(declaration_id)?;
+        Some(BlendRewards {
+            zk_id: declaration.zk_id,
+            estimate: sdp_ledger.blend_reward_estimate(&declaration.provider_id),
+        })
     }
 
     /// Selects uncles for a new block extending `parent` at `slot`, at most as
