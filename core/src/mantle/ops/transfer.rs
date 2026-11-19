@@ -89,6 +89,16 @@ pub enum TransferError {
     ZkTransferInputs(#[from] ZkTransferInputsError),
 }
 
+impl TransferError {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::ZkTransferInputs(_) => false,
+        }
+    }
+}
+
 pub struct TransferValidationContext<'a> {
     pub note_sets: &'a NoteSets,
     pub tx_notes: &'a TxNoteState,

@@ -853,6 +853,50 @@ fn a_nullifier_store_failure_is_a_storage_error() {
     ));
 }
 
+/// An Operation wraps a nullifier store failure in its own error: it is still a
+/// storage failure, whichever Operation hit it.
+#[test]
+fn a_nullifier_store_failure_in_an_operation_is_a_storage_error() {
+    use lb_core::mantle::{
+        channel::Error as ChannelError,
+        notes::NoteNullifier,
+        ops::{pow::ClaimPowRewardError, sdp::SdpError, transfer::TransferError},
+        transactions::errors::VerificationError,
+    };
+    use lb_ledger::mantle::{Error as MantleError, sdp::Error as SdpLedgerError};
+
+    let id = HeaderId::from([1; 32]);
+    let failure = || {
+        NoteSetError::Imt(ImtError::Storage(Arc::new(io::Error::other(
+            "the disk is gone",
+        ))))
+    };
+    let nested: [LedgerError<HeaderId>; 6] = [
+        MantleError::Transfer(TransferError::NoteSet(failure())).into(),
+        MantleError::Sdp(SdpLedgerError::SdpOp(SdpError::NoteSet(failure()))).into(),
+        MantleError::ClaimPow(ClaimPowRewardError::NoteSet(failure())).into(),
+        MantleError::Channel(ChannelError::NoteSet(failure())).into(),
+        VerificationError::TransferVerificationError(TransferError::NoteSet(failure())).into(),
+        VerificationError::SDPVerificationError(SdpError::NoteSet(failure())).into(),
+    ];
+    for err in nested {
+        assert!(matches!(
+            apply_block_api_error(Error::Ledger(err), id),
+            ApiError::Storage { id: failed, .. } if failed == id
+        ));
+    }
+
+    // A spent input is the block's fault, wrapped or not.
+    let spent = NoteSetError::AlreadySpent(NoteNullifier(Fr::from(1u64)));
+    assert!(matches!(
+        apply_block_api_error(
+            Error::Ledger(MantleError::Transfer(TransferError::NoteSet(spent)).into()),
+            id
+        ),
+        ApiError::Unexpected(_)
+    ));
+}
+
 /// `tx`, carried by a block at `slot`.
 const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
     TxInBlock { tx, slot }

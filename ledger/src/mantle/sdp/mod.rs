@@ -190,6 +190,27 @@ pub enum Error {
     InvalidDeferral,
 }
 
+impl Error {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::SdpOp(err) => err.is_store_failure(),
+            Self::DeclarationNotFound(_)
+            | Self::WithdrawalWhileUsedInService
+            | Self::ServiceNotFound(_)
+            | Self::DuplicateDeclaration(_)
+            | Self::EpochParamsNotFound(_)
+            | Self::ServiceParamsNotFound(_)
+            | Self::NotGenesisBlock
+            | Self::TimeTravel { .. }
+            | Self::InvalidSignature
+            | Self::InvalidProof
+            | Self::RewardsError(_)
+            | Self::InvalidDeferral => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ServiceState<R: Rewards> {
     service_type: ServiceType,
