@@ -24,7 +24,7 @@ Feature: PoW mining
   #     target claims per block also divide the per-claim reward, which a
   #     `rate_num` as large makes up for.
 
-  @blend_ci
+  @blend_ci @pow_mining
   Scenario: A late-joining node mines PoW rewards while two nodes run consensus
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -42,10 +42,11 @@ Feature: PoW mining
     # difficulty eased to the field maximum the miner finds tickets extremely
     # fast, and the claim is capped to `reward_pool / reward` tickets — so a
     # single-ticket cap keeps the reward-claim transaction small and fast. The
-    # The test deployment has `k` = 20; with `f` = 1/2 it gives `N_b` = 200
-    # expected blocks per epoch, so `rate_num` = 200 pays the whole pool in
-    # one claim.
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "200"
+    # per-claim reward is `pool * rate_num / (rate_den * target_claims_per_block
+    # * N_b)`, with `N_b` = 200 expected blocks per epoch here (`k` = 20,
+    # `f` = 1/2) and a million target claims per block, so a `rate_num` of
+    # 200 000 000 pays out the whole pool in one claim.
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "200000000"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_precision" as "1000000000000000000"
@@ -54,7 +55,8 @@ Feature: PoW mining
     # and blend and hold no wallet resources.
     And I start node "NODE_1"
     And I start peer node "NODE_2" connected to node "NODE_1"
-    # Let the two-node chain advance before the miner joins.
+    # Let the two-node chain advance so the reward difficulty eases to a
+    # mineable target before the miner joins.
     When node "NODE_1" is at height 5 in 300 seconds
     # The miner joins the running network with its wallet resources; WALLET_MINER
     # (account 1) is the mining wallet the claim request pays.
@@ -95,7 +97,7 @@ Feature: PoW mining
   # limits instead. That is the path where a claim can be built larger than the
   # Blend payload it has to travel in: such a transaction is refused at publish
   # time and never reaches a block, so the claim step below fails outright.
-  @blend_ci
+  @blend_ci @pow_mining
   Scenario: A mining node claims a backlog of rewards in one transaction
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -109,9 +111,14 @@ Feature: PoW mining
     And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "3"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
-    # Funds 250 claims, enough to exceed the transaction operation cap (255
-    # total ops) without creating an unnecessarily large persisted backlog.
-    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "4"
+    # Funds 1000 claims, so `reward_pool / reward` no longer caps the batch and
+    # the node's own per-transaction limits decide how many tickets it takes:
+    # the per-claim reward is `pool * rate_num / (rate_den *
+    # target_claims_per_block * N_b)`, with `N_b` = 200 expected blocks per
+    # epoch here (`k` = 20, `f` = 1/2) and a million target claims per block,
+    # so a `rate_num` of 1 000 000 over a `rate_den` of 5 pays a thousandth of
+    # the pool per claim.
+    And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_num" as "1000000"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.rate_den" as "5"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.minimum_difficulty" as "1"
     And I have deployment config override "eras.0.cryptarchia.pow_config.reward.ema_smoothing_factor" as "1"
@@ -130,7 +137,7 @@ Feature: PoW mining
     And I start mining on node "NODE_3"
     # Mine until the ready set is far past any per-transaction cap, so the
     # batch the node builds is the largest one it believes it may build.
-    And node "NODE_3" has at least 250 claimable PoW rewards within 120 seconds
+    And node "NODE_3" has at least 500 claimable PoW rewards within 120 seconds
     And I stop mining on node "NODE_3"
     When all nodes converged to within 0 blocks in 360 seconds
     And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
@@ -144,7 +151,7 @@ Feature: PoW mining
   # Same setup as above, but nothing ever calls the claim endpoint: the node is
   # configured with a `pow.auto_claim` target and claims on its own. The miner's
   # account starts empty, so any balance at all proves auto-claim ran.
-  @blend_ci
+  @blend_ci @pow_mining
   Scenario: A mining node claims its PoW rewards unattended
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
