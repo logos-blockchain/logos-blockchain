@@ -1,6 +1,6 @@
 use core::fmt::{Debug, Display};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
     pin::Pin,
@@ -8,7 +8,11 @@ use std::{
     time::Duration,
 };
 
-use futures::{Stream, StreamExt as _, stream};
+use futures::{
+    FutureExt as _, Stream, StreamExt as _,
+    future::{BoxFuture, OptionFuture},
+    stream::{self, FuturesOrdered, FuturesUnordered},
+};
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_blend_service::{
     api::{ApiError as BlendApiError, BlendServiceApi, BlendServiceData},
@@ -68,7 +72,10 @@ use overwatch::{
     },
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot::{self, error::RecvError};
+use tokio::sync::{
+    mpsc,
+    oneshot::{self, error::RecvError},
+};
 use tokio_stream::wrappers::{BroadcastStream, IntervalStream, errors::BroadcastStreamRecvError};
 use tracing::{
     debug, error,
@@ -78,6 +85,17 @@ use tracing::{
 use crate::tickets::{TicketGenerator, WinningTicket};
 
 const LOG_TARGET: &str = pow::ROOT;
+
+/// How many updates of a claim run wait for the service loop to take them in.
+const CLAIM_RUN_UPDATES_BUFFER_SIZE: usize = 16;
+
+/// How many claims wait for the run under way. A run claims every ticket it
+/// can, so the ones past a few would find nothing left to claim.
+const MAX_QUEUED_CLAIM_RUNS: usize = 4;
+
+/// How many queries and settings checks wait for their round trips. They take
+/// the wallet's and the chain's time, which a burst of them is not to crowd.
+const MAX_PENDING_REQUESTS: usize = 16;
 
 /// Errors produced while building or publishing `PoW` reward-claim
 /// transactions.
@@ -125,6 +143,8 @@ pub enum PoWError {
     SignedOps(#[from] lb_core::mantle::transactions::tx_list::signed_ops::Error),
     #[error("failed to build the ticket search thread pool: {0}")]
     SearchPool(#[from] rayon::ThreadPoolBuildError),
+    #[error("too many requests of this kind are waiting already")]
+    Busy,
 }
 
 /// Max inputs a single `Transfer` op can carry: the notes its `ZkTransfer`
@@ -388,6 +408,30 @@ impl PoWServiceState {
     const fn has_outstanding_tickets(&self) -> bool {
         !self.ready_to_claim.is_empty() || !self.pending_to_claim.is_empty()
     }
+
+    /// Moves `claimed` from the ready tickets to the pending ones.
+    ///
+    /// They're matched by nullifier, as the ready tickets may have moved on
+    /// since the claim picked them: some mined, others expired.
+    fn mark_as_pending(&mut self, claimed: Vec<WinningTicket>) {
+        let nullifiers: HashSet<PowNullifier> = claimed
+            .iter()
+            .map(|ticket| ticket.claim.get_puzzle_ticket())
+            .collect();
+        self.ready_to_claim
+            .retain(|ticket| !nullifiers.contains(&ticket.claim.get_puzzle_ticket()));
+        self.pending_to_claim.extend(claimed);
+    }
+
+    /// Takes in what a claim run found out.
+    fn apply(&mut self, update: ClaimRunUpdate) {
+        match update {
+            ClaimRunUpdate::Published(claimed) => self.mark_as_pending(claimed),
+            ClaimRunUpdate::AlreadyClaimed(nullifiers) => {
+                prune_claimed_tickets(self, |nullifier| nullifiers.contains(nullifier));
+            }
+        }
+    }
 }
 
 impl ServiceState for PoWServiceState {
@@ -614,6 +658,23 @@ where
         let mut claim_ticks = auto_claim_tick_stream(auto_claim_settings.tick);
         let mut last_slot_paced_claim: Option<Slot> = None;
 
+        // Claims run along with this loop's other inputs, one at a time as two
+        // side by side would claim the same tickets. Each works on a copy of
+        // the state, and reports what changes it for this loop to
+        // apply.
+        let mut queued_claim_runs = VecDeque::new();
+        let mut claim_run: Option<BoxFuture<'static, ClaimRunEnd>> = None;
+        // Whether mining or auto-claim was decided on while the run underway
+        // went on. A run works from the settings it started with, so it can't
+        // overrule a decision made since.
+        let mut decided_during_run = false;
+        let (run_updates_sender, mut run_updates) = mpsc::channel(CLAIM_RUN_UPDATES_BUFFER_SIZE);
+        // Round trips for this loop to act on, without waiting for them, and
+        // the queries that wait on one to be answered.
+        let mut settlement_checks = FuturesOrdered::new();
+        let mut auto_claim_checks = FuturesOrdered::new();
+        let mut queries = FuturesUnordered::new();
+
         service_resources_handle.status_updater.notify_ready();
 
         loop {
@@ -629,12 +690,14 @@ where
                                 info!(target: LOG_TARGET, "PoW mining started");
                             }
                             is_mining = true;
+                            decided_during_run = true;
                         }
                         PoWServiceMessage::StopMining => {
                             if is_mining {
                                 info!(target: LOG_TARGET, "PoW mining stopped");
                             }
                             is_mining = false;
+                            decided_during_run = true;
                         }
                         PoWServiceMessage::StartAutoClaim => {
                             if auto_claim_settings.targets.is_empty() {
@@ -644,6 +707,7 @@ where
                                     info!(target: LOG_TARGET, "PoW auto-claim started");
                                 }
                                 is_auto_claiming = true;
+                                decided_during_run = true;
                             }
                         }
                         PoWServiceMessage::StopAutoClaim => {
@@ -651,40 +715,40 @@ where
                                 info!(target: LOG_TARGET, "PoW auto-claim stopped");
                             }
                             is_auto_claiming = false;
+                            decided_during_run = true;
                         }
                         PoWServiceMessage::Claim { claim_address, reply_channel } => {
-                            let result = manual_claim(
-                                &cryptarchia_api,
-                                &blend_api,
-                                &wallet_api,
-                                claim_address,
-                                &auto_claim_settings.targets,
-                                &mut state,
-                                &settings.era_schedule,
-                                current_era_settings.parameters,
-                                max_claims_in_payload,
-                            )
-                            .await
-                            .inspect_err(|e| {
-                                error!(target: LOG_TARGET, "Failed to claim PoW rewards: {e}");
-                            });
-                            state_updater.update(Some(state.clone()));
-                            if reply_channel.send(result).is_err() {
+                            if queued_claim_runs.len() < MAX_QUEUED_CLAIM_RUNS {
+                                queued_claim_runs.push_back(ClaimRun::Manual { claim_address, reply_channel });
+                            } else if reply_channel.send(Err(PoWError::Busy)).is_err() {
                                 error!(target: LOG_TARGET, "Claim reply receiver was dropped");
                             }
                         }
+                        // A query over the limit goes unanswered, as the replies hold no error.
+                        PoWServiceMessage::ClaimableRewardsInfo { .. } | PoWServiceMessage::Status { .. }
+                            if queries.len() >= MAX_PENDING_REQUESTS =>
+                        {
+                            warn!(target: LOG_TARGET, "Too many PoW queries waiting: dropping one");
+                        }
                         PoWServiceMessage::ClaimableRewardsInfo { reply_channel } => {
-                            respond_claimable_rewards(&cryptarchia_api, &mut state, &state_updater, reply_channel, &settings.era_schedule).await;
+                            queries.push(
+                                respond_claimable_rewards(cryptarchia_api.clone(), state.clone(), reply_channel, settings.era_schedule.clone()).boxed(),
+                            );
                         }
                         PoWServiceMessage::Status { reply_channel } => {
-                            let status = PoWStatus {
-                                is_mining,
-                                are_rewards_enabled: current_era_settings.parameters.rewards_enabled,
-                                auto_claim: auto_claim_status(&wallet_api, &auto_claim_settings, is_auto_claiming).await,
-                            };
-                            if reply_channel.send(status).is_err() {
-                                error!(target: LOG_TARGET, "Status reply receiver was dropped");
-                            }
+                            let wallet_api = wallet_api.clone();
+                            let auto_claim_settings = auto_claim_settings.clone();
+                            let are_rewards_enabled = current_era_settings.parameters.rewards_enabled;
+                            queries.push(async move {
+                                let status = PoWStatus {
+                                    is_mining,
+                                    are_rewards_enabled,
+                                    auto_claim: auto_claim_status(&wallet_api, &auto_claim_settings, is_auto_claiming).await,
+                                };
+                                if reply_channel.send(status).is_err() {
+                                    error!(target: LOG_TARGET, "Status reply receiver was dropped");
+                                }
+                            }.boxed());
                         }
                         PoWServiceMessage::SetMiningSettings { settings: new_mining_settings, reply_channel } => {
                             handle_set_mining_settings(
@@ -695,35 +759,70 @@ where
                                 &mut winning_tickets,
                             );
                         }
-                        PoWServiceMessage::SetAutoClaimSettings { settings: new_settings, reply_channel } => {
-                            let result = apply_auto_claim_settings(
-                                new_settings,
-                                &wallet_api,
-                                &mut auto_claim_settings,
-                                &mut claim_ticks,
-                            )
-                            .await;
-
-                            if let Err(error) = &result {
-                                error!(target: LOG_TARGET, "Refusing the new PoW auto-claim settings: {error}");
-                            } else {
-                                // With no targets left, the next tick would stop mining too, so
-                                // stop auto-claim here.
-                                if auto_claim_settings.targets.is_empty() {
-                                    is_auto_claiming = false;
-                                }
-
-                                info!(
-                                    target: LOG_TARGET,
-                                    "PoW auto-claim settings updated: {} target(s), tick={:?}",
-                                    auto_claim_settings.targets.len(),
-                                    auto_claim_settings.tick
-                                );
-                            }
-
-                            if reply_channel.send(result).is_err() {
+                        PoWServiceMessage::SetAutoClaimSettings { reply_channel, .. }
+                            if auto_claim_checks.len() >= MAX_PENDING_REQUESTS =>
+                        {
+                            if reply_channel.send(Err(PoWError::Busy)).is_err() {
                                 error!(target: LOG_TARGET, "SetAutoClaimSettings reply receiver was dropped");
                             }
+                        }
+                        PoWServiceMessage::SetAutoClaimSettings { settings: new_settings, reply_channel } => {
+                            let wallet_api = wallet_api.clone();
+                            auto_claim_checks.push_back(async move {
+                                let validated = validate_claim_targets(&wallet_api, &new_settings.targets).await;
+                                (new_settings, validated, reply_channel)
+                            }.boxed());
+                        }
+                    }
+                }
+                Some((new_settings, validated, reply_channel)) = auto_claim_checks.next() => {
+                    let result = validated.map(|()| {
+                        apply_auto_claim_settings(new_settings, &mut auto_claim_settings, &mut claim_ticks);
+                    });
+
+                    if let Err(error) = &result {
+                        error!(target: LOG_TARGET, "Refusing the new PoW auto-claim settings: {error}");
+                    } else {
+                        decided_during_run = true;
+                        // With no targets left, the next tick would stop mining too, so
+                        // stop auto-claim here.
+                        if auto_claim_settings.targets.is_empty() {
+                            is_auto_claiming = false;
+                        }
+
+                        info!(
+                            target: LOG_TARGET,
+                            "PoW auto-claim settings updated: {} target(s), tick={:?}",
+                            auto_claim_settings.targets.len(),
+                            auto_claim_settings.tick
+                        );
+                    }
+
+                    if reply_channel.send(result).is_err() {
+                        error!(target: LOG_TARGET, "SetAutoClaimSettings reply receiver was dropped");
+                    }
+                }
+                Some(update) = run_updates.recv() => {
+                    state.apply(update);
+                    state_updater.update(Some(state.clone()));
+                }
+                Some(ended) = OptionFuture::from(claim_run.as_mut()) => {
+                    claim_run = None;
+                    // Whoever is waiting for the run finds all of its claims in
+                    // the state.
+                    while let Ok(update) = run_updates.try_recv() {
+                        state.apply(update);
+                    }
+                    state_updater.update(Some(state.clone()));
+                    match ended {
+                        ClaimRunEnd::Manual { result, reply_channel } => {
+                            if reply_channel.send(result).is_err() {
+                                error!(target: LOG_TARGET, "Claim reply receiver was dropped");
+                            }
+                        }
+                        ClaimRunEnd::Auto { still_armed: true } => {}
+                        ClaimRunEnd::Auto { still_armed: false } => {
+                            stop_once_every_target_is_funded(decided_during_run, &mut is_auto_claiming, &mut is_mining);
                         }
                     }
                 }
@@ -745,8 +844,14 @@ where
                 // A block was processed: retire any pending claim whose reward
                 // note it minted (i.e. the claim has settled on chain).
                 Some(processed_block) = processed_blocks.next() => {
-                    retire_settled_claims(&cryptarchia_api, &mut state, &state_updater, processed_block, &settings.era_schedule).await;
+                    if let Some(block_id) = handle_processed_block(&mut state, &state_updater, processed_block, &settings.era_schedule) {
+                        settlement_checks.push_back(settled_nullifiers(cryptarchia_api.clone(), block_id).boxed());
+                    }
                 }
+                Some(settled) = settlement_checks.next() => {
+                    retire_settled_claims(&mut state, &state_updater, &settled);
+                }
+                Some(()) = queries.next() => {}
                 // The clock entered a new slot: whether claims pay follows the
                 // slot's era, and a slot-paced claim falls due once a whole
                 // period has passed since the last one.
@@ -772,24 +877,26 @@ where
             // Once every target is funded, stop both auto-claim and mining. An
             // era without rewards pays no claim, so a claim falling due in it
             // does nothing; its tick is still consumed, so it is not saved up
-            // for a later era.
-            if claim_due && current_era_settings.parameters.rewards_enabled {
-                is_auto_claiming = run_auto_claim(
-                    &cryptarchia_api,
-                    &blend_api,
-                    &wallet_api,
-                    &auto_claim_settings.targets,
-                    &mut state,
-                    &state_updater,
-                    &settings.era_schedule,
-                    current_era_settings.parameters,
+            // for a later era. A claim falling due during a run is not saved up
+            // either: the next one gets what that run left.
+            if claim_due && current_era_settings.parameters.rewards_enabled && claim_run.is_none() {
+                queued_claim_runs.push_back(ClaimRun::Auto);
+            }
+            if claim_run.is_none()
+                && let Some(next_run) = queued_claim_runs.pop_front()
+            {
+                let flow = ClaimFlow {
+                    cryptarchia_api: cryptarchia_api.clone(),
+                    blend_api: blend_api.clone(),
+                    wallet_api: wallet_api.clone(),
+                    targets: auto_claim_settings.targets.clone(),
+                    era_schedule: settings.era_schedule.clone(),
+                    era_settings: current_era_settings.parameters.clone(),
                     max_claims_in_payload,
-                )
-                .await;
-                if !is_auto_claiming && is_mining {
-                    info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
-                    is_mining = false;
-                }
+                    updates: run_updates_sender.clone(),
+                };
+                claim_run = Some(run_claims(flow, next_run, state.clone()).boxed());
+                decided_during_run = false;
             }
         }
     }
@@ -888,18 +995,11 @@ fn replace_search_pool_if_resized(
 }
 
 /// Applies new auto-claim settings to a running service.
-async fn apply_auto_claim_settings<WalletService, RuntimeServiceId>(
+fn apply_auto_claim_settings(
     new_settings: AutoClaimSettings,
-    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     auto_claim: &mut AutoClaimSettings,
     claim_ticks: &mut Pin<Box<dyn Stream<Item = ()> + Send>>,
-) -> Result<(), PoWError>
-where
-    WalletService: WalletServiceData,
-    RuntimeServiceId: Debug + Sync + Display + AsServiceId<WalletService>,
-{
-    validate_claim_targets(wallet_api, &new_settings.targets).await?;
-
+) {
     if new_settings.tick != auto_claim.tick {
         debug!(
             target: LOG_TARGET,
@@ -911,8 +1011,29 @@ where
     }
 
     *auto_claim = new_settings;
+}
 
-    Ok(())
+/// Stops auto-claim and mining once a run of auto-claims found every target
+/// funded, unless either was decided on while the run went on: the run worked
+/// from the settings it started with, so that decision is the latest word, and
+/// the next run judges the targets afresh.
+fn stop_once_every_target_is_funded(
+    decided_during_run: bool,
+    is_auto_claiming: &mut bool,
+    is_mining: &mut bool,
+) {
+    if decided_during_run {
+        info!(
+            target: LOG_TARGET,
+            "A PoW auto-claim run found every target funded, but mining or auto-claim changed while it ran; leaving them for the next run to judge"
+        );
+        return;
+    }
+    *is_auto_claiming = false;
+    if *is_mining {
+        info!(target: LOG_TARGET, "Every PoW auto-claim target reached its threshold; stopping mining");
+        *is_mining = false;
+    }
 }
 
 /// The ticker of second-paced auto-claims, which never ticks under slot
@@ -1111,17 +1232,9 @@ fn neediest_target(
 /// The thresholds are checked on every tick, even with no ticket ready: mining
 /// may be paused on the reward pool while earlier claims settle, and the
 /// balances those claims raise are what should stop it.
-#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn run_auto_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
-    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
-    targets: &[ClaimTarget],
+    flow: &ClaimFlow<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>,
     state: &mut PoWServiceState,
-    state_updater: &StateUpdater<Option<PoWServiceState>>,
-    era_schedule: &ServiceEraSchedule,
-    era_settings: &PoWEraSettings,
-    max_claims_in_payload: usize,
 ) -> bool
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1130,7 +1243,7 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
-    let claim_address = match select_claim_target(wallet_api, targets).await {
+    let claim_address = match select_claim_target(&flow.wallet_api, &flow.targets).await {
         Ok(Some(claim_address)) => claim_address,
         Ok(None) => {
             info!(
@@ -1149,18 +1262,7 @@ where
         return true;
     }
 
-    drain_ready_rewards(
-        cryptarchia_api,
-        blend_api,
-        wallet_api,
-        claim_address,
-        state,
-        state_updater,
-        era_schedule,
-        era_settings,
-        max_claims_in_payload,
-    )
-    .await;
+    drain_ready_rewards(flow, claim_address, state).await;
     true
 }
 
@@ -1176,20 +1278,10 @@ where
 /// emitting a burst of transactions the chain then rejects. Drawing down a
 /// local balance stops the loop when the funds are spoken for; the next tick
 /// starts again from whatever the chain actually reports.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "The claim run needs each service handle and its own bounds."
-)]
 async fn drain_ready_rewards<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
-    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    flow: &ClaimFlow<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
-    state_updater: &StateUpdater<Option<PoWServiceState>>,
-    era_schedule: &ServiceEraSchedule,
-    era_settings: &PoWEraSettings,
-    max_claims_in_payload: usize,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
     BlendService: BlendServiceData,
@@ -1199,7 +1291,7 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, WalletService, Ru
 {
     // The running balance every claim in this drain spends against, opened at
     // whatever the chain currently reports.
-    let mut available_pool = match current_reward_pool(cryptarchia_api).await {
+    let mut available_pool = match current_reward_pool(&flow.cryptarchia_api).await {
         Ok(pool) => pool,
         Err(e) => {
             error!(target: LOG_TARGET, "Failed to read the PoW reward pool: {e}");
@@ -1207,29 +1299,14 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, WalletService, Ru
         }
     };
     loop {
-        match claim_ready_rewards(
-            cryptarchia_api,
-            blend_api,
-            wallet_api,
-            claim_address,
-            state,
-            era_schedule,
-            era_settings,
-            available_pool,
-            max_claims_in_payload,
-        )
-        .await
-        {
+        match claim_ready_rewards(flow, claim_address, state, available_pool).await {
             // Nothing left that can be claimed right now: the ready set is
             // empty, or what remains is anchored to non-canonical blocks or
             // pays a key the wallet lacks.
             Ok(None) => break,
             // A published claim always consumes at least one ready ticket, so
             // the loop is guaranteed to terminate.
-            Ok(Some(claim)) => {
-                available_pool = claim.remaining_pool;
-                state_updater.update(Some(state.clone()));
-            }
+            Ok(Some(claim)) => available_pool = claim.remaining_pool,
             // `RewardPoolExhausted` is the expected end of a drain once the
             // pool is spent, so it is not worth an error. Anything else stops
             // the loop too, leaving the tickets ready for the next tick.
@@ -1247,23 +1324,15 @@ async fn drain_ready_rewards<CryptarchiaService, BlendService, WalletService, Ru
             }
         }
     }
-    state_updater.update(Some(state.clone()));
 }
 
 /// Serves a [`PoWServiceMessage::Claim`]: one claim transaction paid to
 /// `claim_address`, or to the target auto-claim would pick when the caller did
 /// not name a key.
-#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn manual_claim<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
-    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    flow: &ClaimFlow<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>,
     claim_address: Option<ZkPublicKey>,
-    targets: &[ClaimTarget],
     state: &mut PoWServiceState,
-    era_schedule: &ServiceEraSchedule,
-    era_settings: &PoWEraSettings,
-    max_claims_in_payload: usize,
 ) -> Result<Option<TxHash>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1278,27 +1347,111 @@ where
     }
     let claim_address = match claim_address {
         Some(claim_address) => claim_address,
-        None => select_claim_target(wallet_api, targets)
+        None => select_claim_target(&flow.wallet_api, &flow.targets)
             .await?
             .ok_or(PoWError::NoClaimTarget)?,
     };
-    wallet_holds_claim_address(&wallet_api.get_known_addresses().await?, claim_address)?;
+    wallet_holds_claim_address(&flow.wallet_api.get_known_addresses().await?, claim_address)?;
     // A one-off claim has no run to accumulate over, so its balance is simply
     // the pool the chain reports right now, and the leftover is discarded.
-    let available_pool = current_reward_pool(cryptarchia_api).await?;
-    Ok(claim_ready_rewards(
-        cryptarchia_api,
-        blend_api,
-        wallet_api,
-        claim_address,
-        state,
-        era_schedule,
-        era_settings,
-        available_pool,
-        max_claims_in_payload,
+    let available_pool = current_reward_pool(&flow.cryptarchia_api).await?;
+    Ok(
+        claim_ready_rewards(flow, claim_address, state, available_pool)
+            .await?
+            .map(|claim| claim.tx_hash),
     )
-    .await?
-    .map(|claim| claim.tx_hash))
+}
+
+/// A run of claims, waiting for its turn.
+enum ClaimRun {
+    /// A [`PoWServiceMessage::Claim`].
+    Manual {
+        claim_address: Option<ZkPublicKey>,
+        reply_channel: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
+    },
+    /// Auto-claim falling due.
+    Auto,
+}
+
+/// How a run of claims ended.
+enum ClaimRunEnd {
+    Manual {
+        result: Result<Option<TxHash>, PoWError>,
+        reply_channel: oneshot::Sender<Result<Option<TxHash>, PoWError>>,
+    },
+    /// `still_armed` is `false` once every target has reached its threshold.
+    Auto { still_armed: bool },
+}
+
+/// What a run of claims found out that changes the service's state, which only
+/// the service loop changes.
+enum ClaimRunUpdate {
+    /// The tickets of a claim the run published.
+    Published(Vec<WinningTicket>),
+    /// The puzzle tickets of tickets the chain records as claimed.
+    AlreadyClaimed(HashSet<PowNullifier>),
+}
+
+/// What a run of claims goes through, for the run to own.
+struct ClaimFlow<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>
+where
+    CryptarchiaService: CryptarchiaServiceData,
+    BlendService: BlendServiceData,
+    WalletService: WalletServiceData,
+{
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService>,
+    blend_api: BlendServiceApi<BlendService, RuntimeServiceId>,
+    wallet_api: WalletApi<WalletService, RuntimeServiceId>,
+    targets: Vec<ClaimTarget>,
+    era_schedule: ServiceEraSchedule,
+    /// The settings of the era the run started in: the gas profile its claims
+    /// pay for.
+    era_settings: PoWEraSettings,
+    max_claims_in_payload: usize,
+    /// Where what changes the state goes, as the run finds it out.
+    updates: mpsc::Sender<ClaimRunUpdate>,
+}
+
+/// Hands `update` to the service loop.
+async fn report(updates: &mpsc::Sender<ClaimRunUpdate>, update: ClaimRunUpdate) {
+    if updates.send(update).await.is_err() {
+        debug!(target: LOG_TARGET, "The service stopped listening for claim run updates");
+    }
+}
+
+/// Goes through `claim_run` on `state`, a copy of the service's, which the
+/// claims only reach through `flow`'s `updates`.
+async fn run_claims<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
+    flow: ClaimFlow<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>,
+    claim_run: ClaimRun,
+    mut state: PoWServiceState,
+) -> ClaimRunEnd
+where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
+    BlendService: BlendServiceData,
+    BlendService::NodeId: Send,
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
+{
+    match claim_run {
+        ClaimRun::Manual {
+            claim_address,
+            reply_channel,
+        } => {
+            let result = manual_claim(&flow, claim_address, &mut state)
+                .await
+                .inspect_err(|e| {
+                    error!(target: LOG_TARGET, "Failed to claim PoW rewards: {e}");
+                });
+            ClaimRunEnd::Manual {
+                result,
+                reply_channel,
+            }
+        }
+        ClaimRun::Auto => ClaimRunEnd::Auto {
+            still_armed: run_auto_claim(&flow, &mut state).await,
+        },
+    }
 }
 
 /// A claim returns its rewards to `claim_address` as a change note whose
@@ -1350,20 +1503,11 @@ struct PublishedClaim {
 ///
 /// On any failure the ready set is left untouched so the tickets can be
 /// retried.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "The claim run needs each service handle and its own bounds."
-)]
 async fn claim_ready_rewards<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    blend_api: &BlendServiceApi<BlendService, RuntimeServiceId>,
-    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
+    flow: &ClaimFlow<CryptarchiaService, BlendService, WalletService, RuntimeServiceId>,
     claim_address: ZkPublicKey,
     state: &mut PoWServiceState,
-    era_schedule: &ServiceEraSchedule,
-    era_settings: &PoWEraSettings,
     available_pool: Value,
-    max_claims_in_payload: usize,
 ) -> Result<Option<PublishedClaim>, PoWError>
 where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -1372,6 +1516,16 @@ where
     WalletService: WalletServiceData,
     RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
+    let ClaimFlow {
+        cryptarchia_api,
+        blend_api,
+        wallet_api,
+        era_schedule,
+        era_settings,
+        max_claims_in_payload,
+        ..
+    } = flow;
+
     // Size the batch against the current tip — the state the tx applies
     // against.
     let info = cryptarchia_api.info().await?.cryptarchia_info;
@@ -1391,8 +1545,22 @@ where
     // Drop the tickets the tip already records as claimed, which a missed
     // block event left behind: the ledger rejects a claimed ticket, and the
     // whole tx with it.
-    let claimed = ledger_state.mantle_ledger().pow.nullifiers();
-    prune_claimed_tickets(state, |nullifier| claimed.contains_key(nullifier));
+    let claimed_on_chain = ledger_state.mantle_ledger().pow.nullifiers();
+    let already_claimed: HashSet<PowNullifier> = state
+        .ready_to_claim
+        .iter()
+        .chain(&state.pending_to_claim)
+        .map(|ticket| ticket.claim.get_puzzle_ticket())
+        .filter(|nullifier| claimed_on_chain.contains_key(nullifier))
+        .collect();
+    if !already_claimed.is_empty() {
+        prune_claimed_tickets(state, |nullifier| already_claimed.contains(nullifier));
+        report(
+            &flow.updates,
+            ClaimRunUpdate::AlreadyClaimed(already_claimed),
+        )
+        .await;
+    }
     if state.ready_to_claim.is_empty() {
         return Ok(None);
     }
@@ -1429,7 +1597,7 @@ where
         &ledger_state,
         available_pool,
         &tickets,
-        max_claims_in_payload,
+        *max_claims_in_payload,
         era_settings.gas_profile,
     )
     .await?;
@@ -1438,18 +1606,16 @@ where
     let tx_hash = signed_tx.hash();
     publish_reward_claim(blend_api, signed_tx).await?;
 
-    let mut remaining = Vec::with_capacity(state.ready_to_claim.len());
-    let mut claimed = Vec::with_capacity(claimed_count);
-    for ticket in state.ready_to_claim.drain(..) {
-        // Take the first `claimed_count` claimable tickets, the exact prefix
-        // the builder consumed, and keep everything else ready.
-        if claimed.len() < claimed_count && is_claimable(&ticket, known_block, &known_keys) {
-            claimed.push(ticket);
-        } else {
-            remaining.push(ticket);
-        }
-    }
-    state.ready_to_claim = remaining;
+    // Take the first `claimed_count` claimable tickets, the exact prefix the
+    // builder consumed, and keep everything else ready.
+    let claimed: Vec<WinningTicket> = state
+        .ready_to_claim
+        .iter()
+        .filter(|ticket| is_claimable(ticket, known_block, &known_keys))
+        .take(claimed_count)
+        .cloned()
+        .collect();
+    state.mark_as_pending(claimed.clone());
 
     info!(
         target: LOG_TARGET,
@@ -1457,7 +1623,7 @@ where
         claimed.len(),
         state.ready_to_claim.len()
     );
-    state.pending_to_claim.extend(claimed);
+    report(&flow.updates, ClaimRunUpdate::Published(claimed)).await;
     // Debit what this claim committed. The builder sized the batch against
     // `available_pool`, so this cannot underflow; saturating only guards a
     // future change to that invariant.
@@ -1526,15 +1692,14 @@ fn prune_expired_tickets(
     }
 }
 
-/// Answers a [`PoWServiceMessage::ClaimableRewardsInfo`] query: prunes expired
-/// tickets against the current slot, persists the pruned state, then reports
-/// the still-claimable ones.
+/// Answers a [`PoWServiceMessage::ClaimableRewardsInfo`] query from a copy of
+/// the state: prunes expired tickets against the current slot, then reports the
+/// still-claimable ones.
 async fn respond_claimable_rewards<CryptarchiaService>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    state: &mut PoWServiceState,
-    state_updater: &StateUpdater<Option<PoWServiceState>>,
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService>,
+    mut state: PoWServiceState,
     reply_channel: oneshot::Sender<ClaimableRewardsInfo>,
-    era_schedule: &ServiceEraSchedule,
+    era_schedule: ServiceEraSchedule,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
 {
@@ -1547,18 +1712,16 @@ async fn respond_claimable_rewards<CryptarchiaService>(
     };
     // Drop expired tickets first, so the report covers only what is still
     // claimable.
-    prune_expired_tickets(state, current_slot, era_schedule);
-    state_updater.update(Some(state.clone()));
-    let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot, era_schedule);
+    prune_expired_tickets(&mut state, current_slot, &era_schedule);
+    let claimable = claimable_rewards_info(&state.ready_to_claim, current_slot, &era_schedule);
     if reply_channel.send(claimable).is_err() {
         error!(target: LOG_TARGET, "ClaimableRewardsInfo reply receiver was dropped");
     }
 }
 
 /// Handles one processed-block event: drops tickets whose reward window closed
-/// at the new tip, retires any claim it settled, makes the tickets of claims
-/// that stayed unsettled too long ready again, and persists the state when it
-/// changes.
+/// at the new tip and persists the state when it changes. Returns the block to
+/// check for settled claims, if any ticket is outstanding.
 ///
 /// Pruning here, rather than only when a new ticket is mined, keeps expired
 /// tickets from counting against the reward pool and stalling the search once
@@ -1566,35 +1729,80 @@ async fn respond_claimable_rewards<CryptarchiaService>(
 ///
 /// A missed broadcast event is logged and ignored; a fresh subscription always
 /// re-emits the current tip, so a later block covers any settlement in the gap.
-async fn retire_settled_claims<CryptarchiaService>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
+fn handle_processed_block(
     state: &mut PoWServiceState,
     state_updater: &StateUpdater<Option<PoWServiceState>>,
     processed_block: Result<ProcessedBlockEvent, BroadcastStreamRecvError>,
     era_schedule: &ServiceEraSchedule,
-) where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
-{
+) -> Option<HeaderId> {
     let (block_id, tip_slot) = match processed_block {
         Ok(block) => (block.block_id, block.tip_slot),
         Err(e) => {
             warn!(target: LOG_TARGET, "Missed a processed-block event: {e}");
-            return;
+            return None;
         }
     };
     let before = state.outstanding_tickets();
     prune_expired_tickets(state, tip_slot, era_schedule);
-    let expired = before - state.outstanding_tickets();
-    let settled = prune_settled_pending(cryptarchia_api, state, block_id)
-        .await
-        .unwrap_or_else(|error| {
+    if state.outstanding_tickets() != before {
+        state_updater.update(Some(state.clone()));
+    }
+    // The block counts against the claims pending as it's processed, not
+    // against those published while its settlement is checked.
+    count_unsettled_block(state);
+    state.has_outstanding_tickets().then_some(block_id)
+}
+
+/// The nullifiers of the rewards `block_id` paid out, from its
+/// [`TxEventPayload::PoWRewardClaimed`] events.
+///
+/// The event carries the spent solution's [`PowNullifier`], which is exactly a
+/// claim's puzzle ticket, so a ticket is matched by re-deriving that nullifier
+/// from its claim.
+async fn settled_nullifiers<CryptarchiaService>(
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService>,
+    block_id: HeaderId,
+) -> HashSet<PowNullifier>
+where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
+{
+    let events = match cryptarchia_api.get_block_events(block_id).await {
+        Ok(events) => events.unwrap_or_default(),
+        Err(error) => {
             error!(target: LOG_TARGET, "Failed to check settled PoW claims: {error}");
-            0
-        });
-    if settled > 0 {
+            return HashSet::new();
+        }
+    };
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Tx(TxEvent {
+                payload: TxEventPayload::PoWRewardClaimed { pow_nullifier, .. },
+                ..
+            }) => Some(*pow_nullifier),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Retires the tickets whose reward has settled on chain, makes the tickets of
+/// claims that stayed unsettled too long ready again, and persists the state
+/// when that changes it. A ticket that [`requeue_unsettled_claims`] made ready
+/// again is retired the same way, since its first claim may still settle.
+fn retire_settled_claims(
+    state: &mut PoWServiceState,
+    state_updater: &StateUpdater<Option<PoWServiceState>>,
+    settled: &HashSet<PowNullifier>,
+) {
+    let before = state.outstanding_tickets();
+    let unsettled = |ticket: &WinningTicket| !settled.contains(&ticket.claim.get_puzzle_ticket());
+    state.pending_to_claim.retain(unsettled);
+    state.ready_to_claim.retain(unsettled);
+    let retired = before - state.outstanding_tickets();
+    if retired > 0 {
         info!(
             target: LOG_TARGET,
-            "Retired {settled} settled PoW claim(s); {} still pending",
+            "Retired {retired} settled PoW claim(s); {} still pending",
             state.pending_to_claim.len()
         );
     }
@@ -1606,73 +1814,36 @@ async fn retire_settled_claims<CryptarchiaService>(
              ready to claim again"
         );
     }
-    if expired + settled + requeued > 0 {
+    if retired + requeued > 0 {
         state_updater.update(Some(state.clone()));
     }
-}
-
-/// Retires pending tickets whose reward has settled on chain, detected by a
-/// [`TxEventPayload::PoWRewardClaimed`] event in the just-processed `block_id`.
-///
-/// The event carries the spent solution's [`PowNullifier`], which is exactly a
-/// claim's puzzle ticket, so a pending ticket is matched by re-deriving that
-/// nullifier from its claim. A ticket that [`requeue_unsettled_claims`] made
-/// ready again is retired the same way, since its first claim may still
-/// settle. Returns the number of tickets retired.
-async fn prune_settled_pending<CryptarchiaService>(
-    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-    state: &mut PoWServiceState,
-    block_id: HeaderId,
-) -> Result<usize, PoWError>
-where
-    CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
-{
-    if !state.has_outstanding_tickets() {
-        return Ok(0);
-    }
-    let Some(events) = cryptarchia_api.get_block_events(block_id).await? else {
-        return Ok(0);
-    };
-    let settled: HashSet<PowNullifier> = events
-        .iter()
-        .filter_map(|event| match event {
-            Event::Tx(TxEvent {
-                payload: TxEventPayload::PoWRewardClaimed { pow_nullifier, .. },
-                ..
-            }) => Some(*pow_nullifier),
-            _ => None,
-        })
-        .collect();
-    if settled.is_empty() {
-        return Ok(0);
-    }
-
-    let before = state.outstanding_tickets();
-    let unsettled = |ticket: &WinningTicket| !settled.contains(&ticket.claim.get_puzzle_ticket());
-    state.pending_to_claim.retain(unsettled);
-    state.ready_to_claim.retain(unsettled);
-    Ok(before - state.outstanding_tickets())
 }
 
 /// Processed blocks a published claim may stay unsettled before its tickets
 /// are made ready again.
 const RESUBMIT_AFTER_BLOCKS: u64 = 3;
 
-/// Counts one more processed block against every pending ticket, and makes the
-/// tickets whose claim has not settled within [`RESUBMIT_AFTER_BLOCKS`] ready
-/// again, ahead of the others. Their transaction may have been dropped, for
-/// instance when the reward pool was short as a leader tried it, and nothing
-/// else submits it again. A requeued ticket is claimed like any ready one: only
-/// within its reward window, which [`prune_expired_tickets`] enforces, and only
-/// while the reward pool pays it, which the claim run checks against
-/// [`current_reward_pool`], and never once the chain records it as claimed,
+/// Counts one more processed block against every pending ticket.
+fn count_unsettled_block(state: &mut PoWServiceState) {
+    for ticket in &mut state.pending_to_claim {
+        ticket.blocks_unsettled = ticket.blocks_unsettled.saturating_add(1);
+    }
+}
+
+/// Makes the pending tickets whose claim has not settled within
+/// [`RESUBMIT_AFTER_BLOCKS`] processed blocks ready again, ahead of the others.
+/// Their transaction may have been dropped, for instance when the reward pool
+/// was short as a leader tried it, and nothing else submits it again. A
+/// requeued ticket is claimed like any ready one: only within its reward
+/// window, which [`prune_expired_tickets`] enforces, and only while the reward
+/// pool pays it, which the claim run checks against [`current_reward_pool`],
+/// and never once the chain records it as claimed,
 /// which [`prune_claimed_tickets`] checks before a batch is built. Returns the
 /// number of tickets requeued.
 fn requeue_unsettled_claims(state: &mut PoWServiceState) -> usize {
     let mut requeued = Vec::new();
     let mut still_pending = Vec::with_capacity(state.pending_to_claim.len());
     for mut ticket in state.pending_to_claim.drain(..) {
-        ticket.blocks_unsettled = ticket.blocks_unsettled.saturating_add(1);
         if ticket.blocks_unsettled >= RESUBMIT_AFTER_BLOCKS {
             ticket.blocks_unsettled = 0;
             requeued.push(ticket);
@@ -2225,12 +2396,12 @@ mod tests {
     use super::{
         AutoClaimSettings, AutoClaimTick, ClaimTarget, MAX_TRANSFER_INPUTS, PoWError,
         PoWServiceState, RESUBMIT_AFTER_BLOCKS, build_reward_claim_tx_inner, build_search_pool,
-        change_outputs, claim_tx_size, claimable_rewards_info, estimate_reward_claim_fee,
-        is_claimable, max_claims_by_ops, max_claims_by_payload_size, neediest_target,
-        prune_claimed_tickets, prune_expired_tickets, push_reward_claim_ops,
+        change_outputs, claim_tx_size, claimable_rewards_info, count_unsettled_block,
+        estimate_reward_claim_fee, is_claimable, max_claims_by_ops, max_claims_by_payload_size,
+        neediest_target, prune_claimed_tickets, prune_expired_tickets, push_reward_claim_ops,
         replace_search_pool_if_resized, requeue_unsettled_claims, reward_claim_count, reward_note,
-        sign_reward_claims, slot_period_elapsed, transfer_ops, wallet_holds_claim_address,
-        without_openings,
+        sign_reward_claims, slot_period_elapsed, stop_once_every_target_is_funded, transfer_ops,
+        wallet_holds_claim_address, without_openings,
     };
     use crate::{
         test_utils::{GAS_PROFILE, PAYLOAD_BODY_SIZE, era_schedule},
@@ -3116,9 +3287,11 @@ mod tests {
             pending_to_claim: vec![winning_ticket(1)],
         };
         for _ in 1..RESUBMIT_AFTER_BLOCKS {
+            count_unsettled_block(&mut state);
             assert_eq!(requeue_unsettled_claims(&mut state), 0);
         }
 
+        count_unsettled_block(&mut state);
         assert_eq!(requeue_unsettled_claims(&mut state), 1);
         assert_eq!(state.pending_to_claim.len(), 0);
         // ahead of the ticket already ready, and counting from zero again
@@ -3263,6 +3436,46 @@ mod tests {
         assert_eq!(state.outstanding_tickets(), 3);
         prune_expired_tickets(&mut state, Slot::new(200), &era_schedule(&[SLOT_WINDOW]));
         assert_eq!(state.outstanding_tickets(), 1);
+    }
+
+    /// A run of auto-claims works from the settings it started with, so its
+    /// finding that every target is funded doesn't undo a decision made while
+    /// it went on.
+    #[test]
+    fn a_funded_verdict_leaves_a_decision_made_during_the_run_alone() {
+        let (mut is_auto_claiming, mut is_mining) = (true, true);
+
+        stop_once_every_target_is_funded(true, &mut is_auto_claiming, &mut is_mining);
+        assert!(is_auto_claiming && is_mining);
+
+        stop_once_every_target_is_funded(false, &mut is_auto_claiming, &mut is_mining);
+        assert!(!is_auto_claiming && !is_mining);
+    }
+
+    /// A claim runs on a copy of the state, so the tickets it took are told
+    /// apart from the ones mined since.
+    #[test]
+    fn a_published_claim_leaves_the_tickets_mined_since_ready() {
+        let (claimed, mined_since) = (winning_ticket(10), winning_ticket(20));
+        let nullifiers = |tickets: &[WinningTicket]| {
+            tickets
+                .iter()
+                .map(|ticket| ticket.claim.get_puzzle_ticket())
+                .collect::<Vec<_>>()
+        };
+        let (expected_ready, expected_pending) = (
+            nullifiers(core::slice::from_ref(&mined_since)),
+            nullifiers(core::slice::from_ref(&claimed)),
+        );
+        let mut state = PoWServiceState {
+            ready_to_claim: vec![claimed.clone(), mined_since],
+            pending_to_claim: Vec::new(),
+        };
+
+        state.mark_as_pending(vec![claimed]);
+
+        assert_eq!(nullifiers(&state.ready_to_claim), expected_ready);
+        assert_eq!(nullifiers(&state.pending_to_claim), expected_pending);
     }
 
     #[test]
