@@ -666,8 +666,8 @@ where
         }
         self.storage.write(batch)?;
 
-        // Registry releases and the LIB state have committed. Later rebase or GC
-        // failures must not leave this completed work pending.
+        // Registry releases and the LIB state have committed. Later rebase or
+        // GC failures must not leave this completed work pending.
         let completed = replace(&mut self.pending_pruning, PendingPruning::new());
         let mut removed = 0usize;
         for block in completed.stale.iter().chain(completed.immutable.iter()) {
