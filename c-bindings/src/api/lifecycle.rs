@@ -98,8 +98,9 @@ unsafe fn initialize_lb_node(
 ) -> StatusResult<LogosBlockchainNode> {
     let run_config = unsafe { resolve_run_config(config_path, custom_deployment_path) }?;
 
-    // Captured before the run config is consumed, so the node handle can answer for
-    // its deployment without querying a service for values that cannot change.
+    // Captured before the run config is consumed, so the node handle can answer
+    // for its deployment without querying a service for values that cannot
+    // change.
     let deployment = run_config.deployment.clone();
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
