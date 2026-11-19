@@ -1307,7 +1307,7 @@ where
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<TipResponse<Option<OwnedNote>>, WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
-        let owned_note = wallet.wallet_state_at(tip)?.notes.get(commitment).cloned();
+        let owned_note = wallet.wallet_state_at(tip)?.owned_note(commitment)?;
         Ok(TipResponse {
             tip,
             response: owned_note,
@@ -1340,7 +1340,7 @@ where
         tip: Option<HeaderId>,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-        aged_notes: impl FnOnce(&WalletState) -> Vec<(OwnedNote, MerklePath)>,
+        aged_notes: impl FnOnce(&WalletState) -> Result<Vec<(OwnedNote, MerklePath)>, WalletError>,
     ) -> Result<TipResponse<Vec<AgedNote>>, WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
@@ -1349,7 +1349,7 @@ where
             WalletServiceError::FailedToFetchWalletStateForBlock(tip)
         })?;
 
-        let eligible_notes = aged_notes(&wallet_state)
+        let eligible_notes = aged_notes(&wallet_state)?
             .into_iter()
             .filter_map(|(note, aged_path)| {
                 wallet

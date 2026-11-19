@@ -109,6 +109,19 @@ impl MerklePath {
             selector: !is_left_child(self.leaf_index, level + 1),
         }
     }
+
+    /// Whether pushing leaf `new_leaf` completes a sibling subtree of this
+    /// path, which [`crate::MerkleMountainRange::push_with_settled_paths`]
+    /// then has to be given.
+    #[must_use]
+    pub const fn is_settled_by(&self, new_leaf: usize) -> bool {
+        completes_sibling(self.leaf_index, new_leaf)
+    }
+
+    /// Set the root of the sibling subtree at `height`.
+    pub(crate) fn set_sibling(&mut self, height: usize, root: Fr) {
+        self.siblings[height - 1] = root;
+    }
 }
 
 /// A level of a [`MerklePath`]: the sibling hash, and the selector, set when
@@ -260,8 +273,13 @@ const fn are_siblings_at(a: usize, b: usize, height: usize) -> bool {
 }
 
 /// The unique height at which leaves `a` and `b` are siblings.
-const fn sibling_height(a: usize, b: usize) -> usize {
+pub const fn sibling_height(a: usize, b: usize) -> usize {
     (a ^ b).bit_width() as usize
+}
+
+/// Whether pushing leaf `new_leaf` completes the sibling subtree of `leaf`.
+const fn completes_sibling(leaf: usize, new_leaf: usize) -> bool {
+    leaf < new_leaf && sibling_height(leaf, new_leaf) <= new_leaf.trailing_ones() as usize
 }
 
 #[cfg(test)]
@@ -322,5 +340,24 @@ mod tests {
         // Across h=3 subtrees
         assert_eq!(sibling_height(0, 4), 3);
         assert_eq!(sibling_height(3, 7), 3);
+    }
+
+    #[test]
+    fn test_completes_sibling() {
+        // Leaf 1 completes [1], the sibling of leaf 0
+        assert!(completes_sibling(0, 1));
+        // Leaf 2 starts a new subtree and completes nothing
+        assert!(!completes_sibling(0, 2));
+        assert!(!completes_sibling(1, 2));
+        // Leaf 3 completes [3] for leaf 2 and [2,3] for leaves 0,1
+        assert!(completes_sibling(2, 3));
+        assert!(completes_sibling(0, 3));
+        assert!(completes_sibling(1, 3));
+        // Leaf 5 completes [5] for leaf 4, but not [4..7] for leaf 3
+        assert!(completes_sibling(4, 5));
+        assert!(!completes_sibling(3, 5));
+        // Leaves at or after the new leaf are never completed
+        assert!(!completes_sibling(3, 3));
+        assert!(!completes_sibling(4, 3));
     }
 }

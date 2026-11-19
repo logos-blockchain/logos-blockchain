@@ -83,7 +83,9 @@ pub struct OwnedNote {
     pub note: Note,
     pub note_set: NoteSetIndex,
     pub nullifier: NoteNullifier,
-    // path to the current root of its set
+    // Path to the current root of its set. In `WalletState::notes` its sibling
+    // over the newest leaves may be stale, so that the states of successive
+    // blocks share it: `WalletState::owned_note` brings it up to date.
     pub path: MerklePath,
 }
 
@@ -112,6 +114,8 @@ impl KnownNote {
 }
 
 pub type KnownNotes = HashMap<NoteCommitment, KnownNote>;
+
+pub type NotePaths = rpds::HashTrieMapSync<NoteCommitment, MerklePath>;
 
 /// The nullifier of an owned note inserted into its set: the note is spent in
 /// that set.
@@ -195,9 +199,9 @@ pub struct WalletState {
     pub commitments: rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
     pub notes: rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
     // C_LEAD snapshot of the current epoch
-    pub aged_paths: rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
+    pub aged_paths: NotePaths,
     // snapshot the next epoch will use
-    pub next_aged_paths: rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
+    pub next_aged_paths: NotePaths,
     pub epoch: Epoch,
     // The nullifiers of the owned notes spent in each set. A spent note is not
     // adopted again when its commitment is appended to the set once more: the
@@ -232,7 +236,7 @@ impl WalletState {
             apply_update(&mut commitments, &mut notes, &mut spent, known, &update)?;
         }
         // both genesis epoch states hold the genesis sets
-        let paths = current_paths(&notes);
+        let paths = current_paths(&commitments, &notes)?;
         Ok(Self {
             commitments,
             notes,
@@ -244,14 +248,29 @@ impl WalletState {
         })
     }
 
-    #[must_use]
+    /// The owned note of `commitment`, with its path to the current root of
+    /// its set.
+    pub fn owned_note(
+        &self,
+        commitment: &NoteCommitment,
+    ) -> Result<Option<OwnedNote>, WalletError> {
+        self.notes
+            .get(commitment)
+            .map(|owned| refreshed(&self.commitments, owned))
+            .transpose()
+    }
+
     pub fn notes_owned_by_pks(
         &self,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-    ) -> Vec<OwnedNote> {
+    ) -> Result<Vec<OwnedNote>, WalletError> {
         self.notes_owned_in(NoteSetIndex::Ledger, pks)
+            .iter()
+            .map(|owned| refreshed(&self.commitments, owned))
+            .collect()
     }
 
+    // The paths of these notes may be stale.
     fn notes_owned_in(
         &self,
         note_set: NoteSetIndex,
@@ -271,7 +290,7 @@ impl WalletState {
     #[must_use]
     pub fn balance(&self, pk: ZkPublicKey) -> Option<WalletBalance> {
         let notes = self
-            .notes_owned_by_pks([pk])
+            .notes_owned_in(NoteSetIndex::Ledger, [pk])
             .into_iter()
             .map(|owned| (owned.note.commitment(), owned.note.value))
             .collect::<HashMap<_, _>>();
@@ -287,50 +306,44 @@ impl WalletState {
 
     // The owned notes of every set together with their path in the aged
     // snapshot.
-    #[must_use]
-    pub fn aged_notes(&self) -> Vec<(OwnedNote, MerklePath)> {
+    pub fn aged_notes(&self) -> Result<Vec<(OwnedNote, MerklePath)>, WalletError> {
         self.owned_notes_with(&self.aged_paths)
     }
 
     // The owned notes with their path in the aged snapshot of `epoch`, which
     // the first block of `epoch` on top of this state is proven against.
-    #[must_use]
-    pub fn aged_notes_at(&self, epoch: Epoch) -> Vec<(OwnedNote, MerklePath)> {
-        self.owned_notes_with(&self.epoch_paths(epoch).0)
+    pub fn aged_notes_at(&self, epoch: Epoch) -> Result<Vec<(OwnedNote, MerklePath)>, WalletError> {
+        self.owned_notes_with(&self.epoch_paths(epoch)?.0)
     }
 
     fn owned_notes_with(
         &self,
-        paths: &rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
-    ) -> Vec<(OwnedNote, MerklePath)> {
+        paths: &NotePaths,
+    ) -> Result<Vec<(OwnedNote, MerklePath)>, WalletError> {
         self.notes
             .iter()
-            .filter_map(|(commitment, owned)| {
-                paths
-                    .get(commitment)
-                    .map(|path| (owned.clone(), path.clone()))
-            })
+            .filter_map(|(commitment, owned)| Some((owned, paths.get(commitment)?)))
+            .map(|(owned, path)| Ok((refreshed(&self.commitments, owned)?, path.clone())))
             .collect()
     }
 
     // The aged and next aged paths of a block of `epoch` on top of this state:
     // the ledger snapshots the sets of the parent, before any update of the
     // block.
-    fn epoch_paths(
-        &self,
-        epoch: Epoch,
-    ) -> (
-        rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
-        rpds::HashTrieMapSync<NoteCommitment, MerklePath>,
-    ) {
-        match epoch.into_inner().checked_sub(self.epoch.into_inner()) {
-            None | Some(0) => (self.aged_paths.clone(), self.next_aged_paths.clone()),
-            Some(1) => (self.next_aged_paths.clone(), current_paths(&self.notes)),
-            Some(_) => {
-                let paths = current_paths(&self.notes);
-                (paths.clone(), paths)
-            }
-        }
+    fn epoch_paths(&self, epoch: Epoch) -> Result<(NotePaths, NotePaths), WalletError> {
+        Ok(
+            match epoch.into_inner().checked_sub(self.epoch.into_inner()) {
+                None | Some(0) => (self.aged_paths.clone(), self.next_aged_paths.clone()),
+                Some(1) => (
+                    self.next_aged_paths.clone(),
+                    current_paths(&self.commitments, &self.notes)?,
+                ),
+                Some(_) => {
+                    let paths = current_paths(&self.commitments, &self.notes)?;
+                    (paths.clone(), paths)
+                }
+            },
+        )
     }
 
     pub fn apply_block(
@@ -338,7 +351,7 @@ impl WalletState {
         known: &KnownNotes,
         block: &WalletBlock,
     ) -> Result<Self, WalletError> {
-        let (aged_paths, next_aged_paths) = self.epoch_paths(block.epoch);
+        let (aged_paths, next_aged_paths) = self.epoch_paths(block.epoch)?;
 
         let mut commitments = self.commitments.clone();
         let mut notes = self.notes.clone();
@@ -714,19 +727,34 @@ fn covering_prefix<'a>(
     Ok((inputs, total))
 }
 
+// `owned` with its path brought up to the current root of its set.
+fn refreshed(
+    commitments: &rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
+    owned: &OwnedNote,
+) -> Result<OwnedNote, WalletError> {
+    let mut owned = owned.clone();
+    if let Some(mmr) = commitments.get(&owned.note_set) {
+        mmr.refresh_path(&mut owned.path)?;
+    }
+    Ok(owned)
+}
+
 fn current_paths(
+    commitments: &rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
     notes: &rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
-) -> rpds::HashTrieMapSync<NoteCommitment, MerklePath> {
+) -> Result<NotePaths, WalletError> {
     notes
         .iter()
-        .map(|(commitment, owned)| (*commitment, owned.path.clone()))
+        .map(|(commitment, owned)| Ok((*commitment, refreshed(commitments, owned)?.path)))
         .collect()
 }
 
-// Append the commitments of `update` to its set, keeping the paths of the
-// owned notes of the set valid and adopting the known ones not spent in the
-// set yet, then drop the owned notes whose nullifier it inserted and record
-// them as spent.
+// Append the commitments of `update` to its set, adopting the known ones not
+// spent in the set yet, then drop the owned notes whose nullifier it inserted
+// and record them as spent.
+//
+// Only the paths a push settles are rewritten: every other owned note stays
+// shared with the state of the parent block.
 fn apply_update(
     commitments: &mut rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
     notes: &mut rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
@@ -736,60 +764,55 @@ fn apply_update(
 ) -> Result<(), WalletError> {
     let note_set = update.note_set;
     let mut mmr = commitments.get(&note_set).cloned().unwrap_or_default();
-    let (mut owned, mut paths): (Vec<KnownNote>, Vec<MerklePath>) = notes
-        .values()
-        .filter(|owned| owned.note_set == note_set)
-        .map(|owned| {
-            (
-                KnownNote {
-                    note: owned.note,
-                    note_set,
-                    nullifier: owned.nullifier,
-                },
-                owned.path.clone(),
-            )
-        })
-        .unzip();
 
     for commitment in &update.commitments {
-        let (next, path) =
-            mmr.push_with_paths(*commitment, &mut paths)
-                .map_err(|error| match error {
-                    PushWithPathsError::MmrFull(_) => WalletError::MmrFull(note_set),
-                    PushWithPathsError::InvalidTrackedPath(error) => error.into(),
-                })?;
+        let leaf = mmr.len();
+        let (mut settled, mut paths): (Vec<OwnedNote>, Vec<MerklePath>) = notes
+            .values()
+            .filter(|owned| owned.note_set == note_set && owned.path.is_settled_by(leaf))
+            .map(|owned| (owned.clone(), owned.path.clone()))
+            .unzip();
+        let (next, path) = mmr
+            .push_with_settled_paths(*commitment, &mut paths)
+            .map_err(|error| match error {
+                PushWithPathsError::MmrFull(_) => WalletError::MmrFull(note_set),
+                PushWithPathsError::InvalidTrackedPath(error) => error.into(),
+            })?;
         mmr = next;
+        for (owned, path) in settled.iter_mut().zip(paths) {
+            owned.path = path;
+        }
         if let Some(known_note) = known
             .get(commitment)
             .filter(|known| known.is_adoptable_in(note_set, spent))
         {
-            owned.push(*known_note);
-            paths.push(path);
-        }
-    }
-    commitments.insert_mut(note_set, mmr);
-
-    let mut by_nullifier = HashMap::new();
-    for (known_note, path) in owned.into_iter().zip(paths) {
-        let commitment = known_note.note.commitment();
-        by_nullifier.insert(known_note.nullifier, commitment);
-        notes.insert_mut(
-            commitment,
-            OwnedNote {
+            settled.push(OwnedNote {
                 note: known_note.note,
                 note_set,
                 nullifier: known_note.nullifier,
                 path,
-            },
-        );
-    }
-    for nullifier in &update.nullifiers {
-        if let Some(commitment) = by_nullifier.get(nullifier) {
-            notes.remove_mut(commitment);
-            spent.insert_mut(SpentNullifier {
-                note_set,
-                nullifier: *nullifier,
             });
+        }
+        for owned in settled {
+            notes.insert_mut(owned.note.commitment(), owned);
+        }
+    }
+    commitments.insert_mut(note_set, mmr);
+
+    if !update.nullifiers.is_empty() {
+        let by_nullifier = notes
+            .iter()
+            .filter(|(_, owned)| owned.note_set == note_set)
+            .map(|(commitment, owned)| (owned.nullifier, *commitment))
+            .collect::<HashMap<_, _>>();
+        for nullifier in &update.nullifiers {
+            if let Some(commitment) = by_nullifier.get(nullifier) {
+                notes.remove_mut(commitment);
+                spent.insert_mut(SpentNullifier {
+                    note_set,
+                    nullifier: *nullifier,
+                });
+            }
         }
     }
     Ok(())
@@ -1225,7 +1248,10 @@ mod tests {
             root
         );
         assert!(
-            state.notes[&owned.commitment()]
+            state
+                .owned_note(&owned.commitment())
+                .unwrap()
+                .unwrap()
                 .path
                 .verify::<ZkHasher>(owned.commitment().0, root)
         );
@@ -1411,7 +1437,7 @@ mod tests {
         assert!(aged_root_is(&state, 1));
         let state = append(&state, 4, 4, 4); // epochs skipped: the sets of the parent
         assert!(aged_root_is(&state, 3));
-        assert_eq!(state.aged_notes().len(), 1);
+        assert_eq!(state.aged_notes().unwrap().len(), 1);
     }
 
     #[test]
@@ -1479,7 +1505,10 @@ mod tests {
             .unwrap()
             .frontier_root();
         assert!(
-            state.notes[&channel_note.commitment()]
+            state
+                .owned_note(&channel_note.commitment())
+                .unwrap()
+                .unwrap()
                 .path
                 .verify::<ZkHasher>(channel_note.commitment().0, root)
         );
@@ -2002,9 +2031,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(witnesses[0].witness.tx_commitment_root(), root);
-        let path_at_root = wallet.wallet_state_at(block_id(36)).unwrap().notes[&note.commitment()]
-            .path
-            .clone();
+        let path_at_root = wallet
+            .wallet_state_at(block_id(36))
+            .unwrap()
+            .owned_note(&note.commitment())
+            .unwrap()
+            .unwrap()
+            .path;
         assert!(path_at_root.verify::<ZkHasher>(note.commitment().0, root));
         assert_eq!(
             witnesses[0].witness.inputs()[0].path_and_selectors[0].0,

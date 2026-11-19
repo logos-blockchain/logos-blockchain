@@ -330,13 +330,15 @@ fn set_buffer(
         .iter()
         .map(Note::commitment)
         .collect::<Vec<_>>();
-    let (mut commitments, mut paths): (Vec<_>, Vec<_>) = inputs
-        .iter()
-        .filter_map(|commitment| {
-            let owned = state.notes.get(commitment)?;
-            (owned.note_set == note_set).then(|| (*commitment, owned.path.clone()))
-        })
-        .unzip();
+    let (mut commitments, mut paths) = (Vec::new(), Vec::new());
+    for commitment in &inputs {
+        if let Some(owned) = state.owned_note(commitment)?
+            && owned.note_set == note_set
+        {
+            commitments.push(*commitment);
+            paths.push(owned.path);
+        }
+    }
     let mut mmr = state
         .commitments
         .get(&note_set)
