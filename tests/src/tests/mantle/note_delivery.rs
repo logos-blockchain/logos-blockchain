@@ -277,9 +277,11 @@ async fn a_delivered_note_reaches_the_wallet_of_its_recipient_and_is_spent() {
     wait_for_balance(receiver, recipient_pk, |held| held == balance(5)).await;
 
     // A transfer spends at most four notes. More than three of them hold
-    // takes four of the five, each learnt in its own way. A note is spendable
-    // once it is a few blocks below the tip.
-    let spent = 3 * AMOUNT + AMOUNT / 2;
+    // takes four of the five, each learnt in its own way, and leaves most of
+    // the fourth for the fee: the storage fee of the transfer and the margin
+    // the wallet funds above it come close to half a note. A note is
+    // spendable once it is a few blocks below the tip.
+    let spent = 3 * AMOUNT + AMOUNT / 100;
     let deadline = Instant::now() + TIMEOUT;
     loop {
         let transfer = receiver
@@ -338,41 +340,49 @@ fn inscription_of(delivery_message: &str) -> Vec<u8> {
     delivery_inscription(&[message]).to_vec()
 }
 
-// The inscriptions of the inscribes of the transaction `hash`, which a block
-// of the chain of `node` holds.
+// The inscriptions of the inscribes of the transaction `hash`, once a block of
+// the chain of `node` holds it. The chain is read again until it does: a tip
+// can move to a branch that does not hold the transaction yet, and a block
+// just applied may not be served yet.
 async fn inscriptions_of(node: &NodeHttpClient, hash: TxHash) -> Vec<Vec<u8>> {
-    let tip = node
-        .consensus_info()
-        .await
-        .expect("the node should give its tip")
-        .cryptarchia_info
-        .tip;
-    scan_chain_until(
-        tip,
-        &mut std::collections::HashSet::new(),
-        async |header_id| {
-            node.block(&header_id)
-                .await
-                .expect("the node should give its blocks")
-        },
-        |block| {
-            let transaction = block
-                .transactions
-                .iter()
-                .find(|transaction| transaction.hash() == hash)?;
-            Some(
-                transaction
-                    .op_refs_iter()
-                    .filter_map(|op| match op {
-                        OpRef::Inscribe(inscribe) => Some(inscribe.inscription.to_vec()),
-                        _ => None,
-                    })
-                    .collect(),
-            )
-        },
-    )
-    .await
-    .expect("a block should hold the transaction")
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let tip = node
+            .consensus_info()
+            .await
+            .expect("the node should give its tip")
+            .cryptarchia_info
+            .tip;
+        let found = scan_chain_until(
+            tip,
+            &mut std::collections::HashSet::new(),
+            async |header_id| node.block(&header_id).await.ok().flatten(),
+            |block| {
+                let transaction = block
+                    .transactions
+                    .iter()
+                    .find(|transaction| transaction.hash() == hash)?;
+                Some(
+                    transaction
+                        .op_refs_iter()
+                        .filter_map(|op| match op {
+                            OpRef::Inscribe(inscribe) => Some(inscribe.inscription.to_vec()),
+                            _ => None,
+                        })
+                        .collect(),
+                )
+            },
+        )
+        .await;
+        if let Some(inscriptions) = found {
+            return inscriptions;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no block of the chain holds the transaction"
+        );
+        sleep(POLL_INTERVAL).await;
+    }
 }
 
 // The commitment a delivery message, in hex, starts with.
