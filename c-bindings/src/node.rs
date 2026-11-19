@@ -1,7 +1,7 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
-use lb_core::{era::ForkDigest, mantle::transactions::genesis_tx::ChainId};
-use lb_node::{RuntimeServiceId, TimeService};
+use lb_core::era::{Era, ForkDigest};
+use lb_node::{RuntimeServiceId, TimeService, config::DeploymentSettings};
 use lb_time_service::TimeServiceMessage;
 use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
 use tokio::{
@@ -38,44 +38,36 @@ pub struct LogosBlockchainNode {
     // while the runtime they run on is still alive.
     overwatch: LogosBlockchainOverwatch,
     runtime: Runtime,
-    // The chain ID of the deployment this node was started with. It is fixed
-    // for the node's lifetime, so it is captured here at construction instead
-    // of being queried from a running service. `None` when the chain ID cannot
-    // be represented as a C string, which `get_chain_id` reports as an error
-    // rather than failing node start.
-    chain_id: Option<CString>,
-    // The fork digest of every era of the deployment, era `n` at position `n`,
-    // fixed like the chain ID. The era in force comes from the time service.
-    fork_digests: Vec<ForkDigest>,
+    // The deployment this node was started with, kept so era-dependent
+    // parameters can be read for the current epoch.
+    deployment: DeploymentSettings,
 }
 
 impl LogosBlockchainNode {
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         overwatch: LogosBlockchainOverwatch,
         runtime: Runtime,
-        chain_id: &ChainId,
-        fork_digests: Vec<ForkDigest>,
+        deployment: DeploymentSettings,
     ) -> Self {
-        // A `ChainId` is only bounded and UTF-8, so nothing stops it from
-        // carrying an interior NUL that no C string can hold. That is a broken
-        // deployment rather than a reason to refuse to run, so the node starts
-        // either way and `get_chain_id` is the one that reports the problem.
-        let chain_id = CString::new(<_ as AsRef<str>>::as_ref(chain_id))
-            .inspect_err(|error| {
-                logging::error!(
-                    "new",
-                    "Chain ID {chain_id} cannot be represented as a C string: {error}. \
-                     `get_chain_id` will fail for this node."
-                );
-            })
-            .ok();
-
         Self {
             overwatch,
             runtime,
-            chain_id,
-            fork_digests,
+            deployment,
         }
+    }
+
+    /// The deployment this node runs.
+    #[must_use]
+    pub(crate) const fn deployment(&self) -> &DeploymentSettings {
+        &self.deployment
+    }
+
+    fn fork_digest(&self, era: Era) -> Option<ForkDigest> {
+        self.deployment
+            .era_schedule()
+            .get(era)
+            .map(|entry| entry.parameters.fork_digest)
     }
 
     /// The fork digest of the era the node's clock is in, which a transaction
@@ -91,6 +83,7 @@ impl LogosBlockchainNode {
                     format!("Failed to get relay to TimeService: {error}"),
                 )
             })?;
+
         let (sender, receiver) = oneshot::channel();
         relay
             .send(TimeServiceMessage::CurrentSlot { sender })
@@ -101,6 +94,7 @@ impl LogosBlockchainNode {
                     format!("Failed to send current slot request: {error}"),
                 )
             })?;
+
         let era = receiver
             .await
             .map_err(|error| {
@@ -110,22 +104,35 @@ impl LogosBlockchainNode {
                 )
             })?
             .era;
-        self.fork_digests
-            .get(usize::from(era.into_inner()))
-            .copied()
-            .ok_or_else(|| {
-                OperationStatus::error(
-                    OperationStatusCode::ConfigurationError,
-                    format!("The deployment has no era {}", era.into_inner()),
-                )
-            })
+
+        self.fork_digest(era).ok_or_else(|| {
+            OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("The deployment has no era {}", era.into_inner()),
+            )
+        })
     }
 
-    /// The chain ID of the deployment this node runs, borrowed from the node,
-    /// or `None` when it is not representable as a C string.
+    /// Fetch the chain ID of the deployment this node runs.
+    ///
+    /// # Returns
+    ///
+    /// The chain ID as a `CString` or `None` when it is not representable as
+    /// such.
     #[must_use]
-    pub(crate) fn chain_id(&self) -> Option<&CStr> {
-        self.chain_id.as_deref()
+    pub(crate) fn chain_id(&self) -> Option<CString> {
+        let chain_id = self.deployment.chain_id();
+
+        // A `ChainId` is only bounded and UTF-8, so nothing stops it from
+        // carrying an interior NUL that no C string can hold.
+        CString::new(<_ as AsRef<str>>::as_ref(&chain_id))
+            .inspect_err(|error| {
+                logging::error!(
+                    "chain_id",
+                    "Chain ID {chain_id} cannot be represented as a C string: {error}."
+                );
+            })
+            .ok()
     }
 
     #[must_use]
