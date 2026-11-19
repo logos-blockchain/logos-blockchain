@@ -14,8 +14,11 @@ use rand::{
     rngs::StdRng,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast::{self, Sender};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::{
+    broadcast::{self, Sender},
+    mpsc,
+};
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use super::{Debug, NetworkBackend, OverwatchHandle};
 
@@ -105,7 +108,6 @@ impl MockMessage {
 pub struct Mock {
     messages: Arc<Mutex<HashMap<String, Vec<MockMessage>>>>,
     pubsub_events_tx: Sender<NetworkEvent>,
-    chainsync_events_tx: Sender<()>,
     subscribed_topics: Arc<Mutex<HashSet<String>>>,
     config: MockConfig,
 }
@@ -239,7 +241,6 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
     type ChainSyncEvent = ();
     fn new(config: Self::Settings, _: Era, _: OverwatchHandle<RuntimeServiceId>) -> Self {
         let (pubsub_events_tx, _) = broadcast::channel(BROADCAST_CHANNEL_BUF);
-        let (chainsync_events_tx, _) = broadcast::channel(BROADCAST_CHANNEL_BUF);
 
         Self {
             subscribed_topics: Arc::new(Mutex::new(HashSet::new())),
@@ -252,7 +253,6 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
             )),
             pubsub_events_tx,
             config,
-            chainsync_events_tx,
         }
     }
 
@@ -310,19 +310,21 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Mock {
 
     async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
-    async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+    async fn subscribe_to_pubsub(
+        &mut self,
+        _topics: HashSet<String>,
+    ) -> BroadcastStream<Self::PubSubEvent> {
         BroadcastStream::new(self.pubsub_events_tx.subscribe())
     }
 
-    async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
-        BroadcastStream::new(self.chainsync_events_tx.subscribe())
+    /// No chain sync requests ever come.
+    async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
+        ReceiverStream::new(mpsc::channel(1).1)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use tokio::sync::mpsc;
-
     use super::*;
 
     static FOO_BROADCAST_MESSAGES: &[&str] = &["foo1", "foo2"];
