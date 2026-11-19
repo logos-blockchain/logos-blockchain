@@ -28,14 +28,13 @@ use lb_core::{
         note_set::NoteSetIndex,
         notes::{
             InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments,
-            derive_note_nullifier, derive_program_output_nonce,
+            derive_program_output_nonce,
         },
         ops::{
             ChannelInscribeProof, NoOpProof, OpId as _, OpRef, ProgramNoteOpening,
             ZkAndEd25519Proof, ZkTransferProof,
             channel::{
                 ChannelId,
-                inscribe::Step,
                 program_step::{ProgramSpendWitness, ProgramStep},
             },
         },
@@ -1050,7 +1049,7 @@ where
                 resp_tx,
             } => {
                 let response = match Self::msg_tip_or_latest(tip, cryptarchia).await {
-                    Ok(tip) => Self::build_program_step(tip, request, state.wallet())
+                    Ok(tip) => Self::build_program_step(tip, request, state)
                         .map(|response| TipResponse { tip, response }),
                     Err(err) => Err(err),
                 };
@@ -1537,14 +1536,15 @@ where
         })
     }
 
-    // A program step consuming the notes of the program the request names, at
-    // the spend state of `tip`. The step of a program consuming a note has the
-    // nonces of its outputs derived from its first input, as the ZkProgramSpend
-    // enforces.
+    // A program step consuming the notes of the program the request names: the
+    // ones the wallet holds at the spend state of `tip`, or the ones an earlier
+    // program step it built creates. The step of a program consuming a note has
+    // the nonces of its outputs derived from its first input, as the
+    // ZkProgramSpend enforces.
     fn build_program_step(
         tip: HeaderId,
         request: ProgramStepRequest,
-        wallet: &Wallet,
+        state: &mut ServiceState<'_>,
     ) -> Result<BuiltProgramStep, WalletServiceError> {
         let ProgramStepRequest {
             channel_id,
@@ -1556,18 +1556,23 @@ where
         } = request;
         let note_set = channel_note_set(channel_id)
             .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
-        let spend_state = wallet.spend_state(tip)?;
+        let spend_state = state.wallet().spend_state(tip)?;
+        let tip_state = state.wallet().wallet_state_at(tip)?;
         let inputs = inputs
             .iter()
             .map(|commitment| {
-                spend_state
-                    .notes
-                    .get(commitment)
-                    .filter(|owned| owned.note_set == note_set && owned.note.program == program_id)
-                    .ok_or(WalletServiceError::NoChannelNote(*commitment, channel_id))
+                channel::program_input_of(
+                    &spend_state,
+                    &tip_state,
+                    state.wallet().known_notes(),
+                    note_set,
+                    program_id,
+                    commitment,
+                )
+                .ok_or(WalletServiceError::NoChannelNote(*commitment, channel_id))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let first_input = inputs.first().map(|owned| owned.nullifier);
+        let first_input = inputs.first().map(|(_, nullifier)| *nullifier);
         let nonce = |output: usize, value: Value, public_key: &ZkPublicKey| {
             first_input.map_or_else(random_nonce, |first_input| {
                 derive_program_output_nonce(&first_input, output, value, public_key)
@@ -1595,11 +1600,11 @@ where
             .iter()
             .map(|opening| opening.note(program_id))
             .collect();
-        let input_notes: Vec<Note> = inputs.iter().map(|owned| owned.note).collect();
+        let input_notes: Vec<Note> = inputs.iter().map(|(note, _)| *note).collect();
         let output_notes = [program_output_notes.as_slice(), paid_notes.as_slice()].concat();
         let step = ProgramStep {
             program_id,
-            inputs: InputNullifiers::try_from_iter(inputs.iter().map(|owned| owned.nullifier))
+            inputs: InputNullifiers::try_from_iter(inputs.iter().map(|(_, nullifier)| *nullifier))
                 .map_err(WalletError::from)?,
             program_outputs: OutputCommitments::try_from_iter(
                 program_output_notes.iter().map(Note::commitment),
@@ -1611,6 +1616,11 @@ where
             program_step_id: program_step_id_of(&input_notes, &output_notes),
             inscription,
         };
+        // A later program step of the inscription can consume them.
+        state.add_known_notes(channel::program_known_notes(
+            &program_output_notes,
+            note_set,
+        ));
         Ok(BuiltProgramStep {
             step,
             program_notes,
@@ -1620,9 +1630,9 @@ where
 
     // The ZkProgramSpend witness of the program step the request names, proven
     // against its root extended with the notes the steps before it create and
-    // bound to the id of its inscription. The notes it creates are registered,
-    // so the wallet follows the ones of the program and the ones paid to its
-    // own keys once the step is inscribed.
+    // bound to the id of its inscription. The notes it creates are
+    // registered, so the wallet follows the ones of the program and the
+    // ones paid to its own keys once the step is inscribed.
     async fn program_spend_witness(
         tip: HeaderId,
         request: ProgramSpendRequest,
@@ -1639,32 +1649,7 @@ where
         let note_set = channel_note_set(channel_id)
             .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
 
-        // The notes the steps before it create, and the value the program
-        // deposits before it in its mini-block pay.
-        let mut appended = Vec::new();
-        let mut index = 0;
-        let mut found = None;
-        'mini_blocks: for mini_block in op.mini_blocks.iter() {
-            let mut paid_value: Value = 0;
-            for step in mini_block.iter() {
-                if index == step_index {
-                    found = Some((step, paid_value));
-                    break 'mini_blocks;
-                }
-                match step {
-                    Step::ProgramDeposit(deposit) => {
-                        paid_value = paid_value.checked_add(deposit.value).ok_or(GasOverflow)?;
-                    }
-                    Step::Program(_) => paid_value = 0,
-                    Step::User(_) => {}
-                }
-                appended.extend(step.outputs().iter().copied());
-                index += 1;
-            }
-        }
-        let Some((Step::Program(step), paid_value)) = found else {
-            return Err(WalletServiceError::NotAProgramStep(step_index));
-        };
+        let (step, paid_value, appended) = channel::program_step_position(&op, step_index)?;
 
         let program_output_notes: Vec<Note> = program_notes
             .iter()
@@ -1680,6 +1665,7 @@ where
         }
 
         let spend_state = state.wallet().spend_state(tip)?;
+        let tip_state = state.wallet().wallet_state_at(tip)?;
         if spend_state.root_of(note_set) != step.commitment_merkle_root {
             return Err(WalletError::UnknownRoot {
                 op_index: step_index,
@@ -1690,12 +1676,15 @@ where
             .inputs
             .iter()
             .map(|nullifier| {
-                spend_state
-                    .notes
-                    .values()
-                    .find(|owned| owned.note_set == note_set && owned.nullifier == *nullifier)
-                    .map(|owned| owned.note)
-                    .ok_or(WalletServiceError::NoChannelNoteOf(*nullifier, channel_id))
+                channel::program_input_spent_by(
+                    &spend_state,
+                    &tip_state,
+                    state.wallet().known_notes(),
+                    note_set,
+                    step.program_id,
+                    nullifier,
+                )
+                .ok_or(WalletServiceError::NoChannelNoteOf(*nullifier, channel_id))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let (tx_commitment_root, inputs) = program_spend_inputs(
@@ -1716,15 +1705,7 @@ where
             lb_groth16::fr_from_mod_bytes(&op.op_id()),
         )?;
 
-        let program_nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
-        let mut known_notes: Vec<KnownNote> = program_output_notes
-            .iter()
-            .map(|note| KnownNote {
-                note: *note,
-                note_set,
-                nullifier: derive_note_nullifier(&note.commitment(), &program_nullifier_key),
-            })
-            .collect();
+        let mut known_notes = channel::program_known_notes(&program_output_notes, note_set);
         for note in &paid_notes {
             if let Some(key_id) = state.wallet().known_keys().get(&note.public_key).cloned() {
                 known_notes.push(Self::known_note(kms, key_id, *note, note_set).await?);

@@ -17,7 +17,7 @@ use lb_core::{
                 ChannelId, MsgId,
                 deposit::Metadata,
                 inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
-                program_step::{program_deposit_id, program_deposits_hash},
+                program_step::{ProgramDeposit, program_deposit_id, program_deposits_hash},
             },
             zk_transfer::defer_zk_transfer,
         },
@@ -624,112 +624,73 @@ async fn channel_program_step() {
     let Step::ProgramDeposit(program_deposit) = deposit_step.clone() else {
         panic!("a step with a program deposit is a program deposit");
     };
-    let ProgramStepResponseBody {
-        tip,
-        step,
-        program_notes,
-        paid_notes,
-    } = post_until_success(
+    // The first program step takes the deposit into a note of the program,
+    // and the second one consumes that note in the same mini-block: it pays a
+    // user and keeps the rest in the program.
+    let kept = 2;
+    let pooled = build_program_step(
         node,
-        "channel/program-step",
-        &ProgramStepRequestBody {
-            tip: None,
-            channel_id,
-            program_id,
-            inputs: Vec::new(),
-            program_outputs: vec![ProgramOutputBody {
-                value: paid,
-                stake_public_key: funding_pk,
-                data: Fr::from(1u64),
-            }],
-            payments: Vec::new(),
-            inscription: Inscription::new_unchecked(b"program step".to_vec()),
-        },
+        channel_id,
+        program_id,
+        Vec::new(),
+        vec![paid],
+        Vec::new(),
+        funding_pk,
     )
     .await;
-    let program_note = step.program_outputs[0];
+    let split = build_program_step(
+        node,
+        channel_id,
+        program_id,
+        vec![pooled.step.program_outputs[0]],
+        vec![kept],
+        vec![paid - kept],
+        funding_pk,
+    )
+    .await;
+    let program_note = split.step.program_outputs[0];
     let op = channel_inscription(
         channel_id,
         parent,
-        vec![deposit_step, Step::Program(step.clone())],
+        vec![
+            deposit_step,
+            Step::Program(pooled.step.clone()),
+            Step::Program(split.step.clone()),
+        ],
     );
-    let ProgramStepProveResponseBody { spend_proof } = post_until_success(
-        node,
-        "channel/program-step/prove",
-        &ProgramStepProveRequestBody {
-            tip,
-            op: op.clone(),
-            step_index: 1,
-            program_notes: program_notes.clone(),
-            paid_notes,
-        },
-    )
-    .await;
-    let step_proof = StepProof::ProgramStep(ProgramStepProof {
-        spend_proof,
-        program_proof: program_proof([
-            step.program_step_id,
-            program_deposits_hash(&[&program_deposit]),
-            fr_from_mod_bytes(&op.op_id()),
-        ]),
-        program_notes,
-    });
+    let pooled_proof =
+        prove_program_step(node, &op, 1, &pooled, &[&program_deposit], &program_proof).await;
+    let split_proof = prove_program_step(node, &op, 2, &split, &[], &program_proof).await;
     let parent = op.id();
     inscribe(
         node,
         &mut block_stream,
         funding_pk,
         op,
-        vec![StepProof::ZkTransfer(deposit_proof), step_proof],
+        vec![
+            StepProof::ZkTransfer(deposit_proof),
+            pooled_proof,
+            split_proof,
+        ],
     )
     .await;
 
-    // The note of the program is consumed once the wallet adopted it and its
-    // block is deep enough; the step pays it to a user key.
-    let ProgramStepResponseBody {
-        tip,
-        step,
-        program_notes,
-        paid_notes,
-    } = post_until_success(
+    // The note the program kept is consumed once the wallet adopted it and
+    // its block is deep enough; the step pays it to a user key.
+    let paid = kept;
+    let payout = build_program_step(
         node,
-        "channel/program-step",
-        &ProgramStepRequestBody {
-            tip: None,
-            channel_id,
-            program_id,
-            inputs: vec![program_note],
-            program_outputs: Vec::new(),
-            payments: vec![ChannelPayment {
-                public_key: funding_pk,
-                value: paid,
-            }],
-            inscription: Inscription::new_unchecked(b"program payout".to_vec()),
-        },
+        channel_id,
+        program_id,
+        vec![program_note],
+        Vec::new(),
+        vec![paid],
+        funding_pk,
     )
     .await;
-    let op = channel_inscription(channel_id, parent, vec![Step::Program(step.clone())]);
-    let ProgramStepProveResponseBody { spend_proof } = post_until_success(
-        node,
-        "channel/program-step/prove",
-        &ProgramStepProveRequestBody {
-            tip,
-            op: op.clone(),
-            step_index: 0,
-            program_notes: program_notes.clone(),
-            paid_notes: paid_notes.clone(),
-        },
-    )
-    .await;
-    let step_proof = StepProof::ProgramStep(ProgramStepProof {
-        spend_proof,
-        program_proof: program_proof([
-            step.program_step_id,
-            program_deposits_hash(&[]),
-            fr_from_mod_bytes(&op.op_id()),
-        ]),
-        program_notes,
-    });
+    let paid_notes = payout.paid_notes.clone();
+    let op = channel_inscription(channel_id, parent, vec![Step::Program(payout.step.clone())]);
+    let step_proof = prove_program_step(node, &op, 0, &payout, &[], &program_proof).await;
     inscribe(node, &mut block_stream, funding_pk, op, vec![step_proof]).await;
 
     // The wallet holds the note the program paid.
@@ -753,6 +714,79 @@ async fn channel_program_step() {
             .collect::<Vec<_>>(),
         vec![(paid, funding_pk)]
     );
+}
+
+// A program step consuming `inputs`, creating a note of the program per value
+// of `program_outputs` and paying each value of `payments` to `funding_pk`.
+async fn build_program_step(
+    node: &NodeHttpClient,
+    channel_id: ChannelId,
+    program_id: Fr,
+    inputs: Vec<NoteCommitment>,
+    program_outputs: Vec<u64>,
+    payments: Vec<u64>,
+    funding_pk: ZkPublicKey,
+) -> ProgramStepResponseBody {
+    post_until_success(
+        node,
+        "channel/program-step",
+        &ProgramStepRequestBody {
+            tip: None,
+            channel_id,
+            program_id,
+            inputs,
+            program_outputs: program_outputs
+                .into_iter()
+                .map(|value| ProgramOutputBody {
+                    value,
+                    stake_public_key: funding_pk,
+                    data: Fr::from(1u64),
+                })
+                .collect(),
+            payments: payments
+                .into_iter()
+                .map(|value| ChannelPayment {
+                    public_key: funding_pk,
+                    value,
+                })
+                .collect(),
+            inscription: Inscription::new_unchecked(b"program step".to_vec()),
+        },
+    )
+    .await
+}
+
+// The proof of `built`, the program step at `step_index` of `op`, consuming
+// `program_deposits`.
+async fn prove_program_step(
+    node: &NodeHttpClient,
+    op: &InscriptionOp,
+    step_index: usize,
+    built: &ProgramStepResponseBody,
+    program_deposits: &[&ProgramDeposit],
+    program_proof: &(impl Fn([Fr; 3]) -> ProgramProof + Sync),
+) -> StepProof {
+    let ProgramStepProveResponseBody { spend_proof } = post_until_success(
+        node,
+        "channel/program-step/prove",
+        &ProgramStepProveRequestBody {
+            tip: built.tip,
+            op: op.clone(),
+            step_index,
+            program_notes: built.program_notes.clone(),
+            paid_notes: built.paid_notes.clone(),
+        },
+    )
+    .await;
+    StepProof::ProgramStep(ProgramStepProof {
+        spend_proof,
+        program_proof: program_proof([
+            built.step.program_step_id,
+            program_deposits_hash(program_deposits),
+            fr_from_mod_bytes(&op.op_id()),
+        ]),
+        program_notes: built.program_notes.clone(),
+    })
 }
 
 // A user step paying `paid` to `funding_pk` from its channel notes, behind the

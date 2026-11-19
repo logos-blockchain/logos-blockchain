@@ -3,8 +3,12 @@ use lb_core::{
     mantle::{
         Note, Value,
         channel::channel_note_set,
+        gas::GasOverflow,
         note_set::NoteSetIndex,
-        notes::{InputNullifiers, NoteCommitment, OutputCommitments, ProgramId},
+        notes::{
+            InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments, ProgramId,
+            derive_note_nullifier,
+        },
         ops::{
             ProgramNoteOpening, ZkTransferProof,
             channel::{
@@ -18,9 +22,9 @@ use lb_core::{
     },
 };
 use lb_groth16::Fr;
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use lb_wallet::{
-    NoteSetSpend, WalletError,
+    KnownNote, KnownNotes, NoteSetSpend, SpentNullifier, WalletError, WalletState,
     transaction::{OpWitness, step_witness},
 };
 
@@ -67,7 +71,9 @@ pub struct ChannelStep {
 pub struct ProgramStepRequest {
     pub channel_id: ChannelId,
     pub program_id: ProgramId,
-    /// The notes of the program the step consumes, possibly none.
+    /// The notes of the program the step consumes, possibly none: notes the
+    /// wallet holds in the channel, or notes an earlier program step it built
+    /// creates in the same transaction.
     pub inputs: Vec<NoteCommitment>,
     /// The notes of the program the step creates.
     pub program_outputs: Vec<ProgramOutput>,
@@ -238,4 +244,118 @@ pub fn build_withdrawal(
             outputs,
         },
     })
+}
+
+// The note of `program_id` of `commitment` in `note_set`: one the wallet holds
+// at `spend_state`, or else one it knows the opening of that `tip_state` has
+// not seen created, which an earlier step of the transaction creates. A note
+// on chain too young for `spend_state` is refused until it is deep enough.
+pub fn program_input_of(
+    spend_state: &WalletState,
+    tip_state: &WalletState,
+    known: &KnownNotes,
+    note_set: NoteSetIndex,
+    program_id: ProgramId,
+    commitment: &NoteCommitment,
+) -> Option<(Note, NoteNullifier)> {
+    spend_state
+        .notes
+        .get(commitment)
+        .map(|owned| (owned.note, owned.note_set, owned.nullifier))
+        .or_else(|| {
+            known
+                .get(commitment)
+                .map(|known| (known.note, known.note_set, known.nullifier))
+                .filter(|(_, note_set, nullifier)| {
+                    !tip_state.notes.contains_key(commitment)
+                        && !tip_state.spent.contains(&SpentNullifier {
+                            note_set: *note_set,
+                            nullifier: *nullifier,
+                        })
+                })
+        })
+        .filter(|(note, set, _)| *set == note_set && note.program == program_id)
+        .map(|(note, _, nullifier)| (note, nullifier))
+}
+
+// The note of `program_id` that `nullifier` spends in `note_set`, as
+// `program_input_of`.
+pub fn program_input_spent_by(
+    spend_state: &WalletState,
+    tip_state: &WalletState,
+    known: &KnownNotes,
+    note_set: NoteSetIndex,
+    program_id: ProgramId,
+    nullifier: &NoteNullifier,
+) -> Option<Note> {
+    spend_state
+        .notes
+        .values()
+        .find(|owned| owned.note_set == note_set && owned.nullifier == *nullifier)
+        .map(|owned| owned.note.commitment())
+        .or_else(|| {
+            known
+                .values()
+                .find(|known| known.note_set == note_set && known.nullifier == *nullifier)
+                .map(|known| known.note.commitment())
+        })
+        .and_then(|commitment| {
+            program_input_of(
+                spend_state,
+                tip_state,
+                known,
+                note_set,
+                program_id,
+                &commitment,
+            )
+        })
+        .map(|(note, _)| note)
+}
+
+// The notes of a program as the wallet follows them: held by `PK0`, whose
+// nullifier key everyone knows.
+pub fn program_known_notes(notes: &[Note], note_set: NoteSetIndex) -> Vec<KnownNote> {
+    let nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
+    notes
+        .iter()
+        .map(|note| KnownNote {
+            note: *note,
+            note_set,
+            nullifier: derive_note_nullifier(&note.commitment(), &nullifier_key),
+        })
+        .collect()
+}
+
+// The program step at `step_index` of `op`, over all its mini-blocks, with the
+// value the program deposits before it in its mini-block pay and the notes the
+// steps before it create.
+pub fn program_step_position(
+    op: &InscriptionOp,
+    step_index: usize,
+) -> Result<(&ProgramStep, Value, Vec<NoteCommitment>), WalletServiceError> {
+    let mut appended = Vec::new();
+    let mut index = 0;
+    for mini_block in op.mini_blocks.iter() {
+        let mut paid_value: Value = 0;
+        for step in mini_block.iter() {
+            if index == step_index {
+                let Step::Program(step) = step else {
+                    return Err(WalletServiceError::NotAProgramStep(step_index));
+                };
+                return Ok((step, paid_value, appended));
+            }
+            match step {
+                Step::ProgramDeposit(deposit) => {
+                    paid_value = paid_value
+                        .checked_add(deposit.value)
+                        .ok_or_else(|| WalletError::from(GasOverflow))?;
+                }
+                Step::Program(_) => paid_value = 0,
+                Step::User(_) => {}
+            }
+            appended.extend(step.outputs().iter().copied());
+            index += 1;
+        }
+    }
+    Err(WalletServiceError::NotAProgramStep(step_index))
 }
