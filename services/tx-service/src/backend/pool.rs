@@ -91,7 +91,7 @@ impl AdmissionLimits {
         }
         for op in item.op_refs_iter() {
             if let OpRef::ChannelInscribe(inscription) = op {
-                let size = inscription.inscription.len();
+                let size = inscription.inscriptions_len();
                 if size > self.max_op_data_size {
                     return Err(MempoolError::InscriptionTooLarge {
                         size,
