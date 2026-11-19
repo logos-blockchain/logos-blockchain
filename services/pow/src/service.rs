@@ -214,6 +214,10 @@ pub struct PoWServiceSettings {
     /// Unattended claiming: which keys to pay and how often to try. Omitting
     /// it leaves auto-claim off, so rewards are only claimed on demand.
     pub auto_claim: AutoClaimSettings,
+    /// Start mining as soon as the chain reaches `Online`, as if `StartMining`
+    /// had been received. It is read from the node's configuration at every
+    /// start; `PUT /pow/mining/stop` and `start` keep working at runtime.
+    pub start_on_boot: bool,
     pub era_schedule: ServiceEraSchedule,
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     pub recovery_data: RecoveryData,
@@ -329,11 +333,6 @@ pub struct PoWMiningSettings {
     /// the reward pool can still pay, net of the tickets already held.
     #[serde(default = "default_max_tickets_per_block")]
     pub max_tickets_per_block: NonZeroUsize,
-    /// Start mining automatically as soon as the chain reaches `Online`, as if
-    /// `StartMining` had been received. Defaults to `false` (current
-    /// behaviour). `PUT /pow/mining/stop` and `start` keep working at runtime.
-    #[serde(default)]
-    pub start_on_boot: bool,
 }
 
 impl Default for PoWMiningSettings {
@@ -341,7 +340,6 @@ impl Default for PoWMiningSettings {
         Self {
             max_threads: default_max_threads(),
             max_tickets_per_block: default_max_tickets_per_block(),
-            start_on_boot: false,
         }
     }
 }
@@ -594,9 +592,9 @@ where
         // Persists the claimable/pending tickets so they survive restarts.
         let state_updater = service_resources_handle.state_updater;
         // Mining is off until explicitly started and is not persisted — unless
-        // `mining.start_on_boot` is set, in which case it arms as soon as the
-        // chain is `Online`, equivalent to an immediate `StartMining` request.
-        let mut is_mining = settings.mining.start_on_boot;
+        // `start_on_boot` is set, in which case it arms as soon as the chain is
+        // `Online`, equivalent to an immediate `StartMining` request.
+        let mut is_mining = settings.start_on_boot;
         if is_mining {
             info!(target: LOG_TARGET, "PoW mining started automatically (start_on_boot = true)");
         }
