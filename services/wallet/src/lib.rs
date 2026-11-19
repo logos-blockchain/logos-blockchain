@@ -1440,6 +1440,54 @@ where
         Ok(known_note)
     }
 
+    // A user step, or a program deposit, spending the channel notes of the
+    // wallet, with its ZkTransfer. The wallet follows the notes the step pays
+    // to its own keys.
+    async fn prove_channel_step(
+        tip: HeaderId,
+        request: ChannelStepRequest,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ChannelStep, WalletServiceError> {
+        let (step, opening, witness, note_set) = channel::build_step(tip, request, state)?;
+        let proof = Self::prove_witness(witness, kms).await?;
+
+        let mut known_notes = Vec::new();
+        for note in &opening.outputs {
+            if let Some(key_id) = state.wallet().known_keys().get(&note.public_key).cloned() {
+                known_notes.push(Self::known_note(kms, key_id, *note, note_set).await?);
+            }
+        }
+        state.add_known_notes(known_notes);
+
+        Ok(ChannelStep {
+            step,
+            proof,
+            outputs: opening.outputs,
+        })
+    }
+
+    // The withdrawal of `notes` from the channel at the spend state of `tip`.
+    // The ledger notes it creates are registered, so the wallet adopts them
+    // once the withdrawal is released.
+    async fn channel_withdrawal(
+        tip: HeaderId,
+        channel_id: ChannelId,
+        notes: &[NoteCommitment],
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ChannelWithdrawal, WalletServiceError> {
+        let withdrawal = channel::build_withdrawal(tip, channel_id, notes, state)?;
+
+        let mut known_notes = Vec::new();
+        for note in &withdrawal.opening.outputs {
+            known_notes.push(Self::held_note(*note, NoteSetIndex::Ledger, state, kms).await?);
+        }
+        state.add_known_notes(known_notes);
+
+        Ok(withdrawal)
+    }
+
     // A new leader reward note under `public_key`, with a private random nonce.
     // Nothing on chain opens the note, so it is returned only once it is
     // written to storage: a crash after its block is published cannot lose
