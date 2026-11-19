@@ -205,8 +205,8 @@ async fn channel_deposit() {
     assert_eq!(holder_note.value, deposit_amount);
     assert_eq!(holder_note.public_key, funding_pk);
 
-    // The wallet applies the block of the deposit after the block stream reports
-    // it.
+    // The wallet applies the block of the deposit after the block stream
+    // reports it.
     let balance_after = timeout(Duration::from_mins(1), async {
         loop {
             let balance = get_wallet_balance(&validator.client, funding_pk).await;

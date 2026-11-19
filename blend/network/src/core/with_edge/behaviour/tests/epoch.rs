@@ -91,8 +91,8 @@ async fn epoch_transition_updates_membership_for_new_connections() {
 
     blend_swarm.listen().with_memory_addr_external().await;
 
-    // Edge swarm tries to connect. Since edge_peer_id is in the core membership,
-    // the connection handler should be a dummy (no upgrade).
+    // Edge swarm tries to connect. Since edge_peer_id is in the core
+    // membership, the connection handler should be a dummy (no upgrade).
     edge_swarm.connect(&mut blend_swarm).await;
 
     // The connection should close since the edge node is actually in the core

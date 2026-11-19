@@ -41,15 +41,17 @@ use crate::{
 
 const LOG_TARGET: &str = chain::leader::LEADERSHIP;
 
-// An aged note of the wallet winning the slot, with the public inputs it wins.
+// An aged note of the wallet winning the slot, with the public inputs it wins
+// and its wallet witness.
 #[derive(Debug)]
 pub struct WinningNote {
     pub note: AgedNote,
     pub public_inputs: LeaderPublic,
+    pub wallet_inputs: PolWalletInputsData,
 }
 
-// The first aged note winning `slot`, checked against C_LEAD and the latest
-// eligible root.
+// The first aged note winning `slot` whose witness can be built, checked
+// against C_LEAD and the latest eligible root.
 pub async fn find_winning_note<RuntimeServiceId>(
     aged: &[AgedNote],
     epoch_state: &EpochState,
@@ -72,6 +74,12 @@ pub async fn find_winning_note<RuntimeServiceId>(
                     note.note.note.value,
                     epoch_state.total_stake()
                 );
+                // A winning note whose witness fails, such as one spent since
+                // the epoch snapshot, leaves the slot to the next winning note.
+                let Some(wallet_inputs) = leader_wallet_inputs(note, epoch_state, latest, slot)
+                else {
+                    continue;
+                };
                 return Some(WinningNote {
                     note: AgedNote {
                         note: note.note.clone(),
@@ -79,6 +87,7 @@ pub async fn find_winning_note<RuntimeServiceId>(
                         key_id: note.key_id.clone(),
                     },
                     public_inputs,
+                    wallet_inputs,
                 });
             }
             Ok(false) => non_winning_notes += 1,
@@ -105,22 +114,32 @@ pub async fn find_winning_note<RuntimeServiceId>(
     None
 }
 
-// The wallet half of the PoL witness of the winning note, proven against the
-// aged note sets of the epoch and the `latest` note sets.
-pub fn leader_wallet_inputs(
-    winning: &WinningNote,
+// The wallet half of the PoL witness of an aged note, proven against the aged
+// note sets of the epoch and the `latest` note sets, or `None` if it fails.
+fn leader_wallet_inputs(
+    aged: &AgedNote,
     epoch_state: &EpochState,
     latest: &NoteSets,
-) -> Result<PolWalletInputsData, PrivateInputsError> {
-    let note = &winning.note.note;
-    Ok(pol_wallet_inputs(
+    slot: Slot,
+) -> Option<PolWalletInputsData> {
+    let note = &aged.note;
+    pol_wallet_inputs(
         &note.note,
         note.note_set,
         &note.nullifier,
-        &winning.note.aged_path,
+        &aged.aged_path,
         &epoch_state.note_sets,
         latest,
-    )?)
+    )
+    .inspect_err(|e| {
+        metrics::consensus_proposals_create_failed("private_inputs");
+        tracing::error!(
+            target: LOG_TARGET,
+            "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
+            note.note.commitment(),
+        );
+    })
+    .ok()
 }
 
 // C_LEAD and eligible_LATEST.
@@ -235,6 +254,16 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             eligible_aged,
             source,
         } = slot_context;
+        tracing::debug!(
+            target: LOG_TARGET,
+            event = "leader_eligible_notes",
+            path = "winning_slot_scan",
+            slot = ?slot,
+            epoch = ?epoch,
+            note_count = eligible_aged.len(),
+            total_value = eligible_aged.iter().map(|note| note.note.note.value).sum::<u64>(),
+            "Eligible notes for the winning slot scan"
+        );
         let state = PolEpochState {
             nonce: epoch_state.nonce,
             eligible_aged: epoch_state.eligible_root(),
@@ -262,10 +291,11 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
         );
 
         // Hand the subscriber a *lazy* stream over this epoch's slot range. No
-        // slot is scanned until the subscriber drives the stream, and it decides
-        // how far ahead to pre-compute, so the whole epoch is never materialized
-        // here. A scan made stale by an epoch rollover is implicitly abandoned:
-        // the subscriber just stops polling it once it moves to the next epoch.
+        // slot is scanned until the subscriber drives the stream, and it
+        // decides how far ahead to pre-compute, so the whole epoch is
+        // never materialized here. A scan made stale by an epoch
+        // rollover is implicitly abandoned: the subscriber just stops
+        // polling it once it moves to the next epoch.
         let winning_slots_stream = epoch_winning_slots_stream(
             &era_schedule,
             epoch_state,
@@ -286,8 +316,8 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             return;
         }
 
-        // Wait for the first tick of the next epoch to produce a new winning slot
-        // stream and pass it to consumers.
+        // Wait for the first tick of the next epoch to produce a new winning
+        // slot stream and pass it to consumers.
         current_slot_tick = next_epoch_tick(&mut slot_timer, epoch).await;
     }
 
@@ -336,6 +366,9 @@ where
         .await
         .ok()?
         .ok()?;
+    // Filter the wallet's notes by the aged UTXO set of the slot's epoch, not
+    // the one of the tip's epoch: on the first slots of an epoch, before any
+    // block of it is on the chain, the two differ.
     let eligible_utxos = wallet_api
         .get_leader_aged_notes(Some(wallet_tip), epoch_state.epoch)
         .await
@@ -470,7 +503,10 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
 #[cfg(test)]
 mod pol_tests {
     use core::fmt;
-    use std::{fmt::Formatter, num::NonZero};
+    use std::{
+        fmt::Formatter,
+        num::{NonZero, NonZeroU32},
+    };
 
     use lb_core::{
         era::{AcceptedForkDigests, ForkDigest},
@@ -479,6 +515,7 @@ mod pol_tests {
             gas::{Gas, GasProfile},
             note_set::{CommitmentMmr, NoteSetIndex},
             notes::derive_note_nullifier,
+            ops::channel::ChannelId,
         },
         proofs::leader_proof::{LeaderPrivate, check_winning},
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -494,7 +531,7 @@ mod pol_tests {
         },
     };
     use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
     use lb_wallet::OwnedNote;
 
     use super::*;
@@ -624,6 +661,68 @@ mod pol_tests {
         );
     }
 
+    /// A winning note whose witness fails leaves the slot to the next winning
+    /// note.
+    #[tokio::test]
+    async fn a_winning_note_without_a_witness_leaves_the_slot_to_the_next() {
+        let (_, kms, eligible, note_sets, epoch_state) = scan_test_fixtures();
+        let good = &eligible[0];
+        let slot = slot_won_by(good, &epoch_state, &note_sets, &kms).await;
+        let aged = [in_unknown_set(good), clone_aged(good)];
+
+        let winning = find_winning_note(&aged, &epoch_state, &note_sets, slot, &kms)
+            .await
+            .expect("the second note wins the slot");
+        assert_eq!(winning.note.aged_path, good.aged_path);
+    }
+
+    /// No winning note leads a slot if none has a witness.
+    #[tokio::test]
+    async fn no_note_wins_a_slot_without_a_witness() {
+        let (_, kms, eligible, note_sets, epoch_state) = scan_test_fixtures();
+        let slot = slot_won_by(&eligible[0], &epoch_state, &note_sets, &kms).await;
+        let aged = [in_unknown_set(&eligible[0])];
+
+        let winning = find_winning_note(&aged, &epoch_state, &note_sets, slot, &kms).await;
+        assert!(winning.is_none());
+    }
+
+    /// The first slot `aged` wins.
+    async fn slot_won_by(
+        aged: &AgedNote,
+        epoch_state: &EpochState,
+        note_sets: &NoteSets,
+        kms: &DummyKms,
+    ) -> Slot {
+        for slot in 0..1000u64 {
+            let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), note_sets);
+            if kms
+                .check_winning_with_key(aged.key_id.clone(), &aged.note.note, &public_inputs)
+                .await
+                .unwrap()
+            {
+                return slot.into();
+            }
+        }
+        panic!("the note wins no slot of the first 1000");
+    }
+
+    /// `aged` in a channel set the chain doesn't hold: it still wins, but its
+    /// witness fails.
+    fn in_unknown_set(aged: &AgedNote) -> AgedNote {
+        let mut aged = clone_aged(aged);
+        aged.note.note_set = NoteSetIndex::Channel(ChannelId::from([7; 32]));
+        aged
+    }
+
+    fn clone_aged(aged: &AgedNote) -> AgedNote {
+        AgedNote {
+            note: aged.note.clone(),
+            aged_path: aged.aged_path.clone(),
+            key_id: aged.key_id.clone(),
+        }
+    }
+
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
@@ -631,10 +730,9 @@ mod pol_tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: core::num::NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: core::num::NonZeroU64::MIN,
-            target_claim_per_block: core::num::NonZeroU64::MIN,
             pow_share: 0,
             share_den: core::num::NonZeroU64::MIN,
             slot_window: core::num::NonZeroU64::new(100).unwrap(),
@@ -687,24 +785,18 @@ mod pol_tests {
     const BLOCK_REWARDS: lb_ledger::config::BlockRewardsConfig =
         lb_ledger::config::BlockRewardsConfig::new(
             lb_ledger::config::BlockRewardsParameters {
-                max_emission_rate: lb_utils::math::ProperFraction::new(
-                    1,
-                    NonZero::new(100).unwrap(),
-                )
-                .unwrap(),
+                max_emission_rate: ProperFraction::new(1, NonZero::new(100).unwrap()).unwrap(),
                 min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
-                stake_target: lb_utils::math::ProperFraction::new(3, NonZero::new(10).unwrap())
-                    .unwrap(),
+                stake_target: ProperFraction::new(3, NonZero::new(10).unwrap()).unwrap(),
                 pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
                 stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
                 pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
                 pooled_fees_window: NonZero::new(120).unwrap(),
-                blend_share: lb_utils::math::ProperFraction::new(6, NonZero::new(10).unwrap())
-                    .unwrap(),
+                blend_share: ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
             },
             10_000_000_000_000_000_000,
             NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, NonZero::new(30).unwrap()),
+            ProperFraction::new(1, NonZero::new(30).unwrap()).unwrap(),
         )
         .unwrap();
 
@@ -717,7 +809,7 @@ mod pol_tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(5).unwrap(),
-                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
                 1f64.try_into().expect("1 > 0"),
                 12,
                 4,
@@ -728,7 +820,6 @@ mod pol_tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -736,7 +827,8 @@ mod pol_tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: NonZero::new(10u64).unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
@@ -744,10 +836,7 @@ mod pol_tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
@@ -756,22 +845,12 @@ mod pol_tests {
             channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: lb_ledger::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: BLOCK_REWARDS,
             gas_profile: GAS_PROFILE,

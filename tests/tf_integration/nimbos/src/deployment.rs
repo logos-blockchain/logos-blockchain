@@ -1,8 +1,8 @@
-use serde_yaml::{Mapping, Value};
+use serde_yaml::Value;
 use testing_framework_core::scenario::DynError;
 
 /// The supported Logos and Nimbos deployment YAML layouts are very similar.
-/// Only one field name needs translating here; all other data is preserved.
+/// Only one field needs adding here; all other data is preserved.
 pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
     let mut output: Value = serde_yaml::from_str(source)?;
     let cryptarchia = output
@@ -18,33 +18,15 @@ pub fn from_logos_yaml(source: &str) -> Result<String, DynError> {
         .and_then(Value::as_mapping_mut)
         .ok_or("Nimbos preparation requires a min_stake mapping")?;
 
-    // Block activation and epoch activation coincide only at genesis (zero).
-    if min_stake
-        .get("timestamp")
-        .is_some_and(|timestamp| timestamp.as_u64() != Some(0))
-    {
-        return Err("Nimbos preparation cannot translate a nonzero minimum-stake block activation into an epoch".into());
+    // Nimbos records the epoch a minimum stake takes effect from. Logos takes
+    // its values from their era instead, and the genesis era starts at epoch 0.
+    if !min_stake.contains_key("epoch") {
+        min_stake.insert("epoch".into(), 0.into());
     }
 
-    rename_required_field(min_stake, "timestamp", "epoch")?;
-
-    // Nimbos validates its native schema; preserve everything we do not translate.
+    // Nimbos validates its native schema; preserve everything we do not
+    // translate.
     Ok(serde_yaml::to_string(&output)?)
-}
-
-fn rename_required_field(fields: &mut Mapping, from: &str, to: &str) -> Result<(), DynError> {
-    if fields.contains_key(from) && fields.contains_key(to) {
-        return Err(format!("Nimbos preparation received both {from} and {to}").into());
-    }
-
-    if let Some(value) = fields.remove(from) {
-        fields.insert(to.into(), value);
-    }
-    if !fields.contains_key(to) {
-        return Err(format!("Nimbos preparation requires '{from}' or '{to}'").into());
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -54,7 +36,8 @@ mod tests {
     use super::from_logos_yaml;
 
     // Structural fixture for conversion, not a runnable genesis. Cryptographic
-    // values are opaque here: the adapter must preserve them, not recompute them.
+    // values are opaque here: the adapter must preserve them, not recompute
+    // them.
     const LOGOS_INPUT: &str = "
 # Settings outside the translated fields must also survive conversion.
 additional_settings: { value: preserved }
@@ -79,7 +62,7 @@ cryptarchia:
   sdp_config:
     service_params:
       BN: { inactivity_period: 10, epoch: 0 }
-    min_stake: { threshold: 100, timestamp: 0 }
+    min_stake: { threshold: 100 }
   gossipsub_protocol: /cryptarchia/test
   genesis_block:
     header:
@@ -112,7 +95,8 @@ cryptarchia:
     fn preserves_network_and_genesis_data_with_native_field_names() {
         let converted: Value =
             serde_yaml::from_str(&from_logos_yaml(LOGOS_INPUT).unwrap()).unwrap();
-        let expected_yaml = LOGOS_INPUT.replace("timestamp: 0", "epoch: 0");
+        let expected_yaml =
+            LOGOS_INPUT.replace("{ threshold: 100 }", "{ threshold: 100, epoch: 0 }");
         let expected: Value = serde_yaml::from_str(&expected_yaml).unwrap();
 
         assert_eq!(converted, expected);

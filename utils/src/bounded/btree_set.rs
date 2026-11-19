@@ -438,7 +438,8 @@ mod tests {
             "unexpected error: {json}"
         );
 
-        // A declared length past `MAX` is refused before any element is decoded.
+        // A declared length past `MAX` is refused before any element is
+        // decoded.
         let encoded = bincode::serialize(&vec![1u8; 5]).unwrap();
         let binary = bincode::deserialize::<TestSet>(&encoded).unwrap_err();
         assert!(

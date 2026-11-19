@@ -122,7 +122,8 @@ mod tests {
                 .value,
             wallet.value
         );
-        // The leaders hold the stake the other outputs and the declarations leave.
+        // The leaders hold the stake the other outputs and the declarations
+        // leave.
         let leader_stake = network
             .consensus
             .regular_note_keys

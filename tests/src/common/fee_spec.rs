@@ -139,8 +139,8 @@ pub fn spec_block_execution_gas(block: &ApiBlock) -> Result<u64, String> {
 
     for tx in &block.transactions {
         let mut buffered = 0u64;
-        // The referenced root and buffered count of the proofs extending a root,
-        // each extension paid once by the transaction.
+        // The referenced root and buffered count of the proofs extending a
+        // root, each extension paid once by the transaction.
         let mut extended_roots = HashSet::new();
         for op in tx.op_refs() {
             match op {

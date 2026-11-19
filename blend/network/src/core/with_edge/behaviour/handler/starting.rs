@@ -48,9 +48,9 @@ impl From<StartingState> for ConnectionState {
 
 impl StateTrait for StartingState {
     // Moves the state machine to `ReadyToReceive` upon receiving a
-    // `FullyNegotiatedInbound`. In case of `ListenUpgradeError`, the state machine
-    // is moved to the `DroppedState` state (the last state), with the relative
-    // error.
+    // `FullyNegotiatedInbound`. In case of `ListenUpgradeError`, the state
+    // machine is moved to the `DroppedState` state (the last state), with
+    // the relative error.
     fn on_connection_event(mut self, event: ConnectionEvent) -> ConnectionState {
         match event {
             ConnectionEvent::FullyNegotiatedInbound(FullyNegotiatedInbound {

@@ -107,7 +107,7 @@ jobs:
           args: >-
             --locked --profile ci-release
             -p logos-blockchain-node -p blockchain-test-interop
-            --bin logos-blockchain-node --bin cucumber_external_smoke
+            --bin logos-blockchain-node --bin cucumber-external-smoke
 
       - name: Build cucumber runners
         id: runners
@@ -138,7 +138,7 @@ jobs:
         env:
           CUCUMBER_RETRIES: "0"
         with:
-          executable: ${{ github.workspace }}/target/ci-release/cucumber_external_smoke
+          executable: ${{ github.workspace }}/target/ci-release/cucumber-external-smoke
           scenario_name: '^Two nodes connect at runtime$'
           suite_tag: "@smoke_ci"
           suite_name: external-runner

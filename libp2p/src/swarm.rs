@@ -99,8 +99,9 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
         let lb_swarm = {
             let listen_addr = multiaddr(host, port);
             let mut s = Self { swarm };
-            // We start listening on the provided address, which triggers the Identify flow,
-            // which in turn triggers our NAT traversal state machine.
+            // We start listening on the provided address, which triggers the
+            // Identify flow, which in turn triggers our NAT
+            // traversal state machine.
             s.start_listening_on(listen_addr.clone())
                 .map_err(|e| format!("Failed to listen on {listen_addr}: {e}"))?;
             Ok::<_, Box<dyn Error>>(s)

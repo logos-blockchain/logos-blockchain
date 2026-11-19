@@ -141,8 +141,9 @@ mod tests {
         assert!(block.header().verify(&public));
         let proof = block.header().leader_proof().clone();
         assert!(!Header::new(parent, ContentId::from([9; 32]), slot, proof).verify(&public));
-        // `Groth16LeaderProof::from_parts` is crate private in core: `msg`, bound to
-        // the reward note, is proven under another key of that note.
+        // `Groth16LeaderProof::from_parts` is crate private in core: `msg`,
+        // bound to the reward note, is proven under another key of that
+        // note.
         wallet.reward_public_key = Fr::from(5u64);
         let other_key = assemble_block(
             parent,

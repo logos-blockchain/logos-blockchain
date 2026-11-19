@@ -251,8 +251,8 @@ impl Behaviour {
                 self.max_blocks_response_size,
             ),
         );
-        // Switch to the new sync protocol right away by notifying the waker to poll the
-        // swarm.
+        // Switch to the new sync protocol right away by notifying the waker to
+        // poll the swarm.
         previous_sync_state.ongoing_requests.try_notify_waker();
         self.old_era = Some(OldEra::new(previous_sync_state));
     }
@@ -432,8 +432,8 @@ impl OngoingRequests {
     }
 
     fn handle_incoming_stream(&self, peer_id: PeerId, stream: Libp2pStream) {
-        // Only requests still being read are limited here. Once the request type
-        // is known, `admit_request` applies the per-type limits.
+        // Only requests still being read are limited here. Once the request
+        // type is known, `admit_request` applies the per-type limits.
         if self.receiving_requests.len() >= self.config.max_inbound_requests.get() {
             self.reject_incoming_stream(stream, "too many pending incoming requests");
         } else {
@@ -685,12 +685,12 @@ impl NetworkBehaviour for Behaviour {
 
     fn on_connection_handler_event(
         &mut self,
-        peer_id: PeerId,
-        conn_id: ConnectionId,
+        _: PeerId,
+        _: ConnectionId,
         event: <Self::ConnectionHandler as ConnectionHandler>::ToBehaviour,
     ) {
-        self.stream_behaviour
-            .on_connection_handler_event(peer_id, conn_id, event);
+        // The stream handler never reports events to its behaviour.
+        match event {}
     }
 
     fn poll(
@@ -1342,7 +1342,8 @@ mod tests {
         };
 
         // Consume a download one block per 500ms (< `peer_response_timeout`).
-        // The whole download would take ~30s (> `inbound_download_stream_timeout`).
+        // The whole download would take ~30s (>
+        // `inbound_download_stream_timeout`).
         let mut slow_swarm =
             setup_downloader_and_connect(provider_addr.clone(), config.clone()).await;
         let slow_streams = request(&mut slow_swarm);

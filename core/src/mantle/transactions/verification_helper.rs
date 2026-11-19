@@ -159,10 +159,7 @@ pub mod test_utils {
                 block_number: 0,
                 declarations: Declarations::new_sync(),
                 provider_index: ProviderIndex::new_sync(),
-                min_stake: MinStake {
-                    threshold: 0,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 0 },
                 epoch: Epoch::from(0u32),
                 block_slot: Slot::from(0u64),
                 pow_reward_difficulty: PowTarget::default(),

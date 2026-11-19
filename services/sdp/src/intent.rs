@@ -161,7 +161,7 @@ pub enum Error {
 mod tests {
     use std::{
         convert::Infallible,
-        num::NonZero,
+        num::{NonZero, NonZeroU32},
         sync::{Arc, Mutex},
     };
 
@@ -180,7 +180,7 @@ mod tests {
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
 
@@ -530,10 +530,9 @@ mod tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
@@ -553,31 +552,25 @@ mod tests {
     const BLOCK_REWARDS: lb_ledger::config::BlockRewardsConfig =
         lb_ledger::config::BlockRewardsConfig::new(
             lb_ledger::config::BlockRewardsParameters {
-                max_emission_rate: lb_utils::math::ProperFraction::new(
-                    1,
-                    NonZero::new(100).unwrap(),
-                )
-                .unwrap(),
+                max_emission_rate: ProperFraction::new(1, NonZero::new(100).unwrap()).unwrap(),
                 min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
-                stake_target: lb_utils::math::ProperFraction::new(3, NonZero::new(10).unwrap())
-                    .unwrap(),
+                stake_target: ProperFraction::new(3, NonZero::new(10).unwrap()).unwrap(),
                 pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
                 stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
                 pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
                 pooled_fees_window: NonZero::new(120).unwrap(),
-                blend_share: lb_utils::math::ProperFraction::new(6, NonZero::new(10).unwrap())
-                    .unwrap(),
+                blend_share: ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
             },
             10_000_000_000_000_000_000,
             NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, NonZero::new(30).unwrap()),
+            ProperFraction::new(1, NonZero::new(30).unwrap()).unwrap(),
         )
         .unwrap();
 
     fn ledger_state(notes: impl IntoIterator<Item = Note>) -> LedgerState {
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(2).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().unwrap(),
             12,
             4,
@@ -600,7 +593,6 @@ mod tests {
                             ServiceType::BlendNetwork,
                             ServiceParameters {
                                 inactivity_period: 20.try_into().unwrap(),
-                                epoch: 0.into(),
                             },
                         )]
                         .into(),
@@ -608,7 +600,8 @@ mod tests {
                     service_rewards_params: ServiceRewardsParameters {
                         blend: rewards::blend::RewardsParameters {
                             rounds_per_epoch: epoch_length.try_into().unwrap(),
-                            message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                            message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                                .unwrap(),
                             cover_replication_factor: 0,
                             num_blend_layers: NonZeroU64::new(3).unwrap(),
                             minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -616,10 +609,7 @@ mod tests {
                             activity_threshold_sensitivity: 1,
                         },
                     },
-                    min_stake: MinStake {
-                        threshold: 1,
-                        timestamp: 0,
-                    },
+                    min_stake: MinStake { threshold: 1 },
                 },
                 max_transactions: 1024,
                 max_transactions_size: 2 * 1024 * 1024,
@@ -628,28 +618,12 @@ mod tests {
                 channel_withdraw_delay: 86_400.into(),
                 execution_market: lb_ledger::config::ExecutionMarketConfig {
                     max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                    fee_adjustment_rate: lb_utils::math::ProperFraction::new(
-                        1,
-                        8.try_into().unwrap(),
-                    )
-                    .unwrap(),
-                    ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                        9,
-                        10.try_into().unwrap(),
-                    )
-                    .unwrap(),
+                    fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                    ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
                 },
                 storage_market: lb_ledger::config::StorageMarketConfig {
-                    max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                        1,
-                        8.try_into().unwrap(),
-                    )
-                    .unwrap(),
-                    ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                        1,
-                        2.try_into().unwrap(),
-                    )
-                    .unwrap(),
+                    max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                    ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
                 },
                 block_rewards: BLOCK_REWARDS,
                 gas_profile: GAS_PROFILE,

@@ -510,7 +510,7 @@ mod proof_serde {
 pub mod test_utils {
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
 
     use super::*;
     use crate::mantle::{
@@ -553,7 +553,7 @@ pub mod test_utils {
 
         let eligible = sets.eligible_root();
         let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+            LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
                 .compute_lottery_values(value);
         let public = (0..10_000u64)
             .map(|epoch_nonce| {
@@ -598,7 +598,7 @@ mod tests {
     use ark_ff::Field as _;
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
     use rand::RngCore as _;
 
     use super::*;
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn test_check_winning() {
-        let slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
+        let slot_activation_coeff = ProperFraction::new(1, 10.try_into().unwrap()).unwrap();
         let constants = LotteryConstants::new(slot_activation_coeff);
 
         // winning rate of all the stake should be ~ active slot coeff

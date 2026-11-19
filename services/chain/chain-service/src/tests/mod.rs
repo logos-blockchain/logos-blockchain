@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display},
     io,
-    num::NonZero,
+    num::{NonZero, NonZeroU32},
     sync::{Arc, Mutex},
 };
 
@@ -73,7 +73,7 @@ use lb_storage_service::{
 };
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -110,8 +110,8 @@ fn bootstrapping_chain_of_three_blocks() -> (Cryptarchia, Vec<(Slot, HeaderId)>)
     let mut blocks = vec![(Slot::genesis(), genesis_id)];
     let mut slot = Slot::new(1);
     while blocks.len() < 4 {
-        // TODO: Use a mock proof system instead of expensive real proof generation,
-        // by refactoring `Cryptarchia`.
+        // TODO: Use a mock proof system instead of expensive real proof
+        // generation, by refactoring `Cryptarchia`.
         let (block, _) = try_build_block(
             &cryptarchia,
             blocks.last().unwrap().1,
@@ -127,7 +127,8 @@ fn bootstrapping_chain_of_three_blocks() -> (Cryptarchia, Vec<(Slot, HeaderId)>)
         let (pruned_blocks, reorged_blocks, _) = cryptarchia
             .try_apply_block(block, block_header_slot)
             .unwrap();
-        // No block should be pruned since LIB is not updated during Bootstrapping
+        // No block should be pruned since LIB is not updated during
+        // Bootstrapping
         assert!(pruned_blocks.is_empty());
         assert!(reorged_blocks.is_empty());
 
@@ -1457,10 +1458,9 @@ fn disabled_reward_config() -> RewardPoWConfig {
         minimum_difficulty: ModulusShift::new::<26>(),
         ema_smoothing_factor: 9,
         ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
-        target_claims_per_block: 100,
+        target_claims_per_block: core::num::NonZeroU64::new(100).unwrap(),
         rate_num: 0,
         rate_den: core::num::NonZeroU64::MIN,
-        target_claim_per_block: core::num::NonZeroU64::MIN,
         pow_share: 0,
         share_den: core::num::NonZeroU64::MIN,
         slot_window: core::num::NonZeroU64::new(100).unwrap(),
@@ -1606,7 +1606,6 @@ fn ledger_config_with_uncles(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         },
     );
     let epoch_config = EpochConfig {
@@ -1616,7 +1615,7 @@ fn ledger_config_with_uncles(
     };
     let consensus_config = lb_cryptarchia_engine::Config::new(
         security_param,
-        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
         1.0.try_into().unwrap(),
         uncle_reference_window_in_block,
         max_uncles,
@@ -1631,7 +1630,7 @@ fn ledger_config_with_uncles(
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
-                    message_frequency_per_round: 1.0.try_into().unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
                     cover_replication_factor: 0,
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
@@ -1639,10 +1638,7 @@ fn ledger_config_with_uncles(
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: lb_core::sdp::MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: lb_core::sdp::MinStake { threshold: 1 },
         },
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
@@ -1651,34 +1647,27 @@ fn ledger_config_with_uncles(
         channel_withdraw_delay: 86_400.into(),
         execution_market: lb_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
-                .unwrap(),
+            fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
         },
         storage_market: lb_ledger::config::StorageMarketConfig {
-            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                .unwrap(),
+            max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
         },
         block_rewards: lb_ledger::config::BlockRewardsConfig::new(
             lb_ledger::config::BlockRewardsParameters {
-                max_emission_rate: lb_utils::math::ProperFraction::new(1, 100.try_into().unwrap())
-                    .unwrap(),
+                max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
                 min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
-                stake_target: lb_utils::math::ProperFraction::new(3, 10.try_into().unwrap())
-                    .unwrap(),
+                stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
                 pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                 stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
                 pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
                 pooled_fees_window: 120.try_into().unwrap(),
-                blend_share: lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap())
-                    .unwrap(),
+                blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
             },
             10_000_000_000_000_000_000,
             1.try_into().unwrap(),
-            NonNegativeRatio::new(1, 30.try_into().unwrap()),
+            ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
         gas_profile: GAS_PROFILE,

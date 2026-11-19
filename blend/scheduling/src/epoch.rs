@@ -63,8 +63,8 @@ where
         match self.event_stream.poll_next_unpin(cx) {
             Poll::Ready(Some(epoch)) => {
                 // Start the transition period timer, and yield the new epoch.
-                // If the previous transition period timer has not been expired yet,
-                // it will be overwritten.
+                // If the previous transition period timer has not been expired
+                // yet, it will be overwritten.
                 self.transition_period_timer = Some(Box::pin(sleep(self.transition_period)));
                 return Poll::Ready(Some(EpochEvent::NewEpoch(epoch)));
             }

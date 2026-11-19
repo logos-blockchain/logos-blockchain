@@ -534,8 +534,8 @@ mod tests {
                     .frontier_root(),
             ]
         );
-        // `exact` is leaf 1 of the extended ledger set: its level 0 sibling is `owned`,
-        // on the left.
+        // `exact` is leaf 1 of the extended ledger set: its level 0 sibling is
+        // `owned`, on the left.
         assert_eq!(
             witnesses[1].witness.inputs()[0].path_and_selectors[0],
             (owned.commitment().0, true)
@@ -598,7 +598,8 @@ mod tests {
             )
             .unwrap();
 
-        // the largest note covers the payment and the excess, the rest is change
+        // the largest note covers the payment and the excess, the rest is
+        // change
         assert_eq!(nullifiers.as_slice(), [nullifier(2)]);
         assert_eq!(opening.inputs, vec![large]);
         assert_eq!(
@@ -722,7 +723,8 @@ mod tests {
             extended(&appended)
         );
 
-        // the note an earlier mini-block paid to the wallet, with the one on chain
+        // the note an earlier mini-block paid to the wallet, with the one on
+        // chain
         let appended = [foreign.commitment(), buffered.commitment()];
         let (nullifiers, opening, named_root) = spend(1_000, &appended).unwrap();
         assert_eq!(opening.inputs, vec![buffered, on_chain]);

@@ -42,24 +42,21 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
     let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
 
-    let mut stakeholder_identities = vec![
-        stake_key.to_public_key(),
-        leader_funding_key.to_public_key(),
-        sdp_funding_key.to_public_key(),
-    ];
-
     let blend = build_blend_data(
         &user_config,
         &keystore,
         args.external_address,
         args.external_port,
     )?;
-    if let Some(blend) = &blend {
-        stakeholder_identities.push(blend.zk_id);
-    }
-
     let data = ParticipationData {
-        stakeholder_identities,
+        stakeholder_identities: stakeholder_identities(
+            [
+                stake_key.to_public_key(),
+                leader_funding_key.to_public_key(),
+                sdp_funding_key.to_public_key(),
+            ],
+            blend.as_ref(),
+        ),
         blend,
     };
 
@@ -69,6 +66,20 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     println!("Written: {}", output_path.display());
 
     Ok(())
+}
+
+/// The keys the genesis allocates notes to: the note keys of the wallet, and
+/// the one of the Blend key when it joins. A stakeholder identity is the public
+/// key of a note, so the Blend key gives its note public key, which its wallet
+/// spends, not its quota identity `zk_id`, which stays the provider's.
+fn stakeholder_identities(
+    wallet_keys: impl IntoIterator<Item = ZkPublicKey>,
+    blend: Option<&BlendParticipationData>,
+) -> Vec<ZkPublicKey> {
+    wallet_keys
+        .into_iter()
+        .chain(blend.map(|blend| blend.note_pk))
+        .collect()
 }
 
 /// Returns `Ok(Some(...))` when the blend signing key is present and the
@@ -92,8 +103,8 @@ fn build_blend_data(
     let locators = Locators::from(Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?);
     let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
     // The zk_id is derived from the quota secret key itself, which the Proof of
-    // Quota proves, and the service note is under the public key of the notes of
-    // the same key, which the wallet spends.
+    // Quota proves, and the service note is under the public key of the notes
+    // of the same key, which the wallet spends.
     let zk_id = kdf_public_key(blend_key.as_fr());
 
     // Declaration ID is not required for the genesis ceremony, but it is still
@@ -202,4 +213,40 @@ fn replace_host(addr: &Multiaddr, new_host: Protocol<'_>) -> Multiaddr {
         result.push(proto);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_service::keys::ZkKey;
+
+    use super::*;
+
+    /// A Blend key joining the genesis is allocated its note under the public
+    /// key its wallet spends, while the provider keeps the quota identity.
+    #[test]
+    fn the_blend_stakeholder_identity_is_its_note_public_key() {
+        let blend_key = ZkKey::new(Fr::from(7u64));
+        let note_pk = blend_key.to_public_key();
+        let zk_id = kdf_public_key(blend_key.as_fr());
+        assert_ne!(note_pk, zk_id, "the two identities differ");
+        let blend = BlendParticipationData {
+            provider_id: Ed25519PublicKey::from_bytes(&[1; 32]).unwrap(),
+            zk_id,
+            note_pk,
+            note_stake_pk: note_pk,
+            locators: Locators::from(
+                Locator::try_from("/ip4/1.2.3.4/udp/3000".parse::<Multiaddr>().unwrap()).unwrap(),
+            ),
+            service_type: ServiceType::BlendNetwork,
+            declaration_id: DeclarationId([0; 32]),
+        };
+        let wallet = ZkPublicKey::new(Fr::from(1u64));
+
+        assert_eq!(
+            stakeholder_identities([wallet], Some(&blend)),
+            vec![wallet, note_pk]
+        );
+        assert_eq!(stakeholder_identities([wallet], None), vec![wallet]);
+    }
 }

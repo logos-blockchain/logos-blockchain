@@ -186,8 +186,8 @@ mod tests {
                 &format!("the largest value at byte {start}"),
             );
         }
-        // The sign flag is not part of the coordinate, so it cannot lower it below
-        // the modulus, nor raise one below the modulus above it.
+        // The sign flag is not part of the coordinate, so it cannot lower it
+        // below the modulus, nor raise one below the modulus above it.
         for start in [0, 64, 96] {
             let mut flagged = BASE_FIELD_MODULUS;
             flagged[31] |= 1 << 7;

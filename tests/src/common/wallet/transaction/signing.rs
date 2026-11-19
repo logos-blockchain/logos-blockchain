@@ -132,8 +132,9 @@ pub(super) fn build_transfer_proofs(
                 let opening = openings
                     .get(&op_index)
                     .ok_or(lb_wallet::WalletError::MissingOpening { op_index })?;
-                // Each input is proven with the path of its funding note, to the
-                // root the funding Transfer names; no earlier Operation of a test
+                // Each input is proven with the path of its funding note, to
+                // the root the funding Transfer names; no
+                // earlier Operation of a test
                 // wallet transaction appends to the ledger set.
                 let inputs = transfer_op
                     .inputs

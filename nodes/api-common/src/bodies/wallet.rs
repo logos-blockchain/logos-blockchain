@@ -35,9 +35,10 @@ pub mod balance {
                     target: LOG_TARGET,
                     "WalletBalanceResponseBody serialization error: {e}"
                 );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
+                // We panic here because this should never happen, and if it
+                // does, it's a critical error that we want to
+                // be immediately visible during development and
+                // testing.
                 panic!("WalletBalanceResponseBody serialization failed: {e}")
             });
 
@@ -100,9 +101,10 @@ pub mod aged_notes {
                     target: LOG_TARGET,
                     "LeaderAgedNotesResponseBody serialization failed: {e}"
                 );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
+                // We panic here because this should never happen, and if it
+                // does, it's a critical error that we want to
+                // be immediately visible during development and
+                // testing.
                 panic!("LeaderAgedNotesResponseBody serialization failed: {e}")
             });
 
@@ -151,9 +153,10 @@ pub mod transfer_funds {
                     target: LOG_TARGET,
                     "WalletTransferFundsResponseBody serialization failed: {e}"
                 );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
+                // We panic here because this should never happen, and if it
+                // does, it's a critical error that we want to
+                // be immediately visible during development and
+                // testing.
                 panic!("WalletTransferFundsResponseBody serialization failed: {e}")
             });
 

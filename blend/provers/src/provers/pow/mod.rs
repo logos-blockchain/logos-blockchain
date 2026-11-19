@@ -119,9 +119,9 @@ fn create_proof_stream(
     // `0..per_solution_quota`. The key nullifier is a function of the (nonce,
     // index) pair, so the proofs of one solution get distinct nullifiers, and
     // successive solutions are mined from independently sampled nonces and
-    // therefore get distinct nullifiers too. How the proofs map onto messages is
-    // the caller's business: a quota below the number of encapsulations in a
-    // message simply means a message spans more than one solution.
+    // therefore get distinct nullifiers too. How the proofs map onto messages
+    // is the caller's business: a quota below the number of encapsulations
+    // in a message simply means a message spans more than one solution.
     Box::pin(
         BufferedUnordered::new(
             stream::repeat_with(move || {

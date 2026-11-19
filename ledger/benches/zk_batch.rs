@@ -19,7 +19,7 @@
 
 use std::{
     collections::HashMap,
-    num::NonZero,
+    num::{NonZero, NonZeroU32},
     sync::{Arc, LazyLock},
     time::Duration,
 };
@@ -48,7 +48,7 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::ZkKey;
 use lb_mmr::MerklePath;
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
-use lb_utils::math::{NonNegativeRatio, PositiveF64};
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 use logos_blockchain_ledger::{
     Config, LedgerState,
     config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
@@ -374,20 +374,18 @@ fn genesis_parameters() -> GenesisParameters {
 const BLOCK_REWARDS: logos_blockchain_ledger::config::BlockRewardsConfig =
     logos_blockchain_ledger::config::BlockRewardsConfig::new(
         logos_blockchain_ledger::config::BlockRewardsParameters {
-            max_emission_rate: lb_utils::math::ProperFraction::new(1, NonZero::new(100).unwrap())
-                .unwrap(),
+            max_emission_rate: ProperFraction::new(1, NonZero::new(100).unwrap()).unwrap(),
             min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
-            stake_target: lb_utils::math::ProperFraction::new(3, NonZero::new(10).unwrap())
-                .unwrap(),
+            stake_target: ProperFraction::new(3, NonZero::new(10).unwrap()).unwrap(),
             pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
             stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
             pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
             pooled_fees_window: NonZero::new(120).unwrap(),
-            blend_share: lb_utils::math::ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
+            blend_share: ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
         },
         10_000_000_000_000_000_000,
         NonZero::new(1).unwrap(),
-        NonNegativeRatio::new(1, NonZero::new(30).unwrap()),
+        ProperFraction::new(1, NonZero::new(30).unwrap()).unwrap(),
     )
     .unwrap();
 
@@ -399,7 +397,7 @@ fn config() -> Config {
     };
     let consensus_config = lb_cryptarchia_engine::Config::new(
         NonZero::new(1).unwrap(),
-        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
         1f64.try_into().expect("1 > 0"),
         12,
         4,
@@ -414,13 +412,12 @@ fn config() -> Config {
                 ServiceType::BlendNetwork,
                 ServiceParameters {
                     inactivity_period: 2.try_into().unwrap(),
-                    epoch: 0.into(),
                 },
             )])),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
-                    message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
                     cover_replication_factor: 0,
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
@@ -428,10 +425,7 @@ fn config() -> Config {
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: MinStake { threshold: 1 },
         },
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
@@ -441,16 +435,12 @@ fn config() -> Config {
         execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_137_798)
                 .unwrap(),
-            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
-                .unwrap(),
+            fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
         },
         storage_market: logos_blockchain_ledger::config::StorageMarketConfig {
-            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                .unwrap(),
+            max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
         },
         block_rewards: BLOCK_REWARDS,
         gas_profile: GAS_PROFILE,
@@ -468,10 +458,9 @@ fn config() -> Config {
                 minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZero::new(10).unwrap(),
-                target_claims_per_block: 100,
+                target_claims_per_block: NonZero::<u64>::new(100).unwrap(),
                 rate_num: 0,
                 rate_den: NonZero::<u64>::MIN,
-                target_claim_per_block: NonZero::<u64>::MIN,
                 pow_share: 0,
                 share_den: NonZero::<u64>::MIN,
                 slot_window: NonZero::new(100).unwrap(),

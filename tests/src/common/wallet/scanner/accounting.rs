@@ -168,8 +168,8 @@ impl ScannerAccounting {
             withdrawals: vec![],
         })?;
         self.tip = id;
-        // As the tip were the LIB: the wallet holds it and the blocks down to the
-        // spend root.
+        // As the tip were the LIB: the wallet holds it and the blocks down to
+        // the spend root.
         self.wallet.prune_states(id);
         Ok(())
     }
@@ -314,7 +314,8 @@ mod tests {
         }
         assert_eq!(values(&accounting.spendable_utxos()), [50, 100]);
 
-        // Block 6 changes the root at the tip, the spend still names the old one.
+        // Block 6 changes the root at the tip, the spend still names the old
+        // one.
         let root_of = |utxos: &WalletUtxos| {
             let utxo = &utxos[&wallet_id][0];
             utxo.path.root::<ZkHasher>(utxo.note.commitment().0)

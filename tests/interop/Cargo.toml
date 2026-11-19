@@ -24,11 +24,11 @@ tokio                  = { workspace = true }
 tempfile = { workspace = true }
 
 [[bin]]
-name = "cucumber_nimbos"
+name = "cucumber-nimbos"
 path = "src/bin/cucumber_nimbos.rs"
 
 [[bin]]
-name = "cucumber_external_smoke"
+name = "cucumber-external-smoke"
 path = "src/bin/cucumber_external_smoke.rs"
 
 [[test]]

@@ -118,8 +118,8 @@ impl PcpClient {
 
         let request = PcpAnnounceRequest::new(self.client_addr);
 
-        // Discard the response - getting a valid PCP response proves the gateway
-        // is reachable and speaks PCP protocol
+        // Discard the response - getting a valid PCP response proves the
+        // gateway is reachable and speaks PCP protocol
         let _: PcpAnnounceResponse = connection.send_request(&request).await?;
 
         Ok(ActivePcpClient {

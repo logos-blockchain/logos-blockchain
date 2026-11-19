@@ -253,7 +253,7 @@ impl PowState {
 #[must_use]
 pub fn compute_epoch_pow_reward(pow_reward_pool: PowReward, config: &Config) -> PowReward {
     let reward = u128::from(pow_reward_pool) * u128::from(config.pow_config.reward.rate_num)
-        / config.claim_rate_denominator().get();
+        / config.claim_rate_denominator();
     PowReward::try_from(reward).unwrap_or(PowReward::MAX)
 }
 
@@ -337,10 +337,9 @@ mod tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).expect("100 is non-zero"),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(SLOT_WINDOW.get()).expect("SLOT_WINDOW is non-zero"),
@@ -361,14 +360,13 @@ mod tests {
         config
     }
 
-    /// A payout rate of `1/100`: `sigma_e = pool / 100` (rate `1`, denominator
-    /// `1 * 10 * 10`, the last factor derived from the consensus schedule).
+    /// A payout rate of `1/100`: `sigma_e = pool / 100` (rate `10`, denominator
+    /// `1 * 100 * 10`, the last factor derived from the consensus schedule).
     fn test_pool_config() -> Config {
         let mut config = ledger_config();
         config.pow_config.reward = RewardPoWConfig {
-            rate_num: 1,
+            rate_num: 10,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
             ..reward_config()
         };
         config
@@ -431,10 +429,11 @@ mod tests {
 
     #[test]
     fn compute_epoch_pow_reward_does_not_overflow_on_full_pool() {
-        // A rate with rate_num > 1: `sigma_e = pool * 2 / 10`, the denominator
-        // being the ten expected blocks per epoch.
+        // A rate with rate_num > 1: `sigma_e = pool * 200 / 1000`, the
+        // denominator being 100 target claims in each of the ten expected
+        // blocks per epoch.
         let mut high_rate = ledger_config();
-        high_rate.pow_config.reward.rate_num = 2;
+        high_rate.pow_config.reward.rate_num = 200;
 
         // The pool can reach u64::MAX, so `pool * rate_num` must be widened
         // past u64 or it overflows for any rate_num > 1.
@@ -678,8 +677,9 @@ mod tests {
     #[test]
     fn epoch_reward_tapers_as_claims_drain_the_pool() {
         // Spec §5.6: sigma_e is recomputed at each boundary from the pool as
-        // claims and credits left it, so a drained pool pays a smaller per-claim reward
-        // in the next epoch, tapering to zero (the safety cutoff's input).
+        // claims and credits left it, so a drained pool pays a smaller
+        // per-claim reward in the next epoch, tapering to zero (the
+        // safety cutoff's input).
         let mut state = pow_state();
         state.credit_reward_pool(1_000).unwrap();
         state.update_epoch_reward(&test_pool_config());

@@ -194,9 +194,9 @@ impl PublicKey {
 
     #[must_use]
     pub fn derive_x25519(&self) -> X25519PublicKey {
-        // A X25519 public key derived from a non-weak Ed25519 public key is never weak,
-        // i.e., it always derives a contributory shared secret with any other key
-        // derived the same way.
+        // A X25519 public key derived from a non-weak Ed25519 public key is
+        // never weak, i.e., it always derives a contributory shared
+        // secret with any other key derived the same way.
         X25519PublicKey::from_x25519_public_key_unchecked(self.0.derive_x25519())
     }
 }

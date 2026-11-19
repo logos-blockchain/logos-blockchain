@@ -90,8 +90,8 @@ async fn a_refused_core_peer_does_not_spend_the_edge_allowance() {
     let core_peer_id = PeerId::from(PublicKey::from(core_peer_identity.public()));
     let mut core_peer = TestSwarm::new(&core_peer_identity, |_| StreamBehaviour::new());
     let mut edge = TestSwarm::new_ephemeral(|_| StreamBehaviour::new());
-    // The node under test knows `core_peer` as a core node, so its connection is
-    // refused as such.
+    // The node under test knows `core_peer` as a core node, so its connection
+    // is refused as such.
     let mut core = TestSwarm::new_ephemeral(|_| {
         BehaviourBuilder::new(core_peer_id)
             .with_accepts_per_round(ONE_PER_ROUND)

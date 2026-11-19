@@ -29,7 +29,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter, FromRepr};
 
 use crate::{
-    block::BlockNumber,
     mantle::{
         Value,
         notes::{
@@ -50,15 +49,12 @@ pub type StakeThreshold = u64;
 )]
 pub struct MinStake {
     pub threshold: StakeThreshold,
-    pub timestamp: BlockNumber,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
     /// Maximum epochs during which an activity message must be sent.
     pub inactivity_period: InactivityPeriod,
-    // Epoch number at which this parameter was set
-    pub epoch: Epoch,
 }
 
 pub type NumberOfEpochs = Epoch;
@@ -667,8 +663,8 @@ impl DeclarationMessage {
         DeclarationId::derive(self.service_type, self.zk_id)
     }
 
-    // The service note of SDP_DECLARE Execution step 2, under the note_pk and the
-    // note_stake_pk.
+    // The service note of SDP_DECLARE Execution step 2, under the note_pk and
+    // the note_stake_pk.
     #[must_use]
     pub fn service_note(&self) -> Note {
         let op_id = self.op_id();
