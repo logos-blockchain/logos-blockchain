@@ -77,6 +77,11 @@ pub enum ApiError {
     InvalidBody(String),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
+    /// The block's deferred ZK signatures or leader claim proofs failed batch
+    /// verification. Tx hashes don't commit to their proofs, so only the
+    /// received copy of the transactions is invalid, not necessarily the block.
+    #[error("Deferred proof verification failed: {0}")]
+    DeferredProofVerification(lb_core::mantle::batch::Error),
     #[error("Unexpected Error: {0}")]
     Unexpected(String),
 }
@@ -617,6 +622,9 @@ impl From<crate::Error> for ApiError {
             crate::Error::InvalidSlot { parent, block } => Self::InvalidSlot { parent, block },
             crate::Error::InvalidLeaderProof => Self::InvalidLeaderProof,
             crate::Error::InvalidSignature => Self::InvalidSignature,
+            crate::Error::BatchDeferredProofVerification(err) => {
+                Self::DeferredProofVerification(err)
+            }
             err @ (crate::Error::InvalidUncle { .. } | crate::Error::TooManyUncles { .. }) => {
                 Self::InvalidUncles(err.to_string())
             }

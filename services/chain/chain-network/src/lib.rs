@@ -985,6 +985,11 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 /// - `InvalidSignature` / `InvalidUncles` / `InvalidBody`: they condemn only
 ///   the received copy, since the block ID commits to none of the signature,
 ///   the uncles and the transactions. A genuine copy may arrive later.
+/// - `DeferredProofVerification`: same reason. Tx hashes don't commit to the
+///   txs' ZK signatures or leader claim proofs, so a block reconstructed from a
+///   proposal with a bad local copy of a tx fails under the valid block's ID.
+///   Caching that ID would also reject every descendant through the parent
+///   check and strand the node on a fork (seen on testnet).
 ///
 /// Other apply errors (e.g. validation failures surfaced as
 /// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
@@ -998,7 +1003,8 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
                 | ApiError::CommsFailure(_)
                 | ApiError::InvalidSignature
                 | ApiError::InvalidUncles(_)
-                | ApiError::InvalidBody(_),
+                | ApiError::InvalidBody(_)
+                | ApiError::DeferredProofVerification(_),
         ),
     )
 }
@@ -1341,14 +1347,25 @@ mod tests {
     }
 
     /// Failures in what the block ID does not commit to (the signature, the
-    /// uncles and the transactions) condemn only the received copy, so they
-    /// must not get the block ID rejected: a genuine copy may arrive later.
+    /// uncles, the transactions and the transactions' proofs) condemn only the
+    /// received copy, so they must not get the block ID rejected: a genuine
+    /// copy may arrive later.
     #[test]
     fn signature_uncle_and_body_failures_do_not_condemn_the_block() {
         for err in [
             ApiError::InvalidSignature,
             ApiError::InvalidUncles(String::new()),
             ApiError::InvalidBody(String::new()),
+            ApiError::DeferredProofVerification(lb_core::mantle::batch::Error::InvalidZkSignatures),
+            ApiError::DeferredProofVerification(
+                lb_core::mantle::batch::Error::MalformedZkSignature(String::new()),
+            ),
+            ApiError::DeferredProofVerification(
+                lb_core::mantle::batch::Error::InvalidLeaderClaimProofs,
+            ),
+            ApiError::DeferredProofVerification(
+                lb_core::mantle::batch::Error::MalformedLeaderClaimProof(String::new()),
+            ),
         ] {
             assert!(is_recoverable_apply_error(&Error::Cryptarchia(err)));
         }
