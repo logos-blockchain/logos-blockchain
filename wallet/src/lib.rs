@@ -961,18 +961,17 @@ impl<KeyId> Wallet<KeyId> {
         )
     }
 
-    // The ledger notes under `pks` the Operations of `tx_builder` create, whose
+    // The ledger notes under `pks` the Transfers of `tx_builder` create, whose
     // opening the wallet knows, such as the change of a split: the funding
-    // Transfer, after them, can spend them.
+    // Transfer, after them, can spend them. The notes of a withdrawal exist
+    // only once it is released, so they fund nothing.
     fn created_ledger_notes(
         &self,
         tx_builder: &MantleTxBuilder,
         pks: &[ZkPublicKey],
     ) -> Vec<FundingNote> {
         tx_builder
-            .op_openings()
-            .values()
-            .flat_map(|opening| &opening.outputs)
+            .transfer_outputs()
             .filter(|note| pks.contains(&note.public_key))
             .filter_map(|note| self.known_notes.get(&note.commitment()))
             .filter(|known| known.note_set == NoteSetIndex::Ledger)
@@ -1893,6 +1892,66 @@ mod tests {
         assert_eq!(witnesses.len(), 3);
         let input = &witnesses[2].witness.inputs()[0];
         assert_eq!((input.nonce, input.value), (change.nonce, change.value));
+    }
+
+    // The note a withdrawal pays out exists only once the withdrawal is
+    // released, so its fee is paid from a note the ledger already holds.
+    #[test]
+    fn the_fees_of_a_withdrawal_are_not_funded_from_its_output() {
+        use lb_core::mantle::ops::channel::{ChannelId, withdraw::ChannelWithdrawOp};
+
+        let alice = pk(1);
+        let held = Note::new(100_000, Fr::from(1u64), alice);
+        let withdrawn = Note::new(500_000, Fr::from(2u64), alice);
+        let output = Note::new(500_000, Fr::from(3u64), alice);
+        let mut wallet = Wallet::from_genesis(
+            [(alice, 1)],
+            known(&[(held, NoteSetIndex::Ledger, nullifier(1))]),
+            block_id(0),
+            &[held],
+            &[],
+        )
+        .unwrap();
+        wallet.add_known_notes([KnownNote {
+            note: output,
+            note_set: NoteSetIndex::Ledger,
+            nullifier: nullifier(3),
+        }]);
+        let builder = MantleTxBuilder::new()
+            .push_op_with_opening(
+                Op::ChannelWithdraw(ChannelWithdrawOp {
+                    channel_id: ChannelId::from([2u8; 32]),
+                    inputs: [nullifier(2)].into(),
+                    outputs: [output.commitment()].into(),
+                    commitment_merkle_root: Fr::ZERO,
+                }),
+                ZkTransferOpening {
+                    inputs: vec![withdrawn],
+                    outputs: vec![output],
+                },
+            )
+            .unwrap();
+
+        let funded = wallet
+            .fund_tx(
+                block_id(0),
+                &builder,
+                alice,
+                Fr::from(4u64),
+                [alice],
+                &context(GasPrices::new(1, 1)),
+                &HashSet::new(),
+                0,
+            )
+            .unwrap();
+
+        assert_eq!(
+            funded.funding_inputs(),
+            [FundingNote {
+                note: held,
+                nullifier: nullifier(1)
+            }]
+        );
     }
 
     #[test]

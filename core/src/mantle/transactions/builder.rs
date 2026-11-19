@@ -351,6 +351,19 @@ impl MantleTxBuilder {
         &self.openings
     }
 
+    /// The notes the Transfers among the Operations create. They are in the
+    /// ledger once their Transfer is executed, so a later Operation of the
+    /// transaction can spend them. The notes of a withdrawal are not: they
+    /// exist only once the withdrawal is released.
+    pub fn transfer_outputs(&self) -> impl Iterator<Item = &Note> {
+        self.ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| matches!(op, Op::Transfer(_)))
+            .filter_map(|(op_index, _)| self.openings.get(&op_index))
+            .flat_map(|opening| &opening.outputs)
+    }
+
     // The ZkTransfer openings by Op Index, with the funding Transfer's at the
     // index `build` appends it.
     #[must_use]
