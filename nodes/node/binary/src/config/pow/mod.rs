@@ -20,9 +20,11 @@ impl ServiceConfig {
         recovery_data: RecoveryData,
         eras: &EraSchedule<EraDefinition>,
     ) -> PoWServiceSettings {
+        let (mining, start_on_boot) = self.user.mining.into_service_parts();
         PoWServiceSettings {
-            mining: self.user.mining,
+            mining,
             auto_claim: self.user.auto_claim.into(),
+            start_on_boot,
             era_schedule: eras.map(|era| {
                 let EraRuleset::V1(parameters) = &era.parameters.ruleset;
                 let reward = &parameters.cryptarchia.pow_config.reward;
