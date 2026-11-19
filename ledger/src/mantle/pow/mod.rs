@@ -164,14 +164,7 @@ impl PowState {
     /// era: the window check rejects them regardless, so they no longer need
     /// to be retained (§5.1.1).
     pub(crate) fn prune_seen_block_slots(&mut self, current: Slot, slot_windows: &PowSlotWindows) {
-        self.reward.block_slots = self
-            .reward
-            .block_slots
-            .into_iter()
-            .filter_map(|(&hash, &slot)| {
-                is_within_slot_window(slot, current, slot_windows).then_some((hash, slot))
-            })
-            .collect();
+        remove_outside_slot_window(&mut self.reward.block_slots, current, slot_windows);
     }
 
     /// Drop seen nullifiers whose anchor block has aged out of the acceptance
@@ -182,14 +175,7 @@ impl PowState {
         current: Slot,
         slot_windows: &PowSlotWindows,
     ) {
-        self.reward.nullifiers = self
-            .reward
-            .nullifiers
-            .into_iter()
-            .filter_map(|(&nullifier, &slot)| {
-                is_within_slot_window(slot, current, slot_windows).then_some((nullifier, slot))
-            })
-            .collect();
+        remove_outside_slot_window(&mut self.reward.nullifiers, current, slot_windows);
     }
 
     /// Count a block, and the transactions it carried, into the current
@@ -263,6 +249,27 @@ pub fn compute_epoch_pow_reward(pow_reward_pool: PowReward, config: &Config) -> 
 fn is_within_slot_window(anchor_slot: Slot, current: Slot, slot_windows: &PowSlotWindows) -> bool {
     let slot_window = slot_windows.at_slot(anchor_slot).parameters;
     current.saturating_sub(anchor_slot) <= Slot::from(slot_window.get())
+}
+
+/// Removes from `anchored` the entries whose anchor slot is outside the
+/// acceptance window at `current`. Only those are removed, so that the map
+/// stays shared with the one of the parent block: a map rebuilt at every
+/// block would be a copy of its own in every kept state.
+fn remove_outside_slot_window<K>(
+    anchored: &mut HashTrieMapSync<K, Slot>,
+    current: Slot,
+    slot_windows: &PowSlotWindows,
+) where
+    K: Copy + Eq + std::hash::Hash,
+{
+    let expired: Vec<K> = anchored
+        .iter()
+        .filter(|&(_, &slot)| !is_within_slot_window(slot, current, slot_windows))
+        .map(|(&key, _)| key)
+        .collect();
+    for key in &expired {
+        anchored.remove_mut(key);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -519,6 +526,35 @@ mod tests {
 
         assert_eq!(new_state.reward_pool(), POW_REWARD_POOL_GENESIS + 1_000_000);
         assert_eq!(new_state.epoch_reward(), 0);
+    }
+
+    #[test]
+    fn pruning_keeps_the_entries_inside_the_window_shared() {
+        // The state of a block shares the maps with the state of its parent:
+        // pruning removes the entries that aged out, and leaves the others
+        // where they are.
+        let slot_windows = single_era_slot_windows();
+        let nullifier = PowNullifier::from(Fr::ONE);
+        let mut parent = pow_state();
+        parent.add_seen_block_slots(BLOCK_A, Slot::from(5u64));
+        parent
+            .reward
+            .nullifiers
+            .insert_mut(nullifier, Slot::from(5u64));
+
+        let mut state = parent.clone();
+        state.add_seen_block_slots(BLOCK_B, Slot::from(6u64));
+        state.prune_seen_block_slots(Slot::from(6u64), &slot_windows);
+        state.prune_nullifiers_by_slots(Slot::from(6u64), &slot_windows);
+
+        assert!(core::ptr::eq(
+            parent.block_slots().get(&BLOCK_A).unwrap(),
+            state.block_slots().get(&BLOCK_A).unwrap(),
+        ));
+        assert!(core::ptr::eq(
+            parent.nullifiers().get(&nullifier).unwrap(),
+            state.nullifiers().get(&nullifier).unwrap(),
+        ));
     }
 
     #[test]
