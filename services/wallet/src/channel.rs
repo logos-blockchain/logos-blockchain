@@ -77,9 +77,19 @@ pub struct ProgramStepRequest {
     pub inputs: Vec<NoteCommitment>,
     /// The notes of the program the step creates.
     pub program_outputs: Vec<ProgramOutput>,
-    /// The user notes the step pays, by holder key.
-    pub payments: Vec<(ZkPublicKey, Value)>,
+    /// The user notes the step pays.
+    pub payouts: Vec<ProgramPayout>,
     pub inscription: Inscription,
+}
+
+/// A user note a program step pays to `public_key`.
+#[derive(Debug)]
+pub struct ProgramPayout {
+    pub public_key: ZkPublicKey,
+    /// The staking key of the note, `public_key` unless the payee named
+    /// another one.
+    pub stake_public_key: Option<ZkPublicKey>,
+    pub value: Value,
 }
 
 #[derive(Debug)]

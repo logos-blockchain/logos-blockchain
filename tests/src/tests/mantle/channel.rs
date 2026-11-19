@@ -34,7 +34,7 @@ use lb_http_api_common::bodies::{
     channel::{
         ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelPayment,
         ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
-        ChannelWithdrawResponseBody, ProgramDepositBody, ProgramOutputBody,
+        ChannelWithdrawResponseBody, ProgramDepositBody, ProgramOutputBody, ProgramPayoutBody,
         ProgramRegisterRequestBody, ProgramRegisterResponseBody, ProgramStepProveRequestBody,
         ProgramStepProveResponseBody, ProgramStepRequestBody, ProgramStepResponseBody,
     },
@@ -717,14 +717,14 @@ async fn channel_program_step() {
 }
 
 // A program step consuming `inputs`, creating a note of the program per value
-// of `program_outputs` and paying each value of `payments` to `funding_pk`.
+// of `program_outputs` and paying each value of `payouts` to `funding_pk`.
 async fn build_program_step(
     node: &NodeHttpClient,
     channel_id: ChannelId,
     program_id: Fr,
     inputs: Vec<NoteCommitment>,
     program_outputs: Vec<u64>,
-    payments: Vec<u64>,
+    payouts: Vec<u64>,
     funding_pk: ZkPublicKey,
 ) -> ProgramStepResponseBody {
     post_until_success(
@@ -743,10 +743,11 @@ async fn build_program_step(
                     data: Fr::from(1u64),
                 })
                 .collect(),
-            payments: payments
+            payouts: payouts
                 .into_iter()
-                .map(|value| ChannelPayment {
+                .map(|value| ProgramPayoutBody {
                     public_key: funding_pk,
+                    stake_public_key: None,
                     value,
                 })
                 .collect(),

@@ -126,9 +126,19 @@ pub struct ProgramStepRequestBody {
     /// The notes of the program the step creates.
     pub program_outputs: Vec<ProgramOutputBody>,
     /// The user notes the step pays.
-    pub payments: Vec<ChannelPayment>,
+    pub payouts: Vec<ProgramPayoutBody>,
     #[serde(with = "serde_inscription")]
     pub inscription: Inscription,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ProgramPayoutBody {
+    pub public_key: ZkPublicKey,
+    /// The staking key of the note, `public_key` unless the payee named
+    /// another one.
+    #[serde(default)]
+    pub stake_public_key: Option<ZkPublicKey>,
+    pub value: Value,
 }
 
 #[derive(Serialize, Deserialize)]

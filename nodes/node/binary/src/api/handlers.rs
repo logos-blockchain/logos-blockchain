@@ -80,7 +80,8 @@ use lb_tx_service::{
 };
 use lb_version::BuildVersionInfo;
 use lb_wallet_service::{
-    ChannelStepRequest, ProgramOutput, ProgramPayment, ProgramSpendRequest, ProgramStepRequest,
+    ChannelStepRequest, ProgramOutput, ProgramPayment, ProgramPayout, ProgramSpendRequest,
+    ProgramStepRequest,
     api::{WalletApi, WalletServiceData, added_nullifiers},
 };
 use overwatch::{
@@ -1403,10 +1404,14 @@ where
                     data: output.data,
                 })
                 .collect(),
-            payments: req
-                .payments
+            payouts: req
+                .payouts
                 .into_iter()
-                .map(|payment| (payment.public_key, payment.value))
+                .map(|payout| ProgramPayout {
+                    public_key: payout.public_key,
+                    stake_public_key: payout.stake_public_key,
+                    value: payout.value,
+                })
                 .collect(),
             inscription: req.inscription,
         };

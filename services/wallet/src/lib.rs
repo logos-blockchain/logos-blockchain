@@ -91,7 +91,7 @@ use tracing::{debug, error, info, trace, warn};
 
 pub use crate::channel::{
     BuiltProgramStep, ChannelStep, ChannelStepRequest, ChannelWithdrawal, ProgramOutput,
-    ProgramPayment, ProgramSpendRequest, ProgramStepRequest,
+    ProgramPayment, ProgramPayout, ProgramSpendRequest, ProgramStepRequest,
 };
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
@@ -1554,7 +1554,7 @@ where
             program_id,
             inputs,
             program_outputs,
-            payments,
+            payouts,
             inscription,
         } = request;
         let note_set = channel_note_set(channel_id)
@@ -1598,12 +1598,20 @@ where
                 data: program_output.data,
             })
             .collect();
-        let paid_notes: Vec<Note> = payments
+        let paid_notes: Vec<Note> = payouts
             .into_iter()
             .enumerate()
-            .map(|(payment, (public_key, value))| {
-                let output = program_notes.len() + payment;
-                Note::new(value, nonce(output, value, &public_key), public_key)
+            .map(|(payout_index, payout)| {
+                let ProgramPayout {
+                    public_key,
+                    stake_public_key,
+                    value,
+                } = payout;
+                let output = program_notes.len() + payout_index;
+                Note {
+                    stake_public_key: stake_public_key.unwrap_or(public_key),
+                    ..Note::new(value, nonce(output, value, &public_key), public_key)
+                }
             })
             .collect();
         let program_output_notes: Vec<Note> = program_notes
