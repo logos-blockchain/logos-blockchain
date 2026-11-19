@@ -23,7 +23,7 @@ use lb_kv_store::{DynKvStore, ErasedKv, KvStore as _, RocksKv};
 use lb_poseidon2::{Digest as _, Fr, Poseidon2Bn254Hasher};
 use logos_blockchain_imt::{
     LeafIndex, NullifierLeaf,
-    store::{BlockId, Committed, Finalized, Imt, LiveBlock, VersionRegistry},
+    store::{BlockId, Committed, Finalized, Imt, VersionRegistry},
 };
 use tempfile::TempDir;
 
@@ -216,10 +216,7 @@ fn block<const LOG_N: u32>(bencher: Bencher, block_size: usize) {
             fixture.store.write_batch(batch).expect("the batch writes");
             let Finalized { imt, writes } = imt.finalize(id).expect("finalizes");
             let mut batch = writes;
-            batch.append(VersionRegistry::<DynKvStore>::release_writes(LiveBlock {
-                version: allocation.version,
-                block_id: id,
-            }));
+            batch.append(VersionRegistry::<DynKvStore>::release_writes(id));
             fixture.store.write_batch(batch).expect("the batch writes");
             let garbage = Tree::collect_garbage(&fixture.store, imt.len()).expect("collects");
             fixture

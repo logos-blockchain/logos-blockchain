@@ -58,7 +58,7 @@ use crate::{
 /// under the largest maximum of the type.
 pub type Inscription = UpperRuntimeBoundedVec<u8, u32>;
 
-pub(super) mod serde_inscription {
+pub mod serde_inscription {
     use serde::{Deserializer, Serializer, de::Error as _};
 
     use super::Inscription;

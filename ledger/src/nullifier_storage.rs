@@ -32,7 +32,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::mantle::note_set::{CommittedSets, NoteSetError, NoteSetIndex, NoteSets};
-use lb_imt::store::{BlockId, ImtError, LiveBlock, Version, VersionRegistry};
+use lb_imt::store::{BlockId, ImtError, Version, VersionRegistry};
 use lb_kv_store::{Bytes, DynKvStore, KvStore as _, Prefixed, WriteBatch};
 
 use crate::cryptarchia::LedgerState as CryptarchiaLedger;
@@ -115,15 +115,12 @@ impl NullifierStorage {
         self.versions_store.namespace_batch(writes)
     }
 
-    // The writes forgetting the version of `block_id`, and the sets it wrote
-    // to, if it has one.
+    // The writes forgetting the version of `block_id` and the sets it wrote to,
+    // if it has a version.
     fn release(&self, block_id: BlockId, batch: &mut WriteBatch) -> Result<(), NoteSetError> {
         if let Some(version) = self.versions.lookup(block_id)? {
             batch.append(self.versions_batch(
-                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(LiveBlock {
-                    version,
-                    block_id,
-                }),
+                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(block_id),
             ));
             batch.append(self.forget_written(version));
         }
@@ -239,11 +236,11 @@ impl NullifierStorage {
         Ok((lib, batch))
     }
 
-    /// Deletes what the blocks of the versions still recorded wrote, unless
-    /// `kept` keeps them, and forgets their versions. After a restart, these
-    /// are the blocks the replay did not apply again: forks lost with the
-    /// stop, or blocks pruned by a pruning the stop interrupted. Their writes
-    /// are deleted from the note sets each recorded at its commit.
+    /// Deletes the nodes and forgets the version of every block that still has
+    /// a version but is not `kept`. After a restart, these are the blocks the
+    /// replay did not apply again: forks lost when the node stopped, or blocks
+    /// of a pruning the stop interrupted. Each block's nodes are deleted from
+    /// the note sets it recorded at its commit.
     ///
     /// Returns the number of blocks discarded.
     pub fn discard_lost(&self, kept: impl Fn(BlockId) -> bool) -> Result<usize, NoteSetError> {
@@ -260,7 +257,7 @@ impl NullifierStorage {
             ));
             batch.append(self.forget_written(live.version));
             batch.append(self.versions_batch(
-                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(live),
+                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(live.block_id),
             ));
             discarded = discarded.saturating_add(1);
         }

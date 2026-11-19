@@ -1,4 +1,5 @@
 pub mod api;
+mod channel;
 mod states;
 
 use std::{
@@ -80,6 +81,7 @@ use tokio::{
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
+pub use crate::channel::{ChannelStep, ChannelStepRequest, ChannelWithdrawal, ProgramPayment};
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
@@ -133,6 +135,18 @@ pub enum WalletServiceError {
 
     #[error("The wallet holds no key for {0:?}")]
     UnknownKey(ZkPublicKey),
+
+    #[error("Channel {0:?} has no note set")]
+    ChannelWithoutNoteSet(ChannelId),
+
+    #[error("The wallet holds no spendable note {0:?} in channel {1:?}")]
+    NoChannelNote(NoteCommitment, ChannelId),
+
+    #[error("The note {0:?} of channel {1:?} is spent by a withdrawal or a step in flight")]
+    ChannelNoteInFlight(NoteCommitment, ChannelId),
+
+    #[error("A channel step must pay a note or deposit to a program")]
+    EmptyChannelStep,
 
     #[error("Failed to read or write the persisted state of the wallet: {0}")]
     PersistedState(DynError),
@@ -232,6 +246,17 @@ pub enum WalletMsg {
         note: Note,
         note_set: NoteSetIndex,
         resp_tx: Sender<Result<KnownNote, WalletServiceError>>,
+    },
+    ProveChannelStep {
+        tip: Option<HeaderId>,
+        request: ChannelStepRequest,
+        resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
+    },
+    ChannelWithdrawal {
+        tip: Option<HeaderId>,
+        channel_id: ChannelId,
+        notes: Vec<NoteCommitment>,
+        resp_tx: Sender<Result<TipResponse<ChannelWithdrawal>, WalletServiceError>>,
     },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
@@ -340,6 +365,8 @@ impl WalletMsg {
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetLeaderAgedNotesInfo { tip, .. }
             | Self::SpendRoot { tip, .. }
+            | Self::ProveChannelStep { tip, .. }
+            | Self::ChannelWithdrawal { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
@@ -959,6 +986,53 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to ImportNote");
                 }
             }
+            WalletMsg::ProveChannelStep {
+                tip,
+                request,
+                resp_tx,
+            } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let response = Self::prove_channel_step(tip, request, state, kms)
+                    .await
+                    .map(|response| TipResponse { tip, response });
+                let spent = response.as_ref().ok().map(|proven| {
+                    let inputs = proven.response.step.inputs();
+                    inputs.iter().copied().collect::<Vec<_>>()
+                });
+                if let Some(spent) = &spent {
+                    state.reserve_pending_notes(spent.iter().copied());
+                }
+                if resp_tx.send(response).is_err() {
+                    state.release_pending_notes(spent.unwrap_or_default());
+                    debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
+                }
+            }
+            WalletMsg::ChannelWithdrawal {
+                tip,
+                channel_id,
+                notes,
+                resp_tx,
+            } => {
+                let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+                    Ok(tip) => tip,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let response = Self::channel_withdrawal(tip, channel_id, &notes, state, kms)
+                    .await
+                    .map(|response| TipResponse { tip, response });
+                if resp_tx.send(response).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to ChannelWithdrawal");
+                }
+            }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
@@ -1370,6 +1444,54 @@ where
         let known_note = Self::held_note(note, note_set, state, kms).await?;
         state.add_known_notes([known_note]);
         Ok(known_note)
+    }
+
+    // A user step, or a program deposit, spending the channel notes of the
+    // wallet, with its ZkTransfer. The wallet follows the notes the step pays
+    // to its own keys.
+    async fn prove_channel_step(
+        tip: HeaderId,
+        request: ChannelStepRequest,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ChannelStep, WalletServiceError> {
+        let (step, opening, witness, note_set) = channel::build_step(tip, request, state)?;
+        let proof = Self::prove_witness(witness, kms).await?;
+
+        let mut known_notes = Vec::new();
+        for note in &opening.outputs {
+            if let Some(key_id) = state.wallet().known_keys().get(&note.public_key).cloned() {
+                known_notes.push(Self::known_note(kms, key_id, *note, note_set).await?);
+            }
+        }
+        state.add_known_notes(known_notes);
+
+        Ok(ChannelStep {
+            step,
+            proof,
+            outputs: opening.outputs,
+        })
+    }
+
+    // The withdrawal of `notes` from the channel at the spend state of `tip`.
+    // The ledger notes it creates are registered, so the wallet adopts them
+    // once the withdrawal is released.
+    async fn channel_withdrawal(
+        tip: HeaderId,
+        channel_id: ChannelId,
+        notes: &[NoteCommitment],
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<ChannelWithdrawal, WalletServiceError> {
+        let withdrawal = channel::build_withdrawal(tip, channel_id, notes, state)?;
+
+        let mut known_notes = Vec::new();
+        for note in &withdrawal.opening.outputs {
+            known_notes.push(Self::held_note(*note, NoteSetIndex::Ledger, state, kms).await?);
+        }
+        state.add_known_notes(known_notes);
+
+        Ok(withdrawal)
     }
 
     // A new leader reward note under `public_key`, with a private random nonce.

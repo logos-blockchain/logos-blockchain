@@ -2831,6 +2831,7 @@ mod tests {
                 commitments: vec![NoteCommitment(Fr::from(appended))],
             }],
             revealed: vec![],
+            withdrawals: vec![],
         };
         for id in 1..=40 {
             wallet.apply_block(&block(id, id - 1, id.into())).unwrap();

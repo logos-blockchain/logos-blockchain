@@ -231,6 +231,39 @@ pub enum LedgerError<Id> {
     LibState(String),
 }
 
+impl<Id> LedgerError<Id> {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::Mantle(err) => err.is_store_failure(),
+            Self::VerificationError(err) => err.is_store_failure(),
+            Self::InvalidSlot { .. }
+            | Self::ParentNotFound(_)
+            | Self::InvalidProof
+            | Self::InsufficientBalance
+            | Self::BalanceOverflow
+            | Self::UnbalancedTransaction
+            | Self::GasOverflow(_)
+            | Self::GenesisSupplyMismatch { .. }
+            | Self::GenesisReservesExceedMaxSupply
+            | Self::MissingTransferGenesis()
+            | Self::InsufficientExecutionFee
+            | Self::TooMuchTransactionExecutionGas { .. }
+            | Self::TooMuchExecutionGas { .. }
+            | Self::TooManyTransactions { .. }
+            | Self::TransactionsTooLarge { .. }
+            | Self::OpDataTooLarge { .. }
+            | Self::InvalidStoragePrice
+            | Self::UnacceptedForkDigest(_)
+            | Self::BlockRewards(_)
+            | Self::WrongRewardValue { .. }
+            | Self::LibNotFound(_)
+            | Self::LibState(_) => false,
+        }
+    }
+}
+
 fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
     BlockId(id.into())
 }
