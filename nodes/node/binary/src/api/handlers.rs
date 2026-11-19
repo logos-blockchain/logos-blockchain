@@ -52,8 +52,9 @@ use lb_http_api_common::{
         channel::{
             ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
             ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
-            ProgramRegisterRequestBody, ProgramRegisterResponseBody, ProgramStepProveRequestBody,
-            ProgramStepProveResponseBody, ProgramStepRequestBody, ProgramStepResponseBody,
+            ProgramFollowRequestBody, ProgramRegisterRequestBody, ProgramRegisterResponseBody,
+            ProgramStepProveRequestBody, ProgramStepProveResponseBody, ProgramStepRequestBody,
+            ProgramStepResponseBody,
         },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
@@ -1535,6 +1536,31 @@ where
         )
         .await?;
         Ok::<_, DynError>(ProgramRegisterResponseBody { hash, program_id })
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = paths::PROGRAM_FOLLOW,
+    responses(
+        (status = 200, description = "The wallet adopts the notes of the program the next blocks open"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn program_follow<WalletService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ProgramFollowRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+        wallet.follow_program(req.program_id).await?;
+        Ok::<_, DynError>(())
     })
 }
 

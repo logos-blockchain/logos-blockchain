@@ -7,7 +7,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Value,
-        notes::{InputNullifiers, NoteNullifier},
+        notes::{InputNullifiers, NoteNullifier, ProgramId},
         ops::transfer::TransferOp,
         transactions::{
             MantleTxBuilder,
@@ -16,7 +16,7 @@ use lb_core::{
         },
     },
 };
-use lb_groth16::Fr;
+use lb_groth16::{Fr, serde::serde_fr_vec};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
 use lb_wallet::{KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState};
@@ -117,6 +117,9 @@ pub struct RecoveryState {
     known_notes: KnownNotes,
     // the reward keys `0..next_reward_key_index` are derived again at start
     next_reward_key_index: u64,
+    // the programs whose notes the wallet adopts from the blocks opening them
+    #[serde(with = "serde_fr_vec")]
+    followed_programs: Vec<ProgramId>,
 }
 
 impl RecoveryState {
@@ -134,6 +137,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
             lib_wallet_state: None,
             known_notes: KnownNotes::new(),
             next_reward_key_index: 0,
+            followed_programs: Vec::new(),
         })
     }
 }
@@ -141,6 +145,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 /// Provides operations on the states that must be synced to [`RecoveryState`].
 pub struct ServiceState<'u> {
     next_reward_key_index: u64,
+    followed_programs: Vec<ProgramId>,
     wallet: Wallet,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
@@ -165,11 +170,19 @@ impl<'u> ServiceState<'u> {
         let RecoveryState {
             known_notes,
             next_reward_key_index,
+            followed_programs,
             ..
         } = state;
         let wallet =
             Wallet::from_lib_wallet_state(known_keys(settings), known_notes, lib, wallet_state);
-        Self::with_wallet(wallet, lib, next_reward_key_index, settings, updater)
+        Self::with_wallet(
+            wallet,
+            lib,
+            next_reward_key_index,
+            followed_programs,
+            settings,
+            updater,
+        )
     }
 
     // A fresh wallet follows the note sets from the genesis block.
@@ -185,6 +198,7 @@ impl<'u> ServiceState<'u> {
         let RecoveryState {
             mut known_notes,
             next_reward_key_index,
+            followed_programs,
             ..
         } = state;
         known_notes.extend(
@@ -203,6 +217,7 @@ impl<'u> ServiceState<'u> {
             wallet,
             genesis,
             next_reward_key_index,
+            followed_programs,
             settings,
             updater,
         ))
@@ -212,11 +227,13 @@ impl<'u> ServiceState<'u> {
         wallet: Wallet,
         lib: HeaderId,
         next_reward_key_index: u64,
+        followed_programs: Vec<ProgramId>,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
         Self {
             next_reward_key_index,
+            followed_programs,
             wallet,
             lib,
             updater,
@@ -246,6 +263,18 @@ impl<'u> ServiceState<'u> {
         self.next_reward_key_index = index.saturating_add(1);
         self.update_state();
         index
+    }
+
+    pub fn follows_program(&self, program_id: &ProgramId) -> bool {
+        self.followed_programs.contains(program_id)
+    }
+
+    // The notes of `program_id` the next blocks open are adopted.
+    pub fn follow_program(&mut self, program_id: ProgramId) {
+        if !self.follows_program(&program_id) {
+            self.followed_programs.push(program_id);
+            self.update_state();
+        }
     }
 
     pub fn add_known_key(&mut self, pk: ZkPublicKey, key_id: KeyId) {
@@ -428,6 +457,7 @@ impl<'u> ServiceState<'u> {
             lib_wallet_state: Some((self.lib, lib_wallet_state)),
             known_notes: self.wallet.known_notes().clone(),
             next_reward_key_index: self.next_reward_key_index,
+            followed_programs: self.followed_programs.clone(),
         }));
     }
 }
@@ -490,6 +520,7 @@ mod tests {
             lib_wallet_state: None,
             known_notes: HashMap::from([(note.note.commitment(), note)]),
             next_reward_key_index: 4,
+            followed_programs: Vec::new(),
         };
         let decoded: RecoveryState =
             serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
@@ -554,6 +585,7 @@ mod tests {
             lib_wallet_state: None,
             known_notes: HashMap::new(),
             next_reward_key_index: 0,
+            followed_programs: Vec::new(),
         };
         let genesis = HeaderId::from([0; 32]);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
@@ -628,6 +660,7 @@ mod tests {
             lib_wallet_state: None,
             known_notes: HashMap::new(),
             next_reward_key_index: 0,
+            followed_programs: Vec::new(),
         };
 
         let genesis = HeaderId::from([0; 32]);
@@ -666,6 +699,7 @@ mod tests {
             lib_wallet_state: None,
             known_notes: HashMap::new(),
             next_reward_key_index: 0,
+            followed_programs: Vec::new(),
         };
         let known_note = |value| KnownNote {
             note: Note::new(value, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),

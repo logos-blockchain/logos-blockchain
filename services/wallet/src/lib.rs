@@ -27,7 +27,7 @@ use lb_core::{
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{
-            InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments,
+            InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments, ProgramId,
             derive_program_output_nonce,
         },
         ops::{
@@ -270,6 +270,10 @@ pub enum WalletMsg {
         note_set: NoteSetIndex,
         resp_tx: Sender<Result<KnownNote, WalletServiceError>>,
     },
+    FollowProgram {
+        program_id: ProgramId,
+        resp_tx: Sender<()>,
+    },
     ProveChannelStep {
         tip: Option<HeaderId>,
         request: ChannelStepRequest,
@@ -407,6 +411,7 @@ impl WalletMsg {
             | Self::GenerateRewardKey { .. }
             | Self::NewLeaderReward { .. }
             | Self::ImportNote { .. }
+            | Self::FollowProgram { .. }
             | Self::GetKnownAddresses { .. }
             | Self::ReleasePendingNotes { .. } => None,
         }
@@ -1017,6 +1022,15 @@ where
                 let result = Self::import_note(note, note_set, state, kms).await;
                 if resp_tx.send(result).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to ImportNote");
+                }
+            }
+            WalletMsg::FollowProgram {
+                program_id,
+                resp_tx,
+            } => {
+                state.follow_program(program_id);
+                if resp_tx.send(()).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to FollowProgram");
                 }
             }
             WalletMsg::ProveChannelStep {
@@ -1877,6 +1891,12 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
         for (note_set, note) in &block.revealed {
+            if note.public_key == *PK0 {
+                if state.follows_program(&note.program) {
+                    state.add_known_notes(channel::program_known_notes(&[*note], *note_set));
+                }
+                continue;
+            }
             let Some(key_id) = state.wallet().known_keys().get(&note.public_key).cloned() else {
                 continue;
             };

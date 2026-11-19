@@ -50,7 +50,7 @@ use crate::{
             channel_program_step_prove, channel_step, channel_withdraw, post_activity,
             post_declaration, post_set_declaration_id, post_withdrawal, pow_claim,
             pow_claimable_rewards, pow_start_auto_claim, pow_start_mining, pow_status,
-            pow_stop_auto_claim, pow_stop_mining, program_register,
+            pow_stop_auto_claim, pow_stop_mining, program_follow, program_register,
         },
         openapi::ApiDoc,
         routes::api_routes,

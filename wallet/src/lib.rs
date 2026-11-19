@@ -14,11 +14,12 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, TxHash, Value,
+        channel::channel_note_set,
         gas::GasOverflow,
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex, NoteSetUpdate},
         notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
-        ops::{OpRef, transfer::TransferOp},
+        ops::{OpProofRef, OpRef, StepProof, channel::inscribe::Step, transfer::TransferOp},
         traits::{MantleTx, SignedMantleTx},
         transactions::{
             builder::{FundingNote, MantleTxBuilder, PriorityFee, ZkTransferOpening},
@@ -154,7 +155,12 @@ impl WalletBlock {
             revealed: revealed_notes(
                 events,
                 block.transactions_iter().flat_map(MantleTx::op_refs_iter),
-            ),
+            )
+            .into_iter()
+            .chain(block.transactions_iter().flat_map(|tx| {
+                program_notes(tx.op_refs_iter().zip(tx.signed_ops().op_proof_refs_iter()))
+            }))
+            .collect(),
             withdrawals: block
                 .transactions_iter()
                 .flat_map(MantleTx::op_refs_iter)
@@ -188,6 +194,34 @@ pub fn revealed_notes<'a>(
         _ => None,
     });
     rewards.chain(service_notes).collect()
+}
+
+// The notes of a program the program steps of `ops` create, opened by their
+// proofs so that whoever follows the program can spend them.
+pub fn program_notes<'a>(
+    ops: impl Iterator<Item = (OpRef<'a>, OpProofRef<'a>)>,
+) -> impl Iterator<Item = (NoteSetIndex, Note)> {
+    ops.filter_map(|op| match op {
+        (OpRef::ChannelInscribe(op), OpProofRef::ChannelInscribe(proof)) => {
+            Some((channel_note_set(op.channel_id)?, op, proof))
+        }
+        _ => None,
+    })
+    .flat_map(|(note_set, op, proof)| {
+        op.steps()
+            .zip(&proof.step_proofs)
+            .filter_map(|step| match step {
+                (Step::Program(step), StepProof::ProgramStep(proof)) => {
+                    Some((step.program_id, &proof.program_notes))
+                }
+                _ => None,
+            })
+            .flat_map(move |(program_id, openings)| {
+                openings
+                    .iter()
+                    .map(move |opening| (note_set, opening.note(program_id)))
+            })
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

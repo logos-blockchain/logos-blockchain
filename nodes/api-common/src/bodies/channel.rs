@@ -191,6 +191,12 @@ pub struct ProgramRegisterRequestBody {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct ProgramFollowRequestBody {
+    #[serde(with = "serde_fr")]
+    pub program_id: ProgramId,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct ProgramRegisterResponseBody {
     pub hash: TxHash,
     #[serde(with = "serde_fr")]

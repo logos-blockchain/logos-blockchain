@@ -8,7 +8,7 @@ use lb_core::{
         gas::GasCost,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
-        notes::{NoteCommitment, NoteNullifier},
+        notes::{NoteCommitment, NoteNullifier, ProgramId},
         ops::channel::{ChannelId, program_step::ProgramSpendWitness},
         transactions::{
             MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
@@ -280,6 +280,19 @@ where
             })
             .await?;
         Ok(rx.await??)
+    }
+
+    /// Adopts the notes of `program_id` the next blocks open, so that the
+    /// wallet can build the steps of a program another node ran so far.
+    pub async fn follow_program(&self, program_id: ProgramId) -> Result<(), WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::FollowProgram {
+                program_id,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await?)
     }
 
     /// A user step, or a program deposit, spending the channel notes of the
