@@ -95,6 +95,8 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
+    #[error("The initial block download is still running")]
+    InitialBlockDownloadRunning,
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
 }
@@ -111,6 +113,9 @@ impl From<lb_core::block::Error> for Error {
     }
 }
 
+/// What other services ask of chain-network. They are to ask only once it's
+/// ready, which it is when the initial block download is done: until then,
+/// every message is refused.
 #[derive(Debug)]
 #[expect(
     clippy::large_enum_variant,
@@ -294,7 +299,7 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let mut relays: ChainNetworkRelays<
+        let relays: ChainNetworkRelays<
             Cryptarchia,
             Mempool,
             MempoolNetAdapter,
@@ -356,6 +361,22 @@ where
             network_adapter.clone(),
         );
 
+        // Blocks go through ingestion from here on, a future the service polls
+        // along with its other inputs, from the initial block download on, so
+        // that the service only routes and is never held up by a block.
+        let (ingestion, ingestion_run) = BlockIngestion::new(
+            relays.cryptarchia().clone(),
+            relays.mempool_adapter().clone(),
+            OrphanBlocksDownloader::new(
+                network_adapter.clone(),
+                sync_config.orphan.max_orphan_cache_size,
+                sync_config.orphan.max_rejected_cache_size,
+            ),
+            era_schedule.map(|era| era.parameters.block_limits),
+        )
+        .start();
+        let mut ingestion_run = pin!(ingestion_run);
+
         // The adapters keep following the clock while the initial block
         // download runs, so they never fall behind its eras. The download
         // works on its own copies of them, through chain sync only.
@@ -368,13 +389,17 @@ where
                     if tick.era > current_era {
                         current_era = tick.era;
                         network_adapter.rotate_era(current_era).await;
-                        relays.mempool_adapter_mut().rotate_era(current_era).await;
+                        ingestion.rotate_era(current_era);
                     }
                 }
                 Some(transition_end) = era_transition_ends.next() => {
                     network_adapter.complete_era_transition(transition_end.era()).await;
-                    relays.mempool_adapter_mut().complete_era_transition(transition_end.era()).await;
+                    ingestion.complete_era_transition(transition_end.era());
                 }
+                Some(msg) = self.service_resources_handle.inbound_relay.next() => {
+                    Self::refuse_message(msg);
+                }
+                never = &mut ingestion_run => match never {},
             }
         };
 
@@ -415,22 +440,6 @@ where
             )
             .fuse()
         );
-
-        // Blocks go through ingestion from here on, a future this loop polls
-        // along with its other inputs, so that the loop only routes and is
-        // never held up by a block.
-        let (ingestion, ingestion_run) = BlockIngestion::new(
-            relays.cryptarchia().clone(),
-            relays.mempool_adapter().clone(),
-            OrphanBlocksDownloader::new(
-                network_adapter.clone(),
-                sync_config.orphan.max_orphan_cache_size,
-                sync_config.orphan.max_rejected_cache_size,
-            ),
-            era_schedule.map(|era| era.parameters.block_limits),
-        )
-        .start();
-        let mut ingestion_run = pin!(ingestion_run);
 
         // Set up the proactive tip-poll lag watchdog: in each era, derive the
         // polling cadence / lag threshold from the era's active slot
@@ -584,6 +593,29 @@ where
     fn note_received_proposal(&self, proposal: &Proposal) {
         if self.received_proposals_sender.receiver_count() > 0 {
             drop(self.received_proposals_sender.send(proposal.clone()));
+        }
+    }
+
+    /// Refuses `msg`, which came before the initial block download was done,
+    /// and so before this service was ready.
+    fn refuse_message(msg: Message<Mempool::Item>) {
+        match msg {
+            Message::SubscribeToProposals { result_sender } => {
+                error!(
+                    target: LOG_TARGET,
+                    "Refusing a proposal subscription during the initial block download"
+                );
+                drop(result_sender);
+            }
+            Message::ApplyBlockAndReconcileMempool { resp, .. } => {
+                error!(
+                    target: LOG_TARGET,
+                    "Refusing to apply a block during the initial block download"
+                );
+                if resp.send(Err(Error::InitialBlockDownloadRunning)).is_err() {
+                    debug!(target: LOG_TARGET, "The requester hung up before the refusal");
+                }
+            }
         }
     }
 
