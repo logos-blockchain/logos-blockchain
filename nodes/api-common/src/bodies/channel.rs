@@ -155,6 +155,11 @@ pub struct ProgramStepResponseBody {
 pub struct ProgramStepProveRequestBody {
     pub tip: HeaderId,
     pub op: InscriptionOp,
+    /// The commitments the earlier operations of the transaction append to
+    /// the channel's note set before the inscription, in order. Leave it empty
+    /// for an inscription that starts on an empty buffer.
+    #[serde(default)]
+    pub appended: Vec<NoteCommitment>,
     pub step_index: usize,
     pub program_notes: Vec<ProgramNoteOpening>,
     pub paid_notes: Vec<Note>,

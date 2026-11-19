@@ -1629,8 +1629,8 @@ where
     }
 
     // The ZkProgramSpend witness of the program step the request names, proven
-    // against its root extended with the notes the steps before it create and
-    // bound to the id of its inscription. The notes it creates are
+    // against its root extended with the buffer of the channel at its position
+    // and bound to the id of its inscription. The notes it creates are
     // registered, so the wallet follows the ones of the program and the
     // ones paid to its own keys once the step is inscribed.
     async fn program_spend_witness(
@@ -1641,6 +1641,7 @@ where
     ) -> Result<ProgramSpendWitness, WalletServiceError> {
         let ProgramSpendRequest {
             op,
+            appended,
             step_index,
             program_notes,
             paid_notes,
@@ -1649,7 +1650,8 @@ where
         let note_set = channel_note_set(channel_id)
             .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
 
-        let (step, paid_value, appended) = channel::program_step_position(&op, step_index)?;
+        let (step, paid_value, appended) =
+            channel::program_step_position(&op, step_index, appended)?;
 
         let program_output_notes: Vec<Note> = program_notes
             .iter()

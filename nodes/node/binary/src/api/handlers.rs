@@ -1446,6 +1446,7 @@ where
                 Some(req.tip),
                 ProgramSpendRequest {
                     op: req.op,
+                    appended: req.appended,
                     step_index: req.step_index,
                     program_notes: req.program_notes,
                     paid_notes: req.paid_notes,

@@ -772,6 +772,7 @@ async fn prove_program_step(
         &ProgramStepProveRequestBody {
             tip: built.tip,
             op: op.clone(),
+            appended: Vec::new(),
             step_index,
             program_notes: built.program_notes.clone(),
             paid_notes: built.paid_notes.clone(),

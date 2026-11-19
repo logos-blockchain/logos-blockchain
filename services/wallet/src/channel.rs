@@ -102,6 +102,9 @@ pub struct BuiltProgramStep {
 #[derive(Debug)]
 pub struct ProgramSpendRequest {
     pub op: InscriptionOp,
+    /// The commitments the earlier operations of the transaction append to
+    /// the channel's note set before the inscription, in order.
+    pub appended: Vec<NoteCommitment>,
     pub step_index: usize,
     pub program_notes: Vec<ProgramNoteOpening>,
     pub paid_notes: Vec<Note>,
@@ -327,13 +330,14 @@ pub fn program_known_notes(notes: &[Note], note_set: NoteSetIndex) -> Vec<KnownN
 }
 
 // The program step at `step_index` of `op`, over all its mini-blocks, with the
-// value the program deposits before it in its mini-block pay and the notes the
-// steps before it create.
+// value the program deposits before it in its mini-block pay and the buffer of
+// the channel at its position: `appended`, which the earlier operations of the
+// transaction add, then the outputs of the steps before it.
 pub fn program_step_position(
     op: &InscriptionOp,
     step_index: usize,
+    mut appended: Vec<NoteCommitment>,
 ) -> Result<(&ProgramStep, Value, Vec<NoteCommitment>), WalletServiceError> {
-    let mut appended = Vec::new();
     let mut index = 0;
     for mini_block in op.mini_blocks.iter() {
         let mut paid_value: Value = 0;
@@ -358,4 +362,32 @@ pub fn program_step_position(
         }
     }
     Err(WalletServiceError::NotAProgramStep(step_index))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_program_step_is_proven_behind_the_buffer_of_its_transaction() {
+        let op = InscriptionOp::sample_with_step();
+        let earlier = NoteCommitment(Fr::from(1u64));
+        let (step, paid_value, appended) = program_step_position(&op, 2, vec![earlier]).unwrap();
+        assert_eq!(step, &ProgramStep::sample());
+        // the program deposit before it pays it
+        assert_eq!(paid_value, 0x38);
+        // the notes of the earlier operations, then those of the earlier steps
+        assert_eq!(
+            appended,
+            vec![
+                earlier,
+                NoteCommitment(Fr::from(0x24u64)),
+                NoteCommitment(Fr::from(0x36u64))
+            ]
+        );
+        assert!(matches!(
+            program_step_position(&op, 1, Vec::new()),
+            Err(WalletServiceError::NotAProgramStep(1))
+        ));
+    }
 }
