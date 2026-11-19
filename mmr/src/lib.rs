@@ -8,7 +8,7 @@ use rpds::StackSync;
 mod path;
 
 pub use path::{MerklePath, MerklePathError, PathAndSelector, is_left_child};
-use path::{update_paths_above_merge, update_paths_at_merge};
+use path::{sibling_height, update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
 /// Largest supported MMR height, including leaves at height one.
@@ -165,6 +165,46 @@ where
         elem: T,
         paths: &mut [MerklePath],
     ) -> Result<(Self, MerklePath), PushWithPathsError> {
+        self.push_with_paths_impl(elem, paths, true)
+    }
+
+    /// Like [`Self::push_with_paths`], for the paths the push settles only
+    /// (see [`MerklePath::is_settled_by`]). The other tracked paths are left
+    /// as they are, with a stale sibling over the newest leaves; call
+    /// [`Self::refresh_path`] before using a path.
+    pub fn push_with_settled_paths(
+        &self,
+        elem: T,
+        paths: &mut [MerklePath],
+    ) -> Result<(Self, MerklePath), PushWithPathsError> {
+        self.push_with_paths_impl(elem, paths, false)
+    }
+
+    /// Bring a path kept by [`Self::push_with_settled_paths`] up to date, so
+    /// that it is valid against [`Self::frontier_root`].
+    pub fn refresh_path(&self, path: &mut MerklePath) -> Result<(), MerklePathError> {
+        path.validate_for_height(MAX_HEIGHT)?;
+        path.validate_leaf_index(self.len())?;
+
+        // Only the sibling subtree holding the last leaf can be stale. If it is
+        // incomplete, the peaks lower than it hold exactly its leaves.
+        let height = sibling_height(path.leaf_index(), self.len() - 1);
+        let peaks = self
+            .roots
+            .iter()
+            .take_while(|peak| usize::from(peak.height) < height);
+        if let Some(root) = fold_peaks::<Hash>(peaks, height) {
+            path.set_sibling(height, root);
+        }
+        Ok(())
+    }
+
+    fn push_with_paths_impl(
+        &self,
+        elem: T,
+        paths: &mut [MerklePath],
+        update_above_merge: bool,
+    ) -> Result<(Self, MerklePath), PushWithPathsError> {
         if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
             return Err(PushWithPathsError::MmrFull(MmrFull));
         }
@@ -214,7 +254,7 @@ where
         update_paths_above_merge::<Hash, MAX_HEIGHT>(
             last_root,
             roots.iter().copied(),
-            paths,
+            if update_above_merge { paths } else { &mut [] },
             &mut new_path,
         );
 
@@ -231,33 +271,8 @@ where
 
     #[must_use]
     pub fn frontier_root(&self) -> Fr {
-        let mut iter = self.roots.iter();
-
-        let (mut root, mut height) = match iter.next() {
-            Some(last) => (last.root, last.height),
-            None => {
-                // MMR is empty. Return the root of an entirely empty tree.
-                return empty_subtree_root::<Hash>(MAX_HEIGHT);
-            }
-        };
-
-        for last in iter {
-            while height < last.height {
-                root = Hash::compress(&[root, empty_subtree_root::<Hash>(height)]);
-                height += 1;
-            }
-            root = Hash::compress(&[last.root, root]);
-            height += 1;
-        }
-
-        assert!(height <= MAX_HEIGHT);
-        while height < MAX_HEIGHT {
-            root = Hash::compress(&[root, empty_subtree_root::<Hash>(height)]);
-            height += 1;
-        }
-        assert_eq!(height, MAX_HEIGHT);
-
-        root
+        fold_peaks::<Hash>(self.roots.iter(), MAX_HEIGHT.into())
+            .unwrap_or_else(|| empty_subtree_root::<Hash>(MAX_HEIGHT))
     }
 
     #[must_use]
@@ -278,6 +293,30 @@ where
     pub fn is_empty(&self) -> bool {
         self.roots.is_empty()
     }
+}
+
+/// Root of the subtree of the given `height` holding `peaks` (lowest first),
+/// padded on the right with empty subtrees, or `None` if there are no peaks.
+fn fold_peaks<'a, Hash: Digest>(
+    mut peaks: impl Iterator<Item = &'a Root>,
+    height: usize,
+) -> Option<Fr> {
+    let first = peaks.next()?;
+    let (mut root, mut root_height) = (first.root, first.height);
+    for peak in peaks {
+        while root_height < peak.height {
+            root = Hash::compress(&[root, empty_subtree_root::<Hash>(root_height)]);
+            root_height += 1;
+        }
+        root = Hash::compress(&[peak.root, root]);
+        root_height += 1;
+    }
+    assert!(usize::from(root_height) <= height);
+    while usize::from(root_height) < height {
+        root = Hash::compress(&[root, empty_subtree_root::<Hash>(root_height)]);
+        root_height += 1;
+    }
+    Some(root)
 }
 
 pub(crate) fn empty_subtree_root<Hash: Digest>(height: u8) -> Fr {
@@ -764,6 +803,40 @@ mod test {
                 .unwrap();
             mmr_b = new_b;
             assert_eq!(mmr_a.frontier_root(), mmr_b.frontier_root());
+        }
+    }
+
+    #[test]
+    fn test_settled_paths_refresh_to_push_with_paths() {
+        const HEIGHT: u8 = 8;
+        let mut full = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut lazy = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut full_paths: Vec<MerklePath> = Vec::new();
+        let mut lazy_paths: Vec<MerklePath> = Vec::new();
+
+        for i in 0u64..100 {
+            let elem = || TestFr::from(i.to_le_bytes().as_ref());
+
+            let (new_full, new_path) = full.push_with_paths(elem(), &mut full_paths).unwrap();
+            full = new_full;
+            full_paths.push(new_path);
+
+            let (mut settled, mut kept): (Vec<_>, Vec<_>) = lazy_paths
+                .into_iter()
+                .partition(|path| path.is_settled_by(lazy.len()));
+            let (new_lazy, new_path) = lazy.push_with_settled_paths(elem(), &mut settled).unwrap();
+            lazy = new_lazy;
+            kept.extend(settled);
+            kept.push(new_path);
+            kept.sort_by_key(MerklePath::leaf_index);
+            lazy_paths = kept;
+
+            assert_eq!(full.frontier_root(), lazy.frontier_root());
+            for (lazy_path, full_path) in lazy_paths.iter().zip(&full_paths) {
+                let mut path = lazy_path.clone();
+                lazy.refresh_path(&mut path).unwrap();
+                assert_eq!(&path, full_path, "leaf {}", full_path.leaf_index());
+            }
         }
     }
 

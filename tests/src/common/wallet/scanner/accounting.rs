@@ -212,7 +212,10 @@ impl ScannerAccounting {
             .iter()
             .map(|tracked_wallet| (tracked_wallet.wallet_id().clone(), Vec::new()))
             .collect::<WalletUtxos>();
-        for owned in state.notes_owned_by_pks(self.public_key_to_wallet.keys()) {
+        for owned in state
+            .notes_owned_by_pks(self.public_key_to_wallet.keys())
+            .expect("owned note paths should fit their note sets")
+        {
             if let Some(wallet_id) = self.public_key_to_wallet.get(&owned.note.public_key) {
                 wallet_utxos
                     .entry(wallet_id.clone())
