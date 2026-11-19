@@ -165,6 +165,9 @@ pub enum WalletServiceError {
     #[error("The openings do not match the outputs of program step {0}")]
     ProgramStepOpenings(usize),
 
+    #[error("A note of a program must not be staked by PK0")]
+    ProgramNoteStakedByPk0,
+
     #[error("Invalid program step: {0}")]
     ProgramStep(#[from] lb_core::mantle::channel::Error),
 
@@ -1556,6 +1559,13 @@ where
         } = request;
         let note_set = channel_note_set(channel_id)
             .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
+        // Anyone could lead with a note of the program staked by `PK0`.
+        if program_outputs
+            .iter()
+            .any(|output| output.stake_public_key == *PK0)
+        {
+            return Err(WalletServiceError::ProgramNoteStakedByPk0);
+        }
         let spend_state = state.wallet().spend_state(tip)?;
         let tip_state = state.wallet().wallet_state_at(tip)?;
         let inputs = inputs
