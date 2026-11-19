@@ -20,7 +20,7 @@ use lb_core::{
                 withdraw::ChannelWithdrawOp,
             },
         },
-        programs::program_step_id_of,
+        programs::{SpendInputFields, SpendOutputFields, program_step_id},
         transactions::builder::ZkTransferOpening,
     },
 };
@@ -96,6 +96,15 @@ pub struct ProgramPayout {
     pub value: Value,
 }
 
+impl ProgramPayout {
+    fn note(&self, nonce: Fr) -> Note {
+        Note {
+            stake_public_key: self.stake_public_key.unwrap_or(self.public_key),
+            ..Note::new(self.value, nonce, self.public_key)
+        }
+    }
+}
+
 /// A payout of `value` a program owes to `public_key`, a key of the wallet,
 /// which adopts its note from the step paying it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +122,17 @@ pub struct ProgramOutput {
     pub value: Value,
     pub stake_public_key: ZkPublicKey,
     pub data: Fr,
+}
+
+impl ProgramOutput {
+    const fn opening(&self, nonce: Fr) -> ProgramNoteOpening {
+        ProgramNoteOpening {
+            value: self.value,
+            nonce,
+            stake_public_key: self.stake_public_key,
+            data: self.data,
+        }
+    }
 }
 
 /// A program step with the openings of the notes it creates.
@@ -374,35 +394,19 @@ pub fn build_program_step(
         })
     };
     let program_notes: Vec<ProgramNoteOpening> = program_outputs
-        .into_iter()
+        .iter()
         .enumerate()
-        .map(|(output, program_output)| ProgramNoteOpening {
-            value: program_output.value,
-            nonce: nonce(output, program_output.value, &PK0),
-            stake_public_key: program_output.stake_public_key,
-            data: program_output.data,
+        .map(|(output, program_output)| {
+            program_output.opening(nonce(output, program_output.value, &PK0))
         })
         .collect();
     let paid_notes: Vec<Note> = payouts
-        .into_iter()
+        .iter()
         .enumerate()
-        .map(
-            |(
-                payout,
-                ProgramPayout {
-                    public_key,
-                    stake_public_key,
-                    value,
-                },
-            )| Note {
-                stake_public_key: stake_public_key.unwrap_or(public_key),
-                ..Note::new(
-                    value,
-                    nonce(program_notes.len() + payout, value, &public_key),
-                    public_key,
-                )
-            },
-        )
+        .map(|(payout_index, payout)| {
+            let output = program_notes.len() + payout_index;
+            payout.note(nonce(output, payout.value, &payout.public_key))
+        })
         .collect();
     let program_output_notes = opened_notes(&program_notes, program_id);
     let input_notes: Vec<Note> = inputs.iter().map(|input| input.note).collect();
@@ -414,7 +418,10 @@ pub fn build_program_step(
         program_outputs: commitments_of(&program_output_notes)?,
         outputs: commitments_of(&paid_notes)?,
         commitment_merkle_root: program_inputs.spend_state.root_of(note_set),
-        program_step_id: program_step_id_of(&input_notes, &output_notes),
+        program_step_id: program_step_id(
+            &SpendInputFields::padded(&input_notes),
+            &SpendOutputFields::padded(&output_notes),
+        ),
         inscription,
     };
     Ok((

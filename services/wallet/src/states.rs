@@ -296,7 +296,8 @@ impl<'u> ServiceState<'u> {
         self.update_state();
     }
 
-    // The payout is paid: its note is a known note of the wallet.
+    // Stops expecting `payout`, a user note a program owes to a key of the
+    // wallet: a program step paid it and the wallet knows its note.
     pub fn payout_seen(&mut self, payout: &ExpectedPayout) {
         if let Some(seen) = self.expected_payouts.iter().position(|p| p == payout) {
             self.expected_payouts.remove(seen);

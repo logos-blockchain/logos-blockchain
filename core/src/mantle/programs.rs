@@ -276,6 +276,12 @@ impl SpendInputFields {
         }
     }
 
+    // The inputs of a spend consuming `notes`, the ones past them inactive.
+    #[must_use]
+    pub fn padded(notes: &[Note]) -> [Self; MAX_INPUTS] {
+        core::array::from_fn(|index| notes.get(index).map_or_else(Self::inactive, Self::of))
+    }
+
     // The circuit derives the public key of every input.
     #[must_use]
     pub fn inactive() -> Self {
@@ -291,6 +297,12 @@ impl SpendInputFields {
 }
 
 impl SpendOutputFields {
+    // The outputs of a spend creating `notes`, the ones past them inactive.
+    #[must_use]
+    pub fn padded(notes: &[Note]) -> [Self; MAX_OUTPUTS] {
+        core::array::from_fn(|index| notes.get(index).map_or_else(Self::inactive, Self::of))
+    }
+
     #[must_use]
     pub const fn inactive() -> Self {
         Self {
@@ -316,23 +328,6 @@ impl SpendOutputFields {
             data: note.data,
         }
     }
-}
-
-// The `program_step_id` of a spend of the notes `inputs` creating `outputs`.
-#[must_use]
-pub fn program_step_id_of(inputs: &[Note], outputs: &[Note]) -> Fr {
-    program_step_id(
-        &core::array::from_fn(|i| {
-            inputs
-                .get(i)
-                .map_or_else(SpendInputFields::inactive, SpendInputFields::of)
-        }),
-        &core::array::from_fn(|j| {
-            outputs
-                .get(j)
-                .map_or_else(SpendOutputFields::inactive, SpendOutputFields::of)
-        }),
-    )
 }
 
 #[must_use]
