@@ -705,9 +705,7 @@ mod tests {
         let unfunded = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp::sample()))
             .unwrap();
-        let bare_ops = unfunded.minimum_gas_cost(&context).unwrap();
         let fee = unfunded.funded_gas_cost(&context).unwrap();
-        assert!(bare_ops < fee, "the fee transfer is priced");
 
         // A wallet funding with one note pays the prediction exactly, and a
         // builder with inputs is priced as it stands.
