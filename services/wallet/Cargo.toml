@@ -43,7 +43,7 @@ overwatch                        = { workspace = true }
 lb-core    = { features = ["test-utils"], workspace = true }
 serde_json = { workspace = true }
 time       = { workspace = true }
-tokio      = { features = ["macros", "rt"], workspace = true }
+tokio      = { features = ["macros", "rt", "time"], workspace = true }
 
 [lints]
 workspace = true

@@ -132,7 +132,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
     fn from_settings(_settings: &Self::Settings) -> Result<Self, Self::Error> {
         Ok(Self {
             lib_wallet_state: None,
-            known_notes: KnownNotes::new(),
+            known_notes: KnownNotes::new_sync(),
             next_reward_key_index: 0,
         })
     }
@@ -187,11 +187,9 @@ impl<'u> ServiceState<'u> {
             next_reward_key_index,
             ..
         } = state;
-        known_notes.extend(
-            genesis_known_notes
-                .into_iter()
-                .map(|known_note| (known_note.note.commitment(), known_note)),
-        );
+        for known_note in genesis_known_notes {
+            known_notes.insert_mut(known_note.note.commitment(), known_note);
+        }
         let wallet = Wallet::from_genesis(
             known_keys(settings),
             known_notes,
@@ -223,7 +221,7 @@ impl<'u> ServiceState<'u> {
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
             fee_margin_percent: settings.fee_margin_percent,
-            reward_notes: KnownNotes::new(),
+            reward_notes: KnownNotes::new_sync(),
         }
     }
 
@@ -269,7 +267,7 @@ impl<'u> ServiceState<'u> {
 
     pub fn add_reward_note(&mut self, note: KnownNote) {
         self.add_known_notes([note]);
-        self.reward_notes.insert(note.note.commitment(), note);
+        self.reward_notes.insert_mut(note.note.commitment(), note);
     }
 
     // Forgets the reward notes the LIB holds, which the LIB wallet state
@@ -279,17 +277,21 @@ impl<'u> ServiceState<'u> {
         let Ok(lib_state) = self.wallet.wallet_state_at(self.lib) else {
             return false;
         };
-        let count = self.reward_notes.len();
-        self.reward_notes
-            .retain(|commitment, _| !lib_state.notes.contains_key(commitment));
-        self.reward_notes.len() != count
+        let count = self.reward_notes.size();
+        self.reward_notes = self
+            .reward_notes
+            .iter()
+            .filter(|&(commitment, _)| !lib_state.notes.contains_key(commitment))
+            .map(|(commitment, note)| (*commitment, *note))
+            .collect();
+        self.reward_notes.size() != count
     }
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
         self.wallet.apply_block(block)?;
         // Note reservations are released after `pending_note_expiry_blocks`
-        // (see `evict_expired`), not on spent.
-        self.update_state();
+        // (see `evict_expired`), not on spent. The recovery state, of the LIB
+        // and the known notes, stays as it is.
         Ok(())
     }
 
@@ -313,6 +315,10 @@ impl<'u> ServiceState<'u> {
 
         self.lib = new_lib;
         self.wallet.prune_states(new_lib);
+        // The notes final at the new LIB are never adopted again.
+        self.wallet
+            .forget_final_known_notes(new_lib)
+            .expect("WalletState at LIB must exist");
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.update_state();
@@ -440,7 +446,7 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use core::{num::NonZero, time::Duration};
 
     use lb_core::{
@@ -455,7 +461,7 @@ mod tests {
     const EXPIRY_BLOCKS: u64 = 4;
 
     /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
-    fn era_schedule() -> ServiceEraSchedule {
+    pub fn era_schedule() -> ServiceEraSchedule {
         use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
         use time::OffsetDateTime;
 
@@ -488,7 +494,7 @@ mod tests {
         };
         let state = RecoveryState {
             lib_wallet_state: None,
-            known_notes: HashMap::from([(note.note.commitment(), note)]),
+            known_notes: KnownNotes::from_iter([(note.note.commitment(), note)]),
             next_reward_key_index: 4,
         };
         let decoded: RecoveryState =
@@ -552,7 +558,7 @@ mod tests {
         };
         let recovery = RecoveryState {
             lib_wallet_state: None,
-            known_notes: HashMap::new(),
+            known_notes: KnownNotes::new_sync(),
             next_reward_key_index: 0,
         };
         let genesis = HeaderId::from([0; 32]);
@@ -626,7 +632,7 @@ mod tests {
         // Fresh wallet: initialized from the genesis note sets.
         let recovery = RecoveryState {
             lib_wallet_state: None,
-            known_notes: HashMap::new(),
+            known_notes: KnownNotes::new_sync(),
             next_reward_key_index: 0,
         };
 
@@ -664,7 +670,7 @@ mod tests {
         };
         let recovery = RecoveryState {
             lib_wallet_state: None,
-            known_notes: HashMap::new(),
+            known_notes: KnownNotes::new_sync(),
             next_reward_key_index: 0,
         };
         let known_note = |value| KnownNote {
@@ -692,7 +698,7 @@ mod tests {
         assert!(!state.forget_reward_notes_at_lib());
         assert_eq!(
             state.reward_notes(),
-            &HashMap::from([(pending.note.commitment(), pending)])
+            &KnownNotes::from_iter([(pending.note.commitment(), pending)])
         );
         assert!(
             state
@@ -703,14 +709,14 @@ mod tests {
 
         // restored after a restart, the notes are known again, and the one the
         // LIB holds is forgotten
-        state.restore_reward_notes(HashMap::from([
+        state.restore_reward_notes(KnownNotes::from_iter([
             (on_chain.note.commitment(), on_chain),
             (pending.note.commitment(), pending),
         ]));
         assert!(state.forget_reward_notes_at_lib());
         assert_eq!(
             state.reward_notes(),
-            &HashMap::from([(pending.note.commitment(), pending)])
+            &KnownNotes::from_iter([(pending.note.commitment(), pending)])
         );
     }
 }
