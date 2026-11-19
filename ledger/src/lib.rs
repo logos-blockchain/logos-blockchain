@@ -36,7 +36,10 @@ use lb_core::{
         notes::{self, NoteCommitment},
         ops::{
             OpRef, SignedOp,
-            channel::{deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext},
+            channel::{
+                deposit::DepositExecutionContext,
+                withdraw::{PendingWithdrawals, WithdrawExecutionContext},
+            },
             pow::ClaimPoWRewardExecutionContext,
             program::ProgramRegisterExecutionContext,
             sdp::{SDPActiveOp, SDPDeclareOp},
@@ -666,8 +669,8 @@ where
         }
         self.storage.write(batch)?;
 
-        // Registry releases and the LIB state have committed. Later rebase or GC
-        // failures must not leave this completed work pending.
+        // Registry releases and the LIB state have committed. Later rebase or
+        // GC failures must not leave this completed work pending.
         let completed = replace(&mut self.pending_pruning, PendingPruning::new());
         let mut removed = 0usize;
         for block in completed.stale.iter().chain(completed.immutable.iter()) {
@@ -904,6 +907,14 @@ impl LedgerState {
     #[must_use]
     pub fn with_latest_note_sets(mut self, note_sets: NoteSets) -> Self {
         self.cryptarchia_ledger = self.cryptarchia_ledger.update_note_sets(note_sets);
+        self
+    }
+
+    /// Replaces pending withdrawals for serialization benchmarks.
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub fn with_pending_withdrawals(mut self, pending_withdrawals: PendingWithdrawals) -> Self {
+        self.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
         self
     }
 
@@ -1723,7 +1734,7 @@ mod tests {
                     deposit::{DepositOp, Metadata},
                     inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
                     program_step::{ProgramDeposit, ProgramStep},
-                    withdraw::{ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals},
+                    withdraw::{ChannelWithdrawOp, PendingWithdrawal},
                 },
                 op_proof::samples::SampleProof as _,
                 program::ProgramRegisterOp,

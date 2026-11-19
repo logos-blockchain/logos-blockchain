@@ -135,6 +135,10 @@ impl PendingWithdrawals {
         self.by_posting.values()
     }
 
+    fn due(&self, block_slot: Slot) -> impl Iterator<Item = (Slot, u64)> + '_ {
+        self.by_due.range(..=(block_slot, u64::MAX)).copied()
+    }
+
     // Applies, in posting order, every withdrawal due at `block_slot` whose
     // inputs are unspent, drops the other due ones, keeps the rest. An SDP
     // withdrawal has no input, so it is always applied.
@@ -143,32 +147,19 @@ impl PendingWithdrawals {
         mut note_sets: NoteSets,
         block_slot: Slot,
     ) -> Result<(Self, NoteSets, Vec<PendingWithdrawal>), NoteSetError> {
-        let due = self
-            .by_due
-            .range(..=(block_slot, u64::MAX))
-            .copied()
-            .collect::<Vec<_>>();
-        let mut positions = due
-            .iter()
-            .map(|(_, position)| *position)
-            .collect::<Vec<_>>();
-        positions.sort_unstable();
-        let mut due_withdrawals = Vec::with_capacity(positions.len());
-        for position in positions {
+        let mut due = self.due(block_slot).collect::<Vec<_>>();
+        due.sort_unstable_by_key(|&(_, position)| position);
+
+        let mut released = Vec::new();
+        for (due_slot, position) in due {
             let withdrawal = self
                 .by_posting
                 .get(&position)
                 .expect("an indexed withdrawal is pending")
                 .clone();
             self.by_posting.remove_mut(&position);
-            due_withdrawals.push(withdrawal);
-        }
-        for key in &due {
-            self.by_due.remove_mut(key);
-        }
+            self.by_due.remove_mut(&(due_slot, position));
 
-        let mut released = Vec::new();
-        for withdrawal in due_withdrawals {
             let set = note_sets
                 .get(withdrawal.note_set_index)
                 .expect("a withdrawal's note set exists")
@@ -178,6 +169,7 @@ impl PendingWithdrawals {
             if set.contains_any_nullifier(&withdrawal.inputs)? {
                 continue;
             }
+
             let set = set.execute_spending(withdrawal.inputs.as_slice())?;
             note_sets = note_sets.update(withdrawal.note_set_index, set);
             let ledger = note_sets
@@ -187,6 +179,7 @@ impl PendingWithdrawals {
             note_sets = note_sets.update_ledger(ledger);
             released.push(withdrawal);
         }
+
         Ok((self, note_sets, released))
     }
 }
@@ -564,6 +557,37 @@ mod test {
             .push(commitment(1))
             .unwrap()
             .push(commitment(50))
+            .unwrap()
+            .frontier_root();
+        assert_eq!(note_sets.ledger().commitment_root(), expected);
+    }
+
+    #[test]
+    fn release_reads_only_due_withdrawals_from_a_duplicate_backlog() {
+        let (_, note_sets) = state();
+        let withdrawals = (0..1_024u64)
+            .fold(PendingWithdrawals::new(), |withdrawals, index| {
+                withdrawals.push(pending(200, 5, 1_000 + index))
+            })
+            .push(pending(100, 5, 200));
+
+        assert_eq!(withdrawals.due(Slot::from(100u64)).count(), 1);
+
+        let (withdrawals, note_sets, released) =
+            withdrawals.release(note_sets, Slot::from(100u64)).unwrap();
+        assert_eq!(released, vec![pending(100, 5, 200)]);
+        assert_eq!(withdrawals.iter().count(), 1_024);
+
+        // The first withdrawal spent the note; the later duplicate backlog is
+        // discarded when it becomes due without creating additional outputs.
+        let (withdrawals, note_sets, released) =
+            withdrawals.release(note_sets, Slot::from(200u64)).unwrap();
+        assert_eq!(released, []);
+        assert_eq!(withdrawals.iter().count(), 0);
+        let expected = CommitmentMmr::new()
+            .push(commitment(1))
+            .unwrap()
+            .push(commitment(200))
             .unwrap()
             .frontier_root();
         assert_eq!(note_sets.ledger().commitment_root(), expected);

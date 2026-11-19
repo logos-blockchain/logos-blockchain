@@ -427,16 +427,19 @@ fn finalize_state(
 mod tests {
     use std::{
         io::Error as IoError,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     use lb_core::{
         crypto::ZkHasher,
         events::Events,
         mantle::{
-            note_set::{NoteSet, note_set_namespace},
-            notes::NoteNullifier,
-            ops::channel::ChannelId,
+            note_set::{CommitmentMmr, NoteSet, note_set_namespace},
+            notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
+            ops::channel::{
+                ChannelId,
+                withdraw::{PendingWithdrawal, PendingWithdrawals},
+            },
         },
     };
     use lb_cryptarchia_engine::{Cryptarchia, PrunedBlocks, Slot, State, UncleSlots};
@@ -446,10 +449,11 @@ mod tests {
         store::{NodeKey, StaleKey},
     };
     use lb_kv_store::{ErasedKv, KvEntry, KvStore, MemKv, StoreError};
+    use serde::{Serialize, Serializer};
 
     use super::*;
     use crate::{
-        Ledger, LedgerState, Restored,
+        Ledger, LedgerState, LibState, Restored,
         cryptarchia::tests::{config, genesis_parameters},
         test_utils::single_era,
         update::BatchVerifiedUpdate,
@@ -461,6 +465,21 @@ mod tests {
     const GENESIS: Id = [0; 32];
     const LEDGER_SET: NoteSetIndex = NoteSetIndex::Ledger;
     const PROBES: [u64; 9] = [1, 3, 5, 8, 13, 21, 40, 77, 500];
+
+    struct CountingInfo<'a> {
+        serialization_passes: &'a AtomicUsize,
+        value: u8,
+    }
+
+    impl Serialize for CountingInfo<'_> {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            self.serialization_passes.fetch_add(1, Ordering::Relaxed);
+            serializer.serialize_u8(self.value)
+        }
+    }
 
     struct FailingStore {
         inner: DynKvStore,
@@ -627,6 +646,7 @@ mod tests {
         oracles: HashMap<Id, HashMap<NoteSetIndex, Oracle>>,
         applied: HashMap<Id, Applied>,
         next: u8,
+        snapshot_serialization_passes: AtomicUsize,
     }
 
     // A block on `parent` spending `spent`, applied on the state of `parent` in
@@ -659,19 +679,30 @@ mod tests {
         }
 
         fn with_store(store: DynKvStore) -> Self {
+            Self::with_store_and_pending(store, PendingWithdrawals::new())
+        }
+
+        fn with_store_and_pending(
+            store: DynKvStore,
+            pending_withdrawals: PendingWithdrawals,
+        ) -> Self {
             let config = config();
             // a genesis state is built in memory, then moved to the store
-            let state = LedgerState::from_notes([], &config, &genesis_parameters())
-                .with_nullifier_store(&store)
-                .unwrap();
+            let mut state = LedgerState::from_notes([], &config, &genesis_parameters());
+            state.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
+            let state = state.with_nullifier_store(&store).unwrap();
             let eras = single_era(config);
             let engine = Cryptarchia::from_genesis(
                 GENESIS,
                 Arc::new(eras.map(|era| era.parameters.consensus_config.clone())),
                 State::Online,
             );
-            let ledger =
-                Ledger::new_with_lib_state(GENESIS, state, Arc::new(eras), &GENESIS[0]).unwrap();
+            let snapshot_serialization_passes = AtomicUsize::new(0);
+            let info = CountingInfo {
+                serialization_passes: &snapshot_serialization_passes,
+                value: GENESIS[0],
+            };
+            let ledger = Ledger::new_with_lib_state(GENESIS, state, Arc::new(eras), &info).unwrap();
             let genesis = HashMap::from([(LEDGER_SET, Oracle::new())]);
             Self {
                 ledger,
@@ -680,6 +711,7 @@ mod tests {
                 oracles: HashMap::from([(GENESIS, genesis)]),
                 applied: HashMap::new(),
                 next: 1,
+                snapshot_serialization_passes,
             }
         }
 
@@ -718,8 +750,12 @@ mod tests {
                 .receive_block(id, parent, slot, UncleSlots::default())
                 .unwrap();
             let lib = self.engine.lib();
+            let info = CountingInfo {
+                serialization_passes: &self.snapshot_serialization_passes,
+                value: lib[0],
+            };
             self.ledger
-                .prune_with_lib_state(lib, &pruned, &lib[0])
+                .prune_with_lib_state(lib, &pruned, &info)
                 .unwrap();
             let ledger = &self.ledger;
             self.oracles
@@ -799,6 +835,20 @@ mod tests {
         }
     }
 
+    fn pending_withdrawals(due: u64, outputs: &[u64]) -> PendingWithdrawals {
+        outputs
+            .iter()
+            .fold(PendingWithdrawals::new(), |pending, value| {
+                pending.push(PendingWithdrawal {
+                    due: Slot::from(due),
+                    note_set_index: NoteSetIndex::Sdp,
+                    inputs: InputNullifiers::default(),
+                    outputs: OutputCommitments::try_from_iter([NoteCommitment(Fr::from(*value))])
+                        .unwrap(),
+                })
+            })
+    }
+
     #[test]
     fn test_chain_reads_as_the_oracle_while_the_lib_advances() {
         let mut chain = Chain::new();
@@ -820,6 +870,136 @@ mod tests {
                 .unwrap()
                 .nullifiers()
                 .is_finalized()
+        );
+    }
+
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep the persistence, restart, and due-release regression on one end-to-end path"
+    )]
+    fn test_lib_snapshot_serializes_pending_withdrawals_only_when_the_lib_advances() {
+        let expected_outputs = [
+            NoteCommitment(Fr::from(11u64)),
+            NoteCommitment(Fr::from(22u64)),
+            NoteCommitment(Fr::from(33u64)),
+        ];
+        let mut chain = Chain::with_store_and_pending(
+            ErasedKv::into_dyn(MemKv::new()),
+            pending_withdrawals(10_000, &[11, 22, 33]),
+        );
+        let passes_per_snapshot = chain.snapshot_serialization_passes.load(Ordering::Relaxed);
+        assert!(
+            passes_per_snapshot > 0,
+            "genesis serializes one LIB snapshot"
+        );
+
+        let mut tip = GENESIS;
+        let mut finalized = false;
+        let mut non_finalizing = false;
+        for _ in 0..32 {
+            let previous_lib = chain.engine.lib();
+            let passes_before = chain.snapshot_serialization_passes.load(Ordering::Relaxed);
+            tip = chain.extend(tip, &[]);
+            if chain.engine.lib() == previous_lib {
+                non_finalizing = true;
+                assert_eq!(
+                    chain.snapshot_serialization_passes.load(Ordering::Relaxed),
+                    passes_before,
+                    "a non-finalizing block must not encode the pending backlog"
+                );
+            } else {
+                assert_eq!(
+                    chain.snapshot_serialization_passes.load(Ordering::Relaxed) - passes_before,
+                    passes_per_snapshot,
+                    "a new LIB must serialize the snapshot exactly once"
+                );
+                finalized = true;
+                break;
+            }
+        }
+        assert!(
+            non_finalizing,
+            "the test chain should include non-finalizing blocks"
+        );
+        assert!(finalized, "the test chain should advance its LIB");
+
+        let lib = chain.engine.lib();
+        let passes_before = chain.snapshot_serialization_passes.load(Ordering::Relaxed);
+        let info = CountingInfo {
+            serialization_passes: &chain.snapshot_serialization_passes,
+            value: lib[0],
+        };
+        chain
+            .ledger
+            .prune_with_lib_state(lib, &PrunedBlocks::new(), &info)
+            .unwrap();
+        assert_eq!(
+            chain.snapshot_serialization_passes.load(Ordering::Relaxed),
+            passes_before,
+            "re-pruning the same finalized LIB must not rewrite its snapshot"
+        );
+
+        let persisted_bytes = NullifierStorage::read_lib_state(&chain.store)
+            .unwrap()
+            .expect("the finalized LIB snapshot is persisted");
+        let persisted = LibState::<Id, u8>::from_bytes(&persisted_bytes).unwrap();
+        assert_eq!(persisted.lib, lib);
+        assert_eq!(
+            persisted
+                .state
+                .cryptarchia_ledger
+                .pending_withdrawals
+                .iter()
+                .map(|withdrawal| withdrawal.outputs.as_slice()[0])
+                .collect::<Vec<_>>(),
+            expected_outputs,
+            "the serialized backlog retains posting order"
+        );
+
+        let expected_snapshot = LibState {
+            lib,
+            state: chain.ledger.state(&lib).unwrap().clone(),
+            info: lib[0],
+        };
+        assert_eq!(
+            persisted_bytes,
+            expected_snapshot.to_bytes().unwrap(),
+            "the benchmark LibState format must match the actual persisted snapshot"
+        );
+
+        let restored = chain.restore();
+        assert_eq!(restored.lib, lib);
+        let restored_state = restored
+            .ledger
+            .state(&lib)
+            .unwrap()
+            .cryptarchia_ledger
+            .clone();
+        let (released_state, released) = restored_state
+            .release_withdrawals(Slot::from(10_000u64))
+            .unwrap();
+        assert_eq!(
+            released
+                .iter()
+                .map(|withdrawal| withdrawal.outputs.as_slice()[0])
+                .collect::<Vec<_>>(),
+            expected_outputs,
+            "due withdrawals are released in their original posting order"
+        );
+        assert_eq!(released_state.pending_withdrawals.iter().count(), 0);
+        let expected_root = CommitmentMmr::new()
+            .push(expected_outputs[0])
+            .unwrap()
+            .push(expected_outputs[1])
+            .unwrap()
+            .push(expected_outputs[2])
+            .unwrap()
+            .frontier_root();
+        assert_eq!(
+            released_state.latest_note_sets().ledger().commitment_root(),
+            expected_root,
+            "released outputs are applied to the ledger in posting order"
         );
     }
 
@@ -1278,7 +1458,8 @@ mod tests {
         assert!(!pruned.is_empty());
         let lib = chain.engine.lib();
 
-        // Fail the first rebase read, after finalization and its LIB state commit.
+        // Fail the first rebase read, after finalization and its LIB state
+        // commit.
         failing.fail_read_after_next_write();
         assert!(
             chain

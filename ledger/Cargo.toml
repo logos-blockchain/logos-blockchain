@@ -57,6 +57,11 @@ name    = "zk_batch"
 
 [[bench]]
 harness           = false
+name              = "lib_state_serialization"
+required-features = ["test-utils"]
+
+[[bench]]
+harness           = false
 name              = "gas"
 path              = "benches/gas/main.rs"
 required-features = ["test-utils"]
