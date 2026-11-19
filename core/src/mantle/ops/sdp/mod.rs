@@ -82,6 +82,28 @@ pub enum SdpError {
     InvalidZkTransfer,
 }
 
+impl SdpError {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::InvalidEddsaSignature
+            | Self::DuplicateDeclaration(_)
+            | Self::DuplicateProviderId { .. }
+            | Self::DeclarationNotFound(_)
+            | Self::DeclarationIdMismatch { .. }
+            | Self::ServiceNotFound(_)
+            | Self::DeclarationWithdrawn { .. }
+            | Self::InvalidNonceLifecycle { .. }
+            | Self::InvalidNonceSequence { .. }
+            | Self::GenesisDeclarationWithInputs
+            | Self::ZkTransferInputs(_)
+            | Self::AmountBelowMinStake { .. }
+            | Self::InvalidZkTransfer => false,
+        }
+    }
+}
+
 /// Ensures a caller-supplied declaration is the one named by the operation.
 fn validate_declaration_id(
     operation_declaration_id: DeclarationId,

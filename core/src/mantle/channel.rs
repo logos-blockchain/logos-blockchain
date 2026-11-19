@@ -123,6 +123,35 @@ pub enum Error {
     ZkProgramSpendInputs(#[from] ZkProgramSpendInputsError),
 }
 
+impl Error {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::InvalidParent { .. }
+            | Self::UnauthorizedSigner { .. }
+            | Self::InvalidSigner
+            | Self::InvalidSignature
+            | Self::InvalidSignatureIndex { .. }
+            | Self::ChannelNotFound { .. }
+            | Self::InvalidChannelConfig
+            | Self::ThresholdUnmet { .. }
+            | Self::NoNoteSet { .. }
+            | Self::ZkTransferInputs(_)
+            | Self::StepProofCount { .. }
+            | Self::StepDoubleSpend(_)
+            | Self::UnknownProgram(_)
+            | Self::StepProofKind { .. }
+            | Self::UnconsumedDeposit(_)
+            | Self::DepositToAnotherProgram { .. }
+            | Self::ProgramNoteCount { .. }
+            | Self::ProgramNoteOpening { .. }
+            | Self::PaidValueOverflow { .. }
+            | Self::ZkProgramSpendInputs(_) => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,

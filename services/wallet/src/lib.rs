@@ -73,6 +73,7 @@ use overwatch::{
 };
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
+use strum_macros::AsRefStr;
 use tokio::{
     sync::{oneshot, oneshot::Sender},
     task::JoinError,
@@ -104,6 +105,9 @@ pub enum WalletServiceError {
 
     #[error("Block {0} not found in storage")]
     BlockNotFoundInStorage(HeaderId),
+
+    #[error("Events for block {0} are unavailable in storage")]
+    BlockEventsUnavailable(HeaderId),
 
     #[error(transparent)]
     WalletError(#[from] WalletError),
@@ -168,7 +172,7 @@ pub enum WalletServiceError {
     InvalidSigner([u8; ED25519_PUBLIC_KEY_SIZE]),
 }
 
-#[derive(Debug)]
+#[derive(Debug, AsRefStr)]
 pub enum WalletMsg {
     GetBalance {
         tip: Option<HeaderId>,
@@ -679,8 +683,10 @@ where
         {
             warn!(
                 target: LOG_TARGET,
+                message_kind = msg.as_ref(),
+                requested_tip = ?msg.tip(),
                 err = ?err,
-                "Failed backfilling wallet to message tip; continuing to process the message {msg:?}"
+                "Failed backfilling wallet to message tip; continuing to process the message"
             );
         }
 
@@ -1779,7 +1785,19 @@ where
             return;
         };
 
-        let events = Self::load_block_events(header_id, storage).await;
+        let Ok(events) = Self::load_block_events(header_id, storage)
+            .await
+            .inspect_err(|e| {
+                error!(
+                    target: LOG_TARGET,
+                    block_id = ?header_id,
+                    err = %e,
+                    "Failed to load block events for wallet"
+                );
+            })
+        else {
+            return;
+        };
         let wallet_block = WalletBlock::from_block(
             &block,
             era_schedule.epoch_for_slot(block.header().slot()),
@@ -1844,18 +1862,14 @@ where
             .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))
     }
 
-    async fn load_block_events(header_id: HeaderId, storage: &StorageApi<Tx>) -> Events {
+    async fn load_block_events(
+        header_id: HeaderId,
+        storage: &StorageApi<Tx>,
+    ) -> Result<Events, WalletServiceError> {
         storage
             .get_block_events(&header_id)
             .await
-            .unwrap_or_else(|| {
-                warn!(
-                    target: LOG_TARGET,
-                    block_id = ?header_id,
-                    "Failed to load block events for wallet"
-                );
-                Events::new()
-            })
+            .ok_or(WalletServiceError::BlockEventsUnavailable(header_id))
     }
 
     async fn handle_lib_update(
@@ -1973,7 +1987,7 @@ where
             }
 
             let block = Self::load_block(header_id, storage).await?;
-            let events = Self::load_block_events(header_id, storage).await;
+            let events = Self::load_block_events(header_id, storage).await?;
             let wallet_block = WalletBlock::from_block(
                 &block,
                 era_schedule.epoch_for_slot(block.header().slot()),
@@ -2103,16 +2117,70 @@ const fn op_proof(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{
-        gas::Gas,
-        ops::{
-            sdp::{SDPActiveOp, SDPDeclareOp},
-            transfer::TransferOp,
-        },
+    use std::{
+        fmt::{self, Display, Formatter},
+        sync::Arc,
+        time::Duration,
     };
+
+    use lb_binary_codec::canonical::BinaryEncode as _;
+    use lb_chain_service::{ConsensusMsg, Query};
+    use lb_core::{
+        block::{BlockTransactions, UncleHeaders},
+        events::{BlockEvent, Event},
+        mantle::{
+            gas::Gas,
+            note_set::{CommitmentMmr, NoteSetUpdate},
+            ops::{
+                sdp::{SDPActiveOp, SDPDeclareOp},
+                transfer::TransferOp,
+            },
+        },
+        proofs::leader_proof::Groth16LeaderProof,
+    };
+    use lb_cryptarchia_engine::Slot;
     use lb_groth16::CompressedGroth16Proof;
+    use lb_key_management_system_service::KMSService;
+    use lb_storage_service::api::requests::StorageMsg;
+    use lb_time::era::{EraEntriesAfterGenesis, EraTiming};
+    use overwatch::services::{
+        relay::OutboundRelay,
+        state::{NoOperator, NoState, ServiceState as _},
+    };
+    use time::OffsetDateTime;
+    use tokio::sync::{mpsc, watch};
 
     use super::*;
+
+    type TestTx = SignedOps<Preverified, StandardMode>;
+    type TestKms = KMSService<KmsBackend, TestRuntimeServiceId>;
+    type TestWallet = WalletService<TestKms, DummyCryptarchia, TestTx, (), TestRuntimeServiceId>;
+
+    struct DummyCryptarchia;
+
+    impl ServiceData for DummyCryptarchia {
+        type Settings = ();
+        type State = NoState<Self::Settings>;
+        type StateOperator = NoOperator<Self::State>;
+        type Message = ConsensusMsg<TestTx>;
+    }
+
+    #[derive(Debug)]
+    struct TestRuntimeServiceId;
+
+    impl AsServiceId<DummyCryptarchia> for TestRuntimeServiceId {
+        const SERVICE_ID: Self = Self;
+    }
+
+    impl AsServiceId<TestKms> for TestRuntimeServiceId {
+        const SERVICE_ID: Self = Self;
+    }
+
+    impl Display for TestRuntimeServiceId {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "TestRuntimeServiceId")
+        }
+    }
 
     /// The costs of the deployments' current gas profile.
     pub const GAS_PROFILE: GasProfile = GasProfile {
@@ -2160,5 +2228,276 @@ mod tests {
             OpProof::Ed25519Sig(signature)
         );
         assert!(op_proof(&OpRef::Transfer(&transfer), None, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn unavailable_events_leave_a_notified_block_for_backfill() {
+        let known_note = KnownNote {
+            note: Note::new(25, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64))),
+            note_set: NoteSetIndex::Ledger,
+            nullifier: NoteNullifier(Fr::from(3u64)),
+        };
+        let settings = wallet_settings(known_note.note.public_key);
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _receiver) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = wallet_state(&settings, genesis, known_note, &updater);
+
+        let block = create_block(genesis, 1);
+        let block_id = block.header().id();
+        let child = create_block(block_id, 2);
+        let child_id = child.header().id();
+        let commitment = known_note.note.commitment();
+        let events = Events::from(Event::Block(BlockEvent::NoteSetUpdated(NoteSetUpdate {
+            note_set: NoteSetIndex::Ledger,
+            nullifiers: vec![],
+            commitments: vec![commitment],
+        })));
+        let storage = storage_api([block, child], events, None);
+        let cryptarchia = cryptarchia_api(genesis, block_id, child_id);
+        let (kms_sender, _) = mpsc::channel(1);
+        let kms = KmsServiceApi::new(OutboundRelay::new(kms_sender));
+
+        TestWallet::handle_new_block(
+            block_id,
+            &mut state,
+            &storage,
+            &cryptarchia,
+            &kms,
+            &settings.era_schedule,
+        )
+        .await;
+        assert!(!state.wallet().has_processed_block(block_id));
+
+        // The next notification backfills the missing parent, including its events.
+        TestWallet::handle_new_block(
+            child_id,
+            &mut state,
+            &storage,
+            &cryptarchia,
+            &kms,
+            &settings.era_schedule,
+        )
+        .await;
+
+        assert!(state.wallet().has_processed_block(block_id));
+        assert!(state.wallet().has_processed_block(child_id));
+        let wallet_state = state.wallet().wallet_state_at(child_id).unwrap();
+        assert_single_note_state(&wallet_state, known_note);
+    }
+
+    #[tokio::test]
+    async fn undecodable_events_stop_backfill_until_they_can_be_loaded() {
+        let known_note = KnownNote {
+            note: Note::new(25, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64))),
+            note_set: NoteSetIndex::Ledger,
+            nullifier: NoteNullifier(Fr::from(3u64)),
+        };
+        let settings = wallet_settings(known_note.note.public_key);
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _receiver) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = wallet_state(&settings, genesis, known_note, &updater);
+
+        let block = create_block(genesis, 1);
+        let block_id = block.header().id();
+        let child = create_block(block_id, 2);
+        let child_id = child.header().id();
+        let commitment = known_note.note.commitment();
+        let events = Events::from(Event::Block(BlockEvent::NoteSetUpdated(NoteSetUpdate {
+            note_set: NoteSetIndex::Ledger,
+            nullifiers: vec![],
+            commitments: vec![commitment],
+        })));
+        let storage = storage_api(
+            [block, child],
+            events,
+            Some(Bytes::from_static(b"invalid events")),
+        );
+        let cryptarchia = cryptarchia_api(genesis, block_id, child_id);
+        let (kms_sender, _) = mpsc::channel(1);
+        let kms = KmsServiceApi::new(OutboundRelay::new(kms_sender));
+
+        let result = TestWallet::backfill_missing_blocks(
+            child_id,
+            &mut state,
+            &storage,
+            &cryptarchia,
+            &kms,
+            &settings.era_schedule,
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(WalletServiceError::BlockEventsUnavailable(id)) if id == block_id
+        ));
+        assert!(!state.wallet().has_processed_block(block_id));
+        assert!(!state.wallet().has_processed_block(child_id));
+
+        TestWallet::backfill_missing_blocks(
+            child_id,
+            &mut state,
+            &storage,
+            &cryptarchia,
+            &kms,
+            &settings.era_schedule,
+        )
+        .await
+        .unwrap();
+
+        assert!(state.wallet().has_processed_block(block_id));
+        assert!(state.wallet().has_processed_block(child_id));
+        let wallet_state = state.wallet().wallet_state_at(child_id).unwrap();
+        assert_single_note_state(&wallet_state, known_note);
+    }
+
+    fn wallet_settings(owner: ZkPublicKey) -> WalletServiceSettings {
+        WalletServiceSettings {
+            known_keys: HashMap::from([("owner".into(), owner)]),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
+            era_schedule: era_schedule(),
+        }
+    }
+
+    fn wallet_state<'u>(
+        settings: &WalletServiceSettings,
+        genesis: HeaderId,
+        known_note: KnownNote,
+        updater: &'u StateUpdater<Option<RecoveryState>>,
+    ) -> ServiceState<'u> {
+        ServiceState::from_genesis(
+            RecoveryState::from_settings(settings).unwrap(),
+            settings,
+            genesis,
+            &[],
+            &[],
+            [known_note],
+            updater,
+        )
+        .unwrap()
+    }
+
+    fn assert_single_note_state(state: &WalletState, known_note: KnownNote) {
+        let commitment = known_note.note.commitment();
+        assert_eq!(state.notes.size(), 1);
+        let owned_note = state.notes.get(&commitment).unwrap();
+        assert_eq!(owned_note.note, known_note.note);
+        assert_eq!(owned_note.nullifier, known_note.nullifier);
+        assert_eq!(
+            state.balance(known_note.note.public_key).unwrap().balance,
+            known_note.note.value,
+        );
+        let expected = CommitmentMmr::new().push(commitment).unwrap();
+        assert_eq!(
+            state
+                .commitments
+                .get(&NoteSetIndex::Ledger)
+                .unwrap()
+                .frontier_root(),
+            expected.frontier_root(),
+        );
+    }
+
+    fn era_schedule() -> ServiceEraSchedule {
+        let timing = EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(100).unwrap(),
+        };
+        EraSchedule::new(
+            OffsetDateTime::UNIX_EPOCH,
+            timing,
+            EraEntriesAfterGenesis::empty(),
+        )
+        .unwrap()
+        .map(|_| WalletEraSettings {
+            epoch_length: timing.epoch_length,
+            security_param: NonZero::new(5).unwrap(),
+            fork_digest: ForkDigest::new([0x11; 32]),
+            gas_profile: GAS_PROFILE,
+        })
+    }
+
+    fn create_block(parent: HeaderId, slot: u64) -> Block<TestTx> {
+        Block::create(
+            parent,
+            Slot::new(slot),
+            UncleHeaders::empty(),
+            Groth16LeaderProof::genesis(),
+            BlockTransactions::empty(),
+            u32::MAX,
+        )
+        .unwrap()
+    }
+
+    fn storage_api(
+        blocks: [Block<TestTx>; 2],
+        block_events: Events,
+        first_event_response: Option<Bytes>,
+    ) -> StorageApi<TestTx> {
+        let [block, child] = blocks;
+        let block_id = block.header().id();
+        let child_id = child.header().id();
+        let blocks = HashMap::from([
+            (block_id, Bytes::from(block.encode_to_vec())),
+            (child_id, Bytes::from(child.encode_to_vec())),
+        ]);
+        let events = HashMap::from([
+            (block_id, Bytes::try_from(block_events).unwrap()),
+            (child_id, Bytes::try_from(Events::new()).unwrap()),
+        ]);
+        let (msg_sender, mut msg_receiver) = mpsc::channel(1);
+        tokio::spawn(async move {
+            let mut fail_first_event_read = true;
+            while let Some(msg) = msg_receiver.recv().await {
+                match msg {
+                    StorageMsg::GetBlock {
+                        header_id,
+                        response_tx,
+                    } => response_tx.send(blocks.get(&header_id).cloned()).unwrap(),
+                    StorageMsg::GetBlockEvents {
+                        header_id,
+                        response_tx,
+                    } => {
+                        let response = if header_id == block_id && fail_first_event_read {
+                            fail_first_event_read = false;
+                            first_event_response.clone()
+                        } else {
+                            events.get(&header_id).cloned()
+                        };
+                        response_tx.send(response).unwrap();
+                    }
+                    _ => panic!("Unexpected storage request"),
+                }
+            }
+        });
+        StorageApi::new(OutboundRelay::new(msg_sender))
+    }
+
+    fn cryptarchia_api(
+        genesis: HeaderId,
+        block: HeaderId,
+        child: HeaderId,
+    ) -> CryptarchiaServiceApi<DummyCryptarchia> {
+        let (msg_sender, mut msg_receiver) = mpsc::channel(1);
+        tokio::spawn(async move {
+            while let Some(msg) = msg_receiver.recv().await {
+                let ConsensusMsg::Query(Query::GetHeaders {
+                    from_descendant,
+                    to_ancestor,
+                    reply_channel,
+                }) = msg
+                else {
+                    panic!("Unexpected chain query");
+                };
+                assert_eq!(from_descendant, Some(child));
+                assert_eq!(to_ancestor, Some(genesis));
+                let headers = futures::stream::iter([Ok(child), Ok(block), Ok(genesis)]);
+                assert!(reply_channel.send(Box::pin(headers)).is_ok());
+            }
+        });
+        CryptarchiaServiceApi::new(OutboundRelay::new(msg_sender))
     }
 }

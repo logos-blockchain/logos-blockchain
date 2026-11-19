@@ -167,6 +167,22 @@ pub enum NoteSetError {
     AlreadyStored(NoteSetIndex),
 }
 
+impl NoteSetError {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::Imt(err) => err.is_store_failure(),
+            Self::EmptyInputs
+            | Self::DuplicateInput(_)
+            | Self::UnknownRoot(_)
+            | Self::AlreadySpent(_)
+            | Self::BufferedTooLarge { .. }
+            | Self::MmrFull
+            | Self::AlreadyStored(_) => false,
+        }
+    }
+}
+
 // The commitment MMR of a referenced root extended by a prefix of the
 // transaction buffer is kept every `PREFIX_CHECKPOINT` commitments, so each
 // root replays the buffer once and each lookup at most that many commitments.
