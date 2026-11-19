@@ -36,7 +36,10 @@ use lb_core::{
         notes::{self, NoteCommitment},
         ops::{
             OpRef, SignedOp,
-            channel::{deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext},
+            channel::{
+                deposit::DepositExecutionContext,
+                withdraw::{PendingWithdrawals, WithdrawExecutionContext},
+            },
             pow::ClaimPoWRewardExecutionContext,
             program::ProgramRegisterExecutionContext,
             sdp::{SDPActiveOp, SDPDeclareOp},
@@ -907,6 +910,14 @@ impl LedgerState {
         self
     }
 
+    /// Replaces pending withdrawals for serialization benchmarks.
+    #[cfg(feature = "test-utils")]
+    #[must_use]
+    pub fn with_pending_withdrawals(mut self, pending_withdrawals: PendingWithdrawals) -> Self {
+        self.cryptarchia_ledger.pending_withdrawals = pending_withdrawals;
+        self
+    }
+
     /// Replaces the genesis note sets and their epoch snapshots, for benchmarks
     /// that build a state with a different genesis configuration.
     #[cfg(feature = "test-utils")]
@@ -1723,7 +1734,7 @@ mod tests {
                     deposit::{DepositOp, Metadata},
                     inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
                     program_step::{ProgramDeposit, ProgramStep},
-                    withdraw::{ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals},
+                    withdraw::{ChannelWithdrawOp, PendingWithdrawal},
                 },
                 op_proof::samples::SampleProof as _,
                 program::ProgramRegisterOp,
