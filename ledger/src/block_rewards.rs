@@ -5,15 +5,26 @@ use lb_core::mantle::Value;
 use lb_log_targets::ledger;
 use lb_utils::{
     bounded::{BoundedError, ResizableRuntimeBoundedVecDeque, RuntimeBounded},
-    math::NonNegativeRatio,
+    math::{NonNegativeRatio, ProperFraction},
 };
 
 use crate::config::{BlockRewardsConfig, EmissionRatio};
 
-/// `S_cap`, the maximum token supply.
-pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
-/// `B_0`, the rewards reserve at genesis.
-pub const REWARDS_RESERVE_GENESIS: Value = 1_000_000_000_000_000_000;
+/// `fraction` of the supply cap `max_supply`, rounded down, if it fits in a
+/// [`Value`].
+#[must_use]
+pub const fn fraction_of_supply(fraction: ProperFraction, max_supply: Value) -> Option<Value> {
+    let NonNegativeRatio {
+        numerator,
+        denominator,
+    } = fraction.get();
+    let share = max_supply as u128 * numerator as u128 / denominator.get() as u128;
+    if share > Value::MAX as u128 {
+        None
+    } else {
+        Some(share as Value)
+    }
+}
 
 const LOG_TARGET: &str = ledger::ROOT;
 
@@ -108,7 +119,7 @@ impl From<PooledFeesWindow> for PooledFeesWindowFields {
 }
 
 /// The reserve, the pool, the closed and pending Blend shares and the window of
-/// Block Rewards, in units of `10^-9` LGO.
+/// Block Rewards.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlockRewards {
     rewards_reserve: Value,
@@ -121,11 +132,12 @@ pub struct BlockRewards {
 }
 
 impl BlockRewards {
-    /// The block rewards at genesis, over the window of the genesis era.
+    /// The block rewards at genesis, whose reserve holds `rewards_reserve`,
+    /// over the window of the genesis era.
     #[must_use]
-    pub const fn genesis(pooled_fees_window: NonZeroU16) -> Self {
+    pub const fn genesis(rewards_reserve: Value, pooled_fees_window: NonZeroU16) -> Self {
         Self {
-            rewards_reserve: REWARDS_RESERVE_GENESIS,
+            rewards_reserve,
             rewards_pool: 0,
             blend_rewards_closed: 0,
             blend_rewards_pending: 0,
@@ -248,6 +260,7 @@ pub fn block_reward(
         .and_then(|fees| {
             i128::from(config.stake_target())
                 .checked_sub(i128::from(total_stake))?
+                .checked_add(i128::from(config.min_emission_offset()))?
                 .checked_add(fees)
         })
         .ok_or(BlockRewardsError::OutOfRange)?
@@ -300,27 +313,141 @@ pub fn leader_share(block_reward: Value, config: &BlockRewardsConfig) -> Value {
 mod tests {
     use std::{iter, num::NonZero};
 
-    use lb_utils::math::ProperFraction;
-
     use super::*;
+    use crate::config::BlockRewardsParameters;
 
+    /// `S_cap` of the block rewards specification.
+    const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
+
+    /// `D_0,target` of the specification, three tenths of its cap.
     const STAKE_AT_TARGET: Value = 3_000_000_000_000_000_000;
 
-    /// The values of the block rewards specification, in units of `10^-9` LGO.
-    pub const CONFIG: BlockRewardsConfig = config();
+    /// `B_0` of the specification, `I_max · S_cap · Y` with `Y = 10` years.
+    const REWARDS_RESERVE_GENESIS: Value = 1_000_000_000_000_000_000;
 
-    pub const fn config() -> BlockRewardsConfig {
-        let Some(config) = BlockRewardsConfig::new(
-            STAKE_AT_TARGET,
-            NonZero::new(120_000_000_000_000_000).unwrap(),
-            NonZero::new(120).unwrap(),
-            10_512,
-            EmissionRatio::new(62_500_000_000_000, NonZero::new(657).unwrap()),
-            ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
-        ) else {
-            panic!("the specification values are within range")
+    /// The slots of the specification, one second long.
+    const SLOT_DURATION: NonZero<u64> = NonZero::new(1).unwrap();
+
+    /// The slot activation coefficient of a block every 30 seconds, the time
+    /// step of the specification.
+    const SLOT_ACTIVATION_COEFF: ProperFraction =
+        ProperFraction::new(1, NonZero::new(30).unwrap()).unwrap();
+
+    /// The parameters of the block rewards specification.
+    const PARAMETERS: BlockRewardsParameters = BlockRewardsParameters {
+        max_emission_rate: ProperFraction::new(1, NonZero::new(100).unwrap()).unwrap(),
+        min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
+        stake_target: ProperFraction::new(3, NonZero::new(10).unwrap()).unwrap(),
+        pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+        stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
+        pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+        pooled_fees_window: NonZero::new(120).unwrap(),
+        blend_share: ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
+    };
+
+    /// The block rewards of the specification, on its cap and time step.
+    const CONFIG: BlockRewardsConfig =
+        BlockRewardsConfig::new(PARAMETERS, MAX_SUPPLY, SLOT_DURATION, SLOT_ACTIVATION_COEFF)
+            .unwrap();
+
+    // The integer computation of the specification, for a block every 30
+    // seconds.
+    #[test]
+    fn the_specification_parameters_derive_its_integer_values() {
+        assert_eq!(CONFIG.stake_target(), STAKE_AT_TARGET);
+        assert_eq!(
+            CONFIG.emission_factor_scale().get(),
+            120_000_000_000_000_000
+        );
+        assert_eq!(CONFIG.min_emission_offset(), 0);
+        assert_eq!(CONFIG.fee_average_numerator(), 10_512);
+        assert_eq!(
+            CONFIG.max_emission_per_block(),
+            EmissionRatio {
+                numerator: 62_500_000_000_000,
+                denominator: NonZero::new(657).unwrap(),
+            }
+        );
+    }
+
+    // A block every 20 seconds releases two thirds as much, and weighs its
+    // pooled fees one and a half times as much, as a block every 30
+    // seconds.
+    #[test]
+    fn the_values_of_a_block_follow_the_block_time() {
+        let config = BlockRewardsConfig::new(
+            PARAMETERS,
+            MAX_SUPPLY,
+            SLOT_DURATION,
+            ProperFraction::new(1, NonZero::new(20).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(config.fee_average_numerator(), 15_768);
+        assert_eq!(
+            config.max_emission_per_block(),
+            EmissionRatio {
+                numerator: 125_000_000_000_000,
+                denominator: NonZero::new(1_971).unwrap(),
+            }
+        );
+    }
+
+    // `I_min` adds `D_0,target · I_min / α_d` to the release's weight,
+    // `A_SCALE` when it is `I_max`.
+    #[test]
+    fn the_minimum_emission_rate_offsets_the_weight() {
+        let config = BlockRewardsConfig::new(
+            BlockRewardsParameters {
+                min_emission_rate: NonNegativeRatio::new(1, NonZero::new(100).unwrap()),
+                ..PARAMETERS
+            },
+            MAX_SUPPLY,
+            SLOT_DURATION,
+            SLOT_ACTIVATION_COEFF,
+        )
+        .unwrap();
+        assert_eq!(
+            config.min_emission_offset(),
+            config.emission_factor_scale().get()
+        );
+        // The stake at its target, no fees: a release in full, where the
+        // specification's `I_min` of zero releases nothing.
+        let at_target = |config| {
+            block_reward(
+                STAKE_AT_TARGET,
+                &PooledFeesWindow::empty(CONFIG.pooled_fees_window()),
+                REWARDS_RESERVE_GENESIS,
+                config,
+            )
         };
-        config
+        assert_eq!(at_target(&config), Ok((95_129_375_951, 0)));
+        assert_eq!(at_target(&CONFIG), Ok((0, 0)));
+    }
+
+    #[test]
+    fn the_specification_parameters_reward_the_blocks_of_its_cap_only() {
+        let config_at = |max_supply| {
+            BlockRewardsConfig::new(PARAMETERS, max_supply, SLOT_DURATION, SLOT_ACTIVATION_COEFF)
+        };
+        // A tenth above the cap, the payout's numerator overflows an i128.
+        assert_eq!(config_at(11_000_000_000_000_000_000), None);
+        // Below 84 units, the scale of the release's weight rounds down to
+        // zero.
+        assert_eq!(config_at(83), None);
+        assert!(config_at(84).is_some());
+        // A weight of the stake's shortfall of zero leaves no scale.
+        assert_eq!(
+            BlockRewardsConfig::new(
+                BlockRewardsParameters {
+                    stake_deviation_weight: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
+                    ..PARAMETERS
+                },
+                MAX_SUPPLY,
+                SLOT_DURATION,
+                SLOT_ACTIVATION_COEFF,
+            ),
+            None
+        );
     }
 
     fn window_of(fees: impl IntoIterator<Item = Value>, blocks: u16) -> PooledFeesWindow {
@@ -362,8 +489,9 @@ mod tests {
 
     #[test]
     fn a_window_lacking_blocks_averages_them_as_pooling_nothing() {
-        // One block pooled 120 units under a window of 120: the average is 1, as
-        // if 119 blocks had pooled nothing. Stake above target: no release.
+        // One block pooled 120 units under a window of 120: the average is 1,
+        // as if 119 blocks had pooled nothing. Stake above target: no
+        // release.
         assert_eq!(
             block_reward(
                 4_000_000_000_000_000_000,
@@ -377,8 +505,8 @@ mod tests {
 
     #[test]
     fn block_reward_matches_the_integer_reference() {
-        // No stake, no fees: A_t = 1, the maximum release 62_500 * 10^9 / 657 rounded
-        // down.
+        // No stake, no fees: A_t = 1, the maximum release 62_500 * 10^9 / 657
+        // rounded down.
         assert_eq!(
             block_reward(
                 0,
@@ -398,8 +526,8 @@ mod tests {
             ),
             Ok((8_333_333_333, 7_603_333_333))
         );
-        // Stake above target clamps A_t' to 0: no release, the average pooled fee is
-        // paid.
+        // Stake above target clamps A_t' to 0: no release, the average pooled
+        // fee is paid.
         assert_eq!(
             block_reward(
                 4_000_000_000_000_000_000,
@@ -426,9 +554,10 @@ mod tests {
         assert_eq!(leader_share(7, &CONFIG), 2);
         assert_eq!(leader_share(95_129_375_951, &CONFIG), 38_051_750_380);
         assert_eq!(leader_share(Value::MAX, &CONFIG), 7_378_697_629_483_820_646);
-        let (_, shares) = BlockRewards::genesis(CONFIG.pooled_fees_window())
-            .distribute_block_reward(0, 0, &CONFIG)
-            .unwrap();
+        let (_, shares) =
+            BlockRewards::genesis(REWARDS_RESERVE_GENESIS, CONFIG.pooled_fees_window())
+                .distribute_block_reward(0, 0, &CONFIG)
+                .unwrap();
         assert_eq!(
             shares,
             BlockRewardShares {
@@ -440,7 +569,7 @@ mod tests {
 
     #[test]
     fn pooled_fee_is_paid_over_exactly_120_blocks() {
-        let mut state = BlockRewards::genesis(CONFIG.pooled_fees_window());
+        let mut state = BlockRewards::genesis(REWARDS_RESERVE_GENESIS, CONFIG.pooled_fees_window());
         for block in 0..CONFIG.pooled_fees_window().get() {
             let pooled_fees = if block == 0 { 1_000_000_000_000 } else { 0 };
             let shares;
@@ -459,8 +588,8 @@ mod tests {
         assert_eq!(state.rewards_pool(), 87_600_000_040);
         assert_eq!(state.blend_rewards_pending(), 1_147_440_000_000);
 
-        // The fee has left the window: with the stake at target and no fees, nothing is
-        // released or paid.
+        // The fee has left the window: with the stake at target and no fees,
+        // nothing is released or paid.
         let (state, shares) = state
             .distribute_block_reward(0, STAKE_AT_TARGET, &CONFIG)
             .unwrap();
@@ -480,17 +609,18 @@ mod tests {
 
     #[test]
     fn block_reward_moves_tokens_between_stocks_only() {
-        let (state, shares) = BlockRewards::genesis(CONFIG.pooled_fees_window())
-            .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
-            .unwrap();
+        let (state, shares) =
+            BlockRewards::genesis(REWARDS_RESERVE_GENESIS, CONFIG.pooled_fees_window())
+                .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
+                .unwrap();
         assert_eq!(state.rewards_reserve(), 999_999_991_666_666_667);
         assert_eq!(state.rewards_pool(), 992_396_666_667);
         assert_eq!(
             state.pooled_fees_window(),
             &window_with_last(1_000_000_000_000)
         );
-        // reserve + pool + closed + pending + what the leader took = B_0 + the fees
-        // routed to the pool
+        // reserve + pool + closed + pending + what the leader took = B_0 + the
+        // fees routed to the pool
         assert_eq!(
             u128::from(state.rewards_reserve())
                 + u128::from(state.rewards_pool())
@@ -503,9 +633,10 @@ mod tests {
 
     #[test]
     fn settling_an_epoch_closes_the_pending_share_and_pays_nothing_from_it() {
-        let (state, _) = BlockRewards::genesis(CONFIG.pooled_fees_window())
-            .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
-            .unwrap();
+        let (state, _) =
+            BlockRewards::genesis(REWARDS_RESERVE_GENESIS, CONFIG.pooled_fees_window())
+                .distribute_block_reward(1_000_000_000_000, STAKE_AT_TARGET, &CONFIG)
+                .unwrap();
         assert_eq!(state.blend_rewards_closed(), 0);
 
         let closed = state.clone().settle_blend_rewards(0).unwrap();
@@ -541,7 +672,8 @@ mod tests {
     fn pay_out<const N: usize>(
         blocks: [(Value, u16); N],
     ) -> Result<[Value; N], (usize, BlockRewardsError)> {
-        let mut rewards = BlockRewards::genesis(NonZero::new(blocks[0].1).unwrap());
+        let mut rewards =
+            BlockRewards::genesis(REWARDS_RESERVE_GENESIS, NonZero::new(blocks[0].1).unwrap());
         let mut paid = [0; N];
         for (block, (payout, (fees, window))) in (1..).zip(paid.iter_mut().zip(blocks)) {
             let (next, shares) = rewards
@@ -559,12 +691,13 @@ mod tests {
 
     fn config_with_window(blocks: u16) -> BlockRewardsConfig {
         BlockRewardsConfig::new(
-            STAKE_AT_TARGET,
-            NonZero::new(120_000_000_000_000_000).unwrap(),
-            NonZero::new(blocks).unwrap(),
-            10_512,
-            EmissionRatio::new(62_500_000_000_000, NonZero::new(657).unwrap()),
-            ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
+            BlockRewardsParameters {
+                pooled_fees_window: NonZero::new(blocks).unwrap(),
+                ..PARAMETERS
+            },
+            MAX_SUPPLY,
+            SLOT_DURATION,
+            SLOT_ACTIVATION_COEFF,
         )
         .unwrap()
     }

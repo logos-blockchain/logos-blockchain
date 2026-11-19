@@ -166,7 +166,7 @@ fn runtime_blend_locator(hostname: &str, port: u16) -> Locator {
 mod tests {
     use std::num::NonZeroU32;
 
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
 
     use super::*;
     use crate::{
@@ -205,7 +205,8 @@ mod tests {
             5
         );
         let expected_coefficient =
-            NonNegativeRatio::new(1, NonZeroU32::new(2).expect("two is non-zero"));
+            ProperFraction::new(1, NonZeroU32::new(2).expect("two is non-zero"))
+                .expect("a half is a proper fraction");
         assert_eq!(
             local
                 .deployment

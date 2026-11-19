@@ -55,8 +55,8 @@ where
         return Err(SendError::NoPeers);
     }
 
-    // Serialized once and then put inside an `Arc` to avoid serializing each copy
-    // or cloning the serialized bytes multiple times.
+    // Serialized once and then put inside an `Arc` to avoid serializing each
+    // copy or cloning the serialized bytes multiple times.
     let serialized_message = OutgoingMessage::from(message);
 
     peer_connections.for_each(|(peer_id, connection_id)| {
@@ -102,8 +102,8 @@ where
         deserialize_encapsulated_message(serialized_message, &message_layout)
             .map_err(|_| ReceiveError::UndeserializableMessage)?;
 
-    // Exit early if we've received this message already and we know it's a valid
-    // one.
+    // Exit early if we've received this message already and we know it's a
+    // valid one.
     if message_cache.is_message_processed(&deserialized_encapsulated_message) {
         return Ok(());
     }
@@ -113,8 +113,8 @@ where
         .verify_header_signature()
         .map_err(|_| ReceiveError::InvalidHeaderSignature)?;
 
-    // Verify the `PoQ` before the message is reported to the swarm, entered into
-    // the cache, and hence before it can be relayed any further.
+    // Verify the `PoQ` before the message is reported to the swarm, entered
+    // into the cache, and hence before it can be relayed any further.
     spawn_poq_verification(
         pending_verifications,
         validated_message,

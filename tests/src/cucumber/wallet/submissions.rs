@@ -1014,8 +1014,7 @@ async fn validate_submission_fee_horizon(
         .map_err(|source| StepError::StepFail {
             message: format!("submission fee-horizon consensus query failed: {source}"),
         })?;
-    let current_epoch =
-        consensus.cryptarchia_info.slot.into_inner() / world.chain.slots_per_epoch.get();
+    let current_epoch = consensus.cryptarchia_info.slot.into_inner() / world.chain.slots_per_epoch;
     validate_submission_epoch(current_epoch, Some(policy))
 }
 
@@ -1029,7 +1028,7 @@ pub(crate) async fn validate_fee_horizon_after_wallet_batch(
     prepared_count: usize,
 ) -> Result<(), StepError> {
     let (_, _, consensus) = sanitize_best_node_info(world, wallet_name, None).await?;
-    let current_epoch = consensus.slot.into_inner() / world.chain.slots_per_epoch.get();
+    let current_epoch = consensus.slot.into_inner() / world.chain.slots_per_epoch;
     let valid_through_epoch = u64::from(policy.horizon.valid_through_epoch.into_inner());
     if current_epoch > valid_through_epoch {
         return Err(StepError::FeeHorizonExceededAfterWalletBatch {
@@ -1766,6 +1765,7 @@ fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<Stri
 #[cfg(test)]
 mod cache_removal_tests {
     use lb_chain_service::Epoch;
+    use lb_config::consensus::GENESIS_GAS_PRICE;
     use lb_core::{era::ForkDigest, header::HeaderId};
     use lb_groth16::Fr;
     use lb_mmr::MerklePath;
@@ -1952,8 +1952,8 @@ mod cache_removal_tests {
                 prepared_at_tip: HeaderId::from([0; 32]),
                 prepared_at_epoch: Epoch::new(2),
                 valid_through_epoch: Epoch::new(valid_through_epoch),
-                live_prices: GasPrices::default(),
-                ceiling_prices: GasPrices::default(),
+                live_prices: GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
+                ceiling_prices: GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
             },
             priority_fee_percent: 0,
         }

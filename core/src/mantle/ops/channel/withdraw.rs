@@ -173,8 +173,8 @@ impl PendingWithdrawals {
                 .get(withdrawal.note_set_index)
                 .expect("a withdrawal's note set exists")
                 .clone();
-            // A step consumed one of its notes before it was due: the withdrawal is
-            // dropped.
+            // A step consumed one of its notes before it was due: the
+            // withdrawal is dropped.
             if set.contains_any_nullifier(&withdrawal.inputs)? {
                 continue;
             }
@@ -247,8 +247,8 @@ impl VerifiableOperation<StandardMode>
             context.block_number,
         )?;
 
-        // Defer the proof verification so that the caller can batch it. A withdrawal
-        // balances exactly.
+        // Defer the proof verification so that the caller can batch it. A
+        // withdrawal balances exactly.
         Ok(defer_zk_transfer(
             self.proof(),
             &operation.inputs,
@@ -336,8 +336,8 @@ mod test {
         )
     }
 
-    // CHANNEL owns note set 2, which holds commitment(5), recorded at the end of
-    // block 0; the ledger set holds commitment(1).
+    // CHANNEL owns note set 2, which holds commitment(5), recorded at the end
+    // of block 0; the ledger set holds commitment(1).
     fn state() -> (Channels, NoteSets) {
         let (channels, note_sets) =
             Channels::new().create_channel(CHANNEL, Slot::from(0u64), keys(), NoteSets::new());

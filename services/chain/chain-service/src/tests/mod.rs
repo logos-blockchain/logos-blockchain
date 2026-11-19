@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display},
     io,
-    num::NonZero,
+    num::{NonZero, NonZeroU32},
     sync::{Arc, Mutex},
 };
 
@@ -56,11 +56,12 @@ use lb_key_management_system_keys::keys::{
 };
 use lb_kv_store::MemKv;
 use lb_ledger::{
-    GENESIS_STAKE_SUPPLY, LedgerError, LedgerState,
+    LedgerError, LedgerState,
     config::{
-        BlendPoWConfig, EmissionRatio, EraScheduledConfig, ModulusShift, PoWConfig,
-        RewardPoWConfig, config_for_slot,
+        BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+        config_for_slot,
     },
+    genesis_stake_supply,
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_mmr::MerklePath;
@@ -72,7 +73,7 @@ use lb_storage_service::{
 };
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -100,7 +101,7 @@ fn bootstrapping_chain_of_three_blocks() -> (Cryptarchia, Vec<(Slot, HeaderId)>)
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -109,8 +110,8 @@ fn bootstrapping_chain_of_three_blocks() -> (Cryptarchia, Vec<(Slot, HeaderId)>)
     let mut blocks = vec![(Slot::genesis(), genesis_id)];
     let mut slot = Slot::new(1);
     while blocks.len() < 4 {
-        // TODO: Use a mock proof system instead of expensive real proof generation,
-        // by refactoring `Cryptarchia`.
+        // TODO: Use a mock proof system instead of expensive real proof
+        // generation, by refactoring `Cryptarchia`.
         let (block, _) = try_build_block(
             &cryptarchia,
             blocks.last().unwrap().1,
@@ -126,7 +127,8 @@ fn bootstrapping_chain_of_three_blocks() -> (Cryptarchia, Vec<(Slot, HeaderId)>)
         let (pruned_blocks, reorged_blocks, _) = cryptarchia
             .try_apply_block(block, block_header_slot)
             .unwrap();
-        // No block should be pruned since LIB is not updated during Bootstrapping
+        // No block should be pruned since LIB is not updated during
+        // Bootstrapping
         assert!(pruned_blocks.is_empty());
         assert!(reorged_blocks.is_empty());
 
@@ -297,7 +299,7 @@ async fn get_block_ids_from_memory_and_storage() {
     let (secret_key, note) = note();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     )
@@ -886,7 +888,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
     let paths = commitment_paths(&genesis_notes);
     let genesis = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0),
+        LedgerState::from_notes(genesis_notes, &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     )
@@ -982,7 +984,7 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -1028,7 +1030,7 @@ fn a_copy_failing_an_operation_proof_leaves_the_genuine_block_applicable() {
     let paths = commitment_paths(&genesis_notes);
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0),
+        LedgerState::from_notes(genesis_notes, &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -1118,7 +1120,7 @@ fn a_copy_with_one_signature_too_many_leaves_the_genuine_block_applicable() {
     let paths = commitment_paths(&genesis_notes);
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes(genesis_notes, &config, 0),
+        LedgerState::from_notes(genesis_notes, &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -1226,7 +1228,7 @@ fn proposal_header_check_classifies_without_touching_the_chain() {
     let (secret_key, note) = note();
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -1307,7 +1309,7 @@ fn transfer_tx_with_fake_sig(
     let mut output_note = Note::new(1, Fr::ZERO, fake_key.to_public_key());
     let gas_context = OpsGasContext::from_channels(
         &Channels::new(),
-        GasPrices::default(),
+        GasPrices::new(1_000_000_000, 1_000_000_000),
         ledger_config(NonZero::new(1).unwrap()).gas_profile,
     );
     let fees = transfer_tx(note, output_note, fake_key, 0)
@@ -1431,7 +1433,7 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let (secret_key, note) = note();
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_notes([note], &config, 0),
+        LedgerState::from_notes([note], &config, &genesis_parameters()),
         single_era(config),
         lb_cryptarchia_engine::State::Online,
     )
@@ -1456,10 +1458,9 @@ fn disabled_reward_config() -> RewardPoWConfig {
         minimum_difficulty: ModulusShift::new::<26>(),
         ema_smoothing_factor: 9,
         ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
-        target_claims_per_block: 100,
+        target_claims_per_block: core::num::NonZeroU64::new(100).unwrap(),
         rate_num: 0,
         rate_den: core::num::NonZeroU64::MIN,
-        target_claim_per_block: core::num::NonZeroU64::MIN,
         pow_share: 0,
         share_den: core::num::NonZeroU64::MIN,
         slot_window: core::num::NonZeroU64::new(100).unwrap(),
@@ -1550,6 +1551,24 @@ pub fn ledger_config_with_max_uncles(
 }
 
 /// The costs of the deployments' current gas profile.
+/// The supply cap of a test chain, that of the deployments.
+pub const MAX_SUPPLY: Value = 10_000_000_000_000_000_000;
+
+/// The genesis parameters of a test chain: the supply cap and the genesis gas
+/// prices of the deployments.
+pub fn genesis_parameters() -> GenesisParameters {
+    GenesisParameters {
+        chain_id: "test".to_owned().try_into().unwrap(),
+        start_time: GenesisTime::new(0),
+        epoch_nonce: Fr::ZERO,
+        max_supply: MAX_SUPPLY,
+        pow_reward_pool: 0,
+        rewards_reserve: 1_000_000_000_000_000_000,
+        storage_gas_price: NonZero::new(1_000_000_000).unwrap(),
+        execution_gas_price: NonZero::new(1_000_000_000).unwrap(),
+    }
+}
+
 pub const GAS_PROFILE: GasProfile = GasProfile {
     transfer: Gas::new(10),
     program_register: Gas::new(15114),
@@ -1587,7 +1606,6 @@ fn ledger_config_with_uncles(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         },
     );
     let epoch_config = EpochConfig {
@@ -1597,7 +1615,7 @@ fn ledger_config_with_uncles(
     };
     let consensus_config = lb_cryptarchia_engine::Config::new(
         security_param,
-        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
         1.0.try_into().unwrap(),
         uncle_reference_window_in_block,
         max_uncles,
@@ -1612,7 +1630,7 @@ fn ledger_config_with_uncles(
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
-                    message_frequency_per_round: 1.0.try_into().unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
                     cover_replication_factor: 0,
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
@@ -1620,10 +1638,7 @@ fn ledger_config_with_uncles(
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: lb_core::sdp::MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: lb_core::sdp::MinStake { threshold: 1 },
         },
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
@@ -1632,24 +1647,27 @@ fn ledger_config_with_uncles(
         channel_withdraw_delay: 86_400.into(),
         execution_market: lb_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-            fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(9, 10.try_into().unwrap())
-                .unwrap(),
+            fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
         },
         storage_market: lb_ledger::config::StorageMarketConfig {
-            max_adjustment_factor: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                .unwrap(),
-            ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                .unwrap(),
+            max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
         },
         block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-            3_000_000_000_000_000_000,
-            120_000_000_000_000_000.try_into().unwrap(),
-            120.try_into().unwrap(),
-            10_512,
-            EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-            lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            lb_ledger::config::BlockRewardsParameters {
+                max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
+                min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
+                pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                pooled_fees_window: 120.try_into().unwrap(),
+                blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            },
+            10_000_000_000_000_000_000,
+            1.try_into().unwrap(),
+            ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
         )
         .unwrap(),
         gas_profile: GAS_PROFILE,
@@ -1955,7 +1973,7 @@ pub fn genesis_cryptarchia_on(note: Note, era_schedule: Arc<EraScheduledConfig>)
     let genesis_config = era_schedule.genesis().parameters.clone();
     Cryptarchia::from_genesis(
         GENESIS_ID.into(),
-        LedgerState::from_notes([note], &genesis_config, 0),
+        LedgerState::from_notes([note], &genesis_config, &genesis_parameters()),
         era_schedule,
         lb_cryptarchia_engine::State::Bootstrapping,
     )
@@ -1975,7 +1993,13 @@ pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
                     public_key: note.public_key,
                 })
                 .chain([GenesisAllocation {
-                    value: GENESIS_STAKE_SUPPLY - distributed,
+                    value: genesis_stake_supply(
+                        MAX_SUPPLY,
+                        genesis_parameters().pow_reward_pool,
+                        genesis_parameters().rewards_reserve,
+                    )
+                    .unwrap()
+                        - distributed,
                     public_key: ZkPublicKey::new(Fr::from(1u64)),
                 }]),
         )
@@ -1985,8 +2009,7 @@ pub fn genesis_block_with(notes: &[Note]) -> GenesisBlock {
             inscription: Inscription::new_unchecked(
                 GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    start_time: GenesisTime::new(0),
-                    epoch_nonce: Fr::ZERO,
+                    ..genesis_parameters()
                 }
                 .encode_to_vec(),
             ),

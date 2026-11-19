@@ -11,7 +11,7 @@ use lb_core::{
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
-use lb_ledger::{LedgerError, LedgerState};
+use lb_ledger::{LedgerError, LedgerState, config::BlockRewardsConfig};
 use lb_time::{
     Epoch, Slot,
     era::{EpochLength, EraEntriesAfterGenesis, SlotDuration},
@@ -99,9 +99,11 @@ impl DeploymentSettings {
     ) -> Result<Self, InvalidDeployment> {
         // Before resolving the eras, which reads their epoch lengths.
         eras.validate()?;
-        let (genesis_id, genesis_time) = (
+        let genesis_parameters = genesis_block.genesis_tx().genesis_parameters();
+        let (genesis_id, genesis_time, max_supply) = (
             genesis_block.header().id(),
-            genesis_block.genesis_tx().genesis_parameters().start_time,
+            genesis_parameters.start_time,
+            genesis_parameters.max_supply,
         );
         let eras_after_genesis = eras.eras_after_genesis();
         let mut era_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
@@ -110,7 +112,24 @@ impl DeploymentSettings {
         // Called in activation order: the fork digest of an era is over the
         // digests of the eras up to it, and an era accepts the fork digests
         // of the eras before it until one refuses the transactions of those.
-        let mut definition = |first_epoch: Epoch, ruleset: &EraRuleset| {
+        let mut definition = |era: usize, first_epoch: Epoch, ruleset: &EraRuleset| {
+            // The block rewards of every era follow the supply cap the genesis
+            // inscribes and the time the era's blocks take.
+            let EraRuleset::V1(parameters) = ruleset;
+            let block_rewards = BlockRewardsConfig::new(
+                parameters.cryptarchia.block_rewards,
+                max_supply,
+                parameters.time.slot_duration_in_seconds,
+                parameters.cryptarchia.slot_activation_coeff.get(),
+            )
+            .ok_or_else(|| {
+                InvalidDeployment::new(format!(
+                    "Era {era}: its block rewards cannot reward the blocks of a chain capped at \
+                     {max_supply}, the supply cap of the genesis, under its slot duration and \
+                     slot activation coefficient: a derived value does not fit, the scale of \
+                     the release's weight rounds down to zero, or a reward overflows an i128."
+                ))
+            })?;
             let digest = EraDigest::compute(first_epoch, ruleset);
             era_digests.push(digest);
             let fork_digest = ForkDigest::compute(genesis_id, era_digests.iter().copied());
@@ -122,23 +141,25 @@ impl DeploymentSettings {
             }
             accepted_fork_digests.push(fork_digest);
             previous_ruleset = Some(ruleset.clone());
-            EraDefinition {
+            Ok(EraDefinition {
                 ruleset: ruleset.clone(),
                 digest,
                 fork_digest,
                 accepted_fork_digests: AcceptedForkDigests::new(accepted_fork_digests.clone()),
-            }
+                block_rewards,
+            })
         };
-        let genesis = definition(GENESIS_EPOCH, eras.genesis_era());
-        let after_genesis = EraEntriesAfterGenesis::try_from_iter(eras_after_genesis.iter().map(
-            |(&first_epoch, ruleset)| {
-                (
-                    first_epoch,
-                    definition(Epoch::new(first_epoch.get()), ruleset),
-                )
-            },
-        ))
-        .expect("The resolved eras are as many as the declared ones.");
+        let genesis = definition(0, GENESIS_EPOCH, eras.genesis_era())?;
+        let after_genesis = eras_after_genesis
+            .iter()
+            .enumerate()
+            .map(|(index, (&first_epoch, ruleset))| {
+                definition(index + 1, Epoch::new(first_epoch.get()), ruleset)
+                    .map(|definition| (first_epoch, definition))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let after_genesis = EraEntriesAfterGenesis::try_from_iter(after_genesis)
+            .expect("The resolved eras are as many as the declared ones.");
         let eras =
             EraSchedule::new(genesis_time.into(), genesis, after_genesis).map_err(|error| {
                 InvalidDeployment::new(format!("The eras cannot be resolved: {error}."))
@@ -315,6 +336,8 @@ pub struct EraDefinition {
     pub fork_digest: ForkDigest,
     /// The fork digests a transaction may carry in this era.
     pub accepted_fork_digests: AcceptedForkDigests,
+    /// The block rewards of the era, on the supply cap of the genesis.
+    pub block_rewards: BlockRewardsConfig,
 }
 
 impl SlotDuration for EraDefinition {
@@ -548,7 +571,8 @@ mod tests {
     fn a_deployment_that_changes_the_era_of_the_tip_is_refused() {
         let two_eras = two_eras();
         let era_1 = two_eras.era_schedule().get(Era::new(1)).unwrap();
-        // A tip in era 1, a slot the default deployment gives to the genesis era.
+        // A tip in era 1, a slot the default deployment gives to the genesis
+        // era.
         let tip_era = TipEra {
             slot: era_1.first_slot,
             fork_digest: era_1.parameters.fork_digest,

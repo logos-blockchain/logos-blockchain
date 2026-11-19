@@ -109,9 +109,9 @@ pub fn prove(
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
             error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
-            // We panic here because this should never happen, and if it does, it's a
-            // critical error that we want to be immediately visible during
-            // development and testing.
+            // We panic here because this should never happen, and if it does,
+            // it's a critical error that we want to be immediately
+            // visible during development and testing.
             panic!("Fatal CompressedGroth16Proof::try_from: {e}")
         }),
         verifier_inputs
@@ -188,9 +188,9 @@ mod tests {
     use super::*;
     use crate::test_utils::sample_witness_data;
 
-    // Sample: active inputs of 2643 and 4744 and a paid value of 2636 balance seven
-    // outputs of 1252 and one of 1259; the first four outputs are notes of the
-    // program.
+    // Sample: active inputs of 2643 and 4744 and a paid value of 2636 balance
+    // seven outputs of 1252 and one of 1259; the first four outputs are
+    // notes of the program.
     const SAMPLE_PAID: u64 = 2636;
     const SAMPLE_OF_PROGRAM: [bool; 8] = [true, true, true, true, false, false, false, false];
 

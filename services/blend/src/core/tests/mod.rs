@@ -1,4 +1,8 @@
-use core::{iter::once, num::NonZeroU64, time::Duration};
+use core::{
+    iter::once,
+    num::{NonZeroU32, NonZeroU64},
+    time::Duration,
+};
 use std::{collections::VecDeque, sync::Arc};
 
 use futures::{
@@ -21,6 +25,7 @@ use lb_cryptarchia_engine::Era;
 use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
+use lb_utils::math::PositiveRatio;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
@@ -1893,8 +1898,9 @@ async fn test_initialize_recovers_matching_saved_state() {
             u64::from(minimal_network_size).try_into().unwrap(),
             0,
         );
-        // More than one layer, so the emission slots the recovery state counts and the
-        // key indices the generator resumes from cannot be confused for each other.
+        // More than one layer, so the emission slots the recovery state counts
+        // and the key indices the generator resumes from cannot be
+        // confused for each other.
         settings.num_blend_layers = 3.try_into().unwrap();
         (settings, local_node)
     };
@@ -1922,7 +1928,8 @@ async fn test_initialize_recovers_matching_saved_state() {
         dummy_overwatch_resources();
     let (sdp_relay_1, _sdp_relay_receiver) = sdp_relay();
 
-    // Build a pre-populated saved state with matching epoch and some spent quota.
+    // Build a pre-populated saved state with matching epoch and some spent
+    // quota.
     let public_info = new_epoch_info(initial_epoch, membership.clone(), &settings);
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let saved_state = ServiceState::with_epoch(
@@ -1979,17 +1986,17 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Matching epoch: spent_quota should be restored from saved state"
     );
     assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
-    // A transaction still waiting for a `PoW` solution has not been encapsulated
-    // and so belongs to no epoch: a restart must not lose it.
+    // A transaction still waiting for a `PoW` solution has not been
+    // encapsulated and so belongs to no epoch: a restart must not lose it.
     assert_eq!(
         recovered_checkpoint.pending_transactions().front(),
         Some(&b"transaction".to_vec()),
         "Matching epoch: a queued transaction should be restored from saved state"
     );
-    // The restored quota is also what tells the core proof generator where to pick
-    // up — it is counted in proofs, and the generator hands out one per key index.
-    // Re-proving an index re-derives a key nullifier this node already put on the
-    // wire, and peers drop that as a duplicate.
+    // The restored quota is also what tells the core proof generator where to
+    // pick up — it is counted in proofs, and the generator hands out one
+    // per key index. Re-proving an index re-derives a key nullifier this
+    // node already put on the wire, and peers drop that as a duplicate.
     assert_eq!(
         recorded_starting_core_key_indices(),
         vec![Quota::new::<15>()],
@@ -2102,8 +2109,8 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
         u64::from(minimal_network_size).try_into().unwrap(),
         0,
     );
-    // A long epoch makes the core quota, and with it the activity threshold, high
-    // enough for a single token to clear it.
+    // A long epoch makes the core quota, and with it the activity threshold,
+    // high enough for a single token to clear it.
     settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
 
     // Saved under epoch 0; the node comes back up in epoch 1.
@@ -2302,7 +2309,8 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     // No cover traffic, so the only message that can come out is the proposal.
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
     settings.time.round_duration_in_seconds = FALLBACK_TEST_ROUND_IN_SECONDS;
     let deadline = Duration::from_secs(
         FALLBACK_TEST_ROUND_IN_SECONDS.get() * settings.max_data_message_delay_in_rounds().get(),
@@ -2476,7 +2484,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     // No cover traffic, so the only message that can come out is the proposal.
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2561,8 +2570,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
         .await;
     });
 
-    // The gate is shut, so the leadership branch has nothing to give: this is the
-    // window the proposal used to die in.
+    // The gate is shut, so the leadership branch has nothing to give: this is
+    // the window the proposal used to die in.
     inbound_message_sender
         .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             b"proposal".to_vec(),
@@ -2622,7 +2631,8 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
     // No cover traffic, so the only message that can come out is the queued
     // transaction. See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
@@ -2769,7 +2779,8 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     // No cover traffic, so the only message that can come out is the one this
     // test expects. See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2901,7 +2912,8 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     // Anything in `(0, 0.1]` gives the same quota, so the halfway point keeps
     // float drift well clear of either rounding boundary.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();

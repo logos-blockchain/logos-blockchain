@@ -410,9 +410,9 @@ mod tests {
     fn a_program_step_covers_the_buffer_at_its_position() {
         let context = empty();
         let mut state = TxGasState::new(&context);
-        // The deposit of the mini-block covers nothing buffered, the program step
-        // the change of the deposit, then the next deposit and program step the
-        // change and the program note.
+        // The deposit of the mini-block covers nothing buffered, the program
+        // step the change of the deposit, then the next deposit and
+        // program step the change and the program note.
         let deposit = Step::ProgramDeposit(ProgramDeposit::sample());
         let program = Step::Program(ProgramStep::sample());
         state.apply(

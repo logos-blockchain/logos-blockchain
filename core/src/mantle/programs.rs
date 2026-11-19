@@ -132,8 +132,8 @@ pub enum ProgramKeyError {
 pub fn derive_program_id(key: &ProgramVerificationKey) -> ProgramId {
     let mut preimage = PROGRAM_ID_V1.clone();
     key.encode_into(&mut preimage);
-    // A classic hash, reduced mod `p` as `op_id` is, since `ProgramId` is a field
-    // of the note commitment.
+    // A classic hash, reduced mod `p` as `op_id` is, since `ProgramId` is a
+    // field of the note commitment.
     Fr::from_le_bytes_mod_order(&Hasher::digest(&preimage))
 }
 
@@ -311,8 +311,8 @@ pub fn program_step_id(
     inputs: &[SpendInputFields; MAX_INPUTS],
     outputs: &[SpendOutputFields; MAX_OUTPUTS],
 ) -> Fr {
-    // Each field is multiplied by its flag, so an inactive input or output reads
-    // as 0 and a spend has a single hash.
+    // Each field is multiplied by its flag, so an inactive input or output
+    // reads as 0 and a spend has a single hash.
     let inputs = inputs.iter().flat_map(|input| {
         let flag = Fr::from(input.active);
         [

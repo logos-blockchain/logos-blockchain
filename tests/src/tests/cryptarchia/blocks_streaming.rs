@@ -666,7 +666,8 @@ async fn test_blocks_streaming() {
 
     // ============== Clamping (soft failures) =============
 
-    // case: three blocks from LIB and up (immutable only, slot_to clamps to LIB)
+    // case: three blocks from LIB and up (immutable only, slot_to clamps to
+    // LIB)
     println!("case: three blocks from LIB and up (immutable only, slot_to clamps to LIB)");
 
     chain = refresh_chain(node, &chain).await;
@@ -792,8 +793,8 @@ async fn test_blocks_streaming() {
 
     // ============== Failure modes =============
 
-    // case: single block above LIB (immutable only, explicit slot_from stays above
-    // clamped LIB)
+    // case: single block above LIB (immutable only, explicit slot_from stays
+    // above clamped LIB)
     println!(
         "case: single block above LIB (immutable only, explicit slot_from stays above clamped LIB)"
     );
@@ -819,8 +820,8 @@ async fn test_blocks_streaming() {
         "invalid clamped range should mention 'slot_from', got: {err}"
     );
 
-    // case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw HTTP
-    // query
+    // case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw
+    // HTTP query
     println!("case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw HTTP query");
 
     let (tip_slot, _) = current_tip_lib_slot(node).await;

@@ -71,7 +71,8 @@ where
     ///   cover messages) to decide whether to skip the emission in favour of an
     ///   already-queued data message.
     fn consume_round(&mut self) -> bool {
-        // We need to check this since we use it as a fraction denominator later on.
+        // We need to check this since we use it as a fraction denominator later
+        // on.
         let Ok(non_zero_unconsumed_remaining_rounds) =
             NonZeroU128::try_from(self.remaining_rounds.inner())
         else {
@@ -82,8 +83,8 @@ where
             tracing::trace!(target: LOG_TARGET, "No remaining rounds.");
             return false;
         };
-        // Update remaining rounds regardless of what we do next, since we are consuming
-        // this round.
+        // Update remaining rounds regardless of what we do next, since we are
+        // consuming this round.
         self.remaining_rounds = (non_zero_unconsumed_remaining_rounds.get() - 1).into();
 
         // Decide whether this round is a release round based on the ratio of
@@ -99,8 +100,8 @@ where
         let non_zero_unconsumed_remaining_messages = NonZeroU64::try_from(self.remaining_messages)
             .expect("There should be at least one remaining message if this is a release round.");
 
-        // This is a release round, so no matter if we end up releasing a new cover
-        // message or not, we consume one quota.
+        // This is a release round, so no matter if we end up releasing a new
+        // cover message or not, we consume one quota.
         self.remaining_messages = non_zero_unconsumed_remaining_messages.get() - 1;
 
         if self.unprocessed_data_messages == 0 {
@@ -300,8 +301,8 @@ mod tests {
             }
         });
 
-        // Out of `3` scheduled release rounds, only one will yield a cover message,
-        // since there's `2` unprocessed data messages.
+        // Out of `3` scheduled release rounds, only one will yield a cover
+        // message, since there's `2` unprocessed data messages.
         assert_eq!(cover_message_count, 1);
         // Check that the number of processed messages has been consumed.
         assert_eq!(scheduler.unprocessed_data_messages, 0);

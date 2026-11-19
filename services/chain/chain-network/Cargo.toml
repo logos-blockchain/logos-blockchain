@@ -43,6 +43,7 @@ tracing-futures       = { workspace = true }
 
 [dev-dependencies]
 lb-core            = { workspace = true }
+lb-groth16         = { workspace = true }
 lb-network-service = { workspace = true }
 lb-time            = { workspace = true }
 lb-utils           = { workspace = true }

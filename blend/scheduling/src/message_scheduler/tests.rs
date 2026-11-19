@@ -41,8 +41,8 @@ async fn no_substream_ready_and_no_data_messages() {
     );
     let mut cx = Context::from_waker(noop_waker_ref());
 
-    // We poll for round 0, which returns `Pending`, as per the default scheduler
-    // configuration.
+    // We poll for round 0, which returns `Pending`, as per the default
+    // scheduler configuration.
     assert!(scheduler.poll_next_unpin(&mut cx).is_pending());
 }
 
@@ -260,10 +260,11 @@ async fn rotate_epoch_leaves_queued_data_messages_with_the_old_epoch() {
         vec![1, 2],
     );
 
-    // Rotating into a new epoch must not silently drop the queued data messages,
-    // but it must not hand them to the new epoch either: they carry the old
-    // epoch's `PoQ`, so publishing them under the new epoch's number would get
-    // the proof rejected and this node closed as malicious, and blacklisted.
+    // Rotating into a new epoch must not silently drop the queued data
+    // messages, but it must not hand them to the new epoch either: they
+    // carry the old epoch's `PoQ`, so publishing them under the new epoch's
+    // number would get the proof rejected and this node closed as
+    // malicious, and blacklisted.
     let (new_scheduler, old_scheduler) = scheduler.rotate_epoch(
         EpochInfo {
             core_quota: Quota::ONE,
@@ -299,9 +300,10 @@ fn old_epoch_scheduler(
 
 #[tokio::test]
 async fn old_epoch_releases_leftover_data_messages_on_a_non_release_round() {
-    // Round `1` is scheduled for processed messages, so round `0` is not a release
-    // round for them. The leftover data messages must still go out: they are only
-    // deliverable while the old epoch's peers are still around.
+    // Round `1` is scheduled for processed messages, so round `0` is not a
+    // release round for them. The leftover data messages must still go out:
+    // they are only deliverable while the old epoch's peers are still
+    // around.
     let mut scheduler = old_epoch_scheduler(1, vec![], vec![1, 2]);
     let mut cx = Context::from_waker(noop_waker_ref());
 
@@ -325,9 +327,10 @@ async fn old_epoch_is_pending_on_a_non_release_round_without_data_messages() {
 
 #[tokio::test]
 async fn old_epoch_releases_data_and_processed_messages_on_the_same_round() {
-    // Round `0` is a release round for processed messages, and there are leftover
-    // data messages queued as well. Both go out together, and never as a cover
-    // release type: the old epoch generates no cover traffic.
+    // Round `0` is a release round for processed messages, and there are
+    // leftover data messages queued as well. Both go out together, and
+    // never as a cover release type: the old epoch generates no cover
+    // traffic.
     let mut scheduler = old_epoch_scheduler(0, vec![1], vec![2]);
     let mut cx = Context::from_waker(noop_waker_ref());
 

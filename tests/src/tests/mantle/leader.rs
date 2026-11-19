@@ -1,6 +1,6 @@
 use std::{num::NonZero, path::PathBuf, time::Duration};
 
-use lb_core::mantle::transactions::UNITS_PER_LGO;
+use lb_config::consensus::UNITS_PER_LGO;
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody, transfer_funds::WalletTransferFundsRequestBody,
@@ -35,9 +35,10 @@ async fn leader_rewards_reach_the_leader_wallet() {
     let before = wallet_balance(&node.client, leader_funding_pk)
         .await
         .balance;
-    // The genesis total stake is above its target, so the reserve releases nothing
-    // and the block reward is what the pooled fees pay: a transaction funds it,
-    // from another key so the fee does not come out of the balance it should grow.
+    // The genesis total stake is above its target, so the reserve releases
+    // nothing and the block reward is what the pooled fees pay: a
+    // transaction funds it, from another key so the fee does not come out
+    // of the balance it should grow.
     node.client
         .transfer_funds(WalletTransferFundsRequestBody {
             tip: None,

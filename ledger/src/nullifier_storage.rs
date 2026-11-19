@@ -445,7 +445,7 @@ mod tests {
     use super::*;
     use crate::{
         Ledger, LedgerState, Restored,
-        cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config},
+        cryptarchia::tests::{config, genesis_parameters},
         test_utils::single_era,
         update::BatchVerifiedUpdate,
     };
@@ -596,7 +596,7 @@ mod tests {
         fn with_store(store: DynKvStore) -> Self {
             let config = config();
             // a genesis state is built in memory, then moved to the store
-            let state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL)
+            let state = LedgerState::from_notes([], &config, &genesis_parameters())
                 .with_nullifier_store(&store)
                 .unwrap();
             let eras = single_era(config);
@@ -637,8 +637,9 @@ mod tests {
             self.extend_with(parent, &[(LEDGER_SET, nullifiers)], |state| state)
         }
 
-        // Applies a block on `parent`: `amend` to its state, then the spending of
-        // `spent` in each set. Then prunes what the consensus prunes.
+        // Applies a block on `parent`: `amend` to its state, then the spending
+        // of `spent` in each set. Then prunes what the consensus
+        // prunes.
         fn extend_with(
             &mut self,
             parent: Id,
@@ -1053,7 +1054,7 @@ mod tests {
     fn test_a_store_without_lib_state_restores_nothing() {
         let store = ErasedKv::into_dyn(MemKv::new());
         let config = config();
-        let state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL)
+        let state = LedgerState::from_notes([], &config, &genesis_parameters())
             .with_nullifier_store(&store)
             .unwrap();
         let eras = Arc::new(single_era(config));

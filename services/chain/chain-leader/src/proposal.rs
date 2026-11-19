@@ -84,7 +84,8 @@ mod tests {
         let key = UnsecuredZkKey::new(Fr::from(7u64));
         let nullifier_key = key.nullifier_key();
         let note = notes::Note::new(1_000, Fr::from(11u64), key.to_public_key());
-        let ledger = LedgerState::from_notes([note], &config, 0);
+        let ledger =
+            LedgerState::from_notes([note], &config, &crate::leadership::genesis_parameters());
         let (_, aged_path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
             .unwrap();
@@ -140,8 +141,9 @@ mod tests {
         assert!(block.header().verify(&public));
         let proof = block.header().leader_proof().clone();
         assert!(!Header::new(parent, ContentId::from([9; 32]), slot, proof).verify(&public));
-        // `Groth16LeaderProof::from_parts` is crate private in core: `msg`, bound to
-        // the reward note, is proven under another key of that note.
+        // `Groth16LeaderProof::from_parts` is crate private in core: `msg`,
+        // bound to the reward note, is proven under another key of that
+        // note.
         wallet.reward_public_key = Fr::from(5u64);
         let other_key = assemble_block(
             parent,

@@ -99,7 +99,8 @@ impl VerifiableOperation<StandardMode>
         let declaration = context.declaration;
         validate_declaration_id(operation.declaration_id, declaration)?;
 
-        // Check that the declaration hasn't been already scheduled to be withdrawn.
+        // Check that the declaration hasn't been already scheduled to be
+        // withdrawn.
         if let Some(withdraw_at) = declaration.withdraw_at {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: operation.declaration_id,
@@ -113,16 +114,16 @@ impl VerifiableOperation<StandardMode>
             .provider_id
             .verify(context.tx_hash_view.as_bytes(), &self.proof().ed25519_sig)?;
 
-        // Check that the service note is unspent. The message carries no nonce: it is
-        // valid only while no withdrawal is scheduled, and consumes this nullifier
-        // once.
+        // Check that the service note is unspent. The message carries no nonce:
+        // it is valid only while no withdrawal is scheduled, and
+        // consumes this nullifier once.
         context
             .note_sets
             .sdp()
             .assert_spendable(&[operation.service_note_nullifier])?;
 
-        // The root of an empty MMR to which only the service note of the declaration is
-        // appended.
+        // The root of an empty MMR to which only the service note of the
+        // declaration is appended.
         let tx_commitment_root = CommitmentMmr::new()
             .push(declaration.service_note)
             .expect("one commitment fits in an empty MMR")
@@ -168,9 +169,10 @@ impl<Mode: VerificationMode> ExecutableOperation
         // Delay the withdrawal by `SNAPSHOT_FINALIZATION_DELAY` epochs
         // to prevent "stake-less service provision".
         // Otherwise, providers can continue providing the service even after
-        // withdrawal because SDP uses the snapshot from `SNAPSHOT_FINALIZATION_DELAY`
-        // epochs ago.
-        // The note will be unlocked once the withdrawn epoch set here is reached.
+        // withdrawal because SDP uses the snapshot from
+        // `SNAPSHOT_FINALIZATION_DELAY` epochs ago.
+        // The note will be unlocked once the withdrawn epoch set here is
+        // reached.
         declaration.withdraw_at = Some(context.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
         // The outputs wait, with no input, until the declaration is removed.
         context.pending_withdrawals = context.pending_withdrawals.push(PendingWithdrawal {
@@ -342,8 +344,8 @@ mod tests {
     fn verify_defers_the_zk_transfer_against_the_service_note_root() {
         let declaration = declaration();
         let operation = operation();
-        // Other notes of the SDP set do not change the root the withdrawal is proven
-        // against.
+        // Other notes of the SDP set do not change the root the withdrawal is
+        // proven against.
         let sdp = NoteSets::new()
             .sdp()
             .clone()
@@ -594,8 +596,8 @@ mod tests {
 
     #[test]
     fn sdp_withdraw_op_execution_gas_does_not_scale_with_the_threshold() {
-        // The service note and 1 output: 0 + 557 + 4177 + 1758 + 58, and the root
-        // of the note alone, 2332 + 60
+        // The service note and 1 output: 0 + 557 + 4177 + 1758 + 58, and the
+        // root of the note alone, 2332 + 60
         for threshold in [0, 1, 3] {
             assert_eq!(
                 SDPWithdrawOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),

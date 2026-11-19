@@ -229,8 +229,8 @@ async fn drip_with_retries(faucet: &Faucet, recipient_pk: ZkPublicKey) {
                 }
             }
         }
-        // A failed attempt may be a note still reserved for the first one, whose
-        // transaction can land in the meantime.
+        // A failed attempt may be a note still reserved for the first one,
+        // whose transaction can land in the meantime.
         match &first_attempt {
             Some(first) => {
                 if faucet.wait_for_confirmation(first.balance).await {
@@ -342,7 +342,8 @@ mod tests {
         assert!(pending_notes_hold_the_drip(&notes, &pending, 50));
         // what is spendable pays the drip, whatever else is pending
         assert!(!pending_notes_hold_the_drip(&notes, &pending, 40));
-        // nothing is pending: waiting would change nothing, however short the funds
+        // nothing is pending: waiting would change nothing, however short the
+        // funds
         assert!(!pending_notes_hold_the_drip(&notes, &HashSet::new(), 500));
     }
 
@@ -353,10 +354,12 @@ mod tests {
         // the first attempt landed: this note is its change, a second payment
         let change = HashMap::from([("c", 49)]);
         assert!(!conflicts_with_first_attempt(&single, &change));
-        // another note can fund a transfer that spends nothing of the first attempt
+        // another note can fund a transfer that spends nothing of the first
+        // attempt
         let topped_up = HashMap::from([("n", 100), ("t", 500)]);
         assert!(!conflicts_with_first_attempt(&single, &topped_up));
-        // the first attempt may have spent the note that is not funding this one
+        // the first attempt may have spent the note that is not funding this
+        // one
         assert!(!conflicts_with_first_attempt(&topped_up, &topped_up));
     }
 }

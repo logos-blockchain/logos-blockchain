@@ -144,8 +144,9 @@ pub trait StreamBehaviourExt: libp2p_swarm_test::SwarmExt {
 #[async_trait]
 impl StreamBehaviourExt for Swarm<StreamBehaviour> {
     async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<TestBehaviour>) -> Stream {
-        // We connect and return the stream preventing it from being dropped so the
-        // blend node does not close the connection with an EOF error.
+        // We connect and return the stream preventing it from being dropped so
+        // the blend node does not close the connection with an EOF
+        // error.
         self.connect(other).await;
         let stream = self
             .behaviour_mut()

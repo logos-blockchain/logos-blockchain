@@ -393,9 +393,11 @@ impl WalletState {
                     return Ok(funded_tx_builder);
                 }
                 Ordering::Greater => {
-                    // We have enough balance, but we need to introduce a change note.
-                    // The change note will slightly increase the storage cost of the tx so there is
-                    // a chance that we will not be able to fund the tx with the change note.
+                    // We have enough balance, but we need to introduce a change
+                    // note. The change note will slightly
+                    // increase the storage cost of the tx so there is
+                    // a chance that we will not be able to fund the tx with the
+                    // change note.
                     if let Some(tx_with_change) = funded_tx_builder.return_change(
                         context,
                         change_pk,
@@ -428,9 +430,9 @@ impl WalletState {
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         excluded: &HashSet<NoteNullifier>,
     ) -> Result<(TransferOp, ZkTransferOpening), WalletError> {
-        // The smallest note covering `value` alone, else the smallest notes that
-        // do, else the largest ones, so the larger notes stay free to fund the
-        // fee whenever they can.
+        // The smallest note covering `value` alone, else the smallest notes
+        // that do, else the largest ones, so the larger notes stay free
+        // to fund the fee whenever they can.
         let candidates = self.funding_candidates(pks, excluded);
         let (inputs, total) = if let Some(owned) = candidates
             .iter()
@@ -1145,7 +1147,8 @@ mod tests {
     fn epoch_change_rotates_the_aged_paths() {
         let owned = Note::new(100, Fr::from(1u64), pk(1));
         let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
-        // root of the ledger set holding `owned` then commitment(1)..=commitment(n)
+        // root of the ledger set holding `owned` then
+        // commitment(1)..=commitment(n)
         let root_at = |n: u64| {
             (1..=n)
                 .fold(
@@ -1391,7 +1394,8 @@ mod tests {
         }
     }
 
-    // `tx_builder` funded by one note of value 0, to price its funding Transfer.
+    // `tx_builder` funded by one note of value 0, to price its funding
+    // Transfer.
     fn with_zero_input(tx_builder: &MantleTxBuilder) -> MantleTxBuilder {
         tx_builder
             .clone()
@@ -1491,7 +1495,8 @@ mod tests {
         let root = funding_transfer(funded.clone()).commitment_merkle_root;
         assert_eq!(root, ledger_root_at(&wallet, 36));
 
-        // Block 40 loses to a sibling, which the block of the root is an ancestor of.
+        // Block 40 loses to a sibling, which the block of the root is an
+        // ancestor of.
         wallet
             .apply_block(&block(
                 41,
@@ -1521,8 +1526,9 @@ mod tests {
             path_at_root.siblings()[0]
         );
 
-        // The LIB advancing to 38 keeps the states of the blocks right below it, so
-        // a spend from 40 still names the root of 36, and drops the deeper ones.
+        // The LIB advancing to 38 keeps the states of the blocks right below
+        // it, so a spend from 40 still names the root of 36, and drops
+        // the deeper ones.
         wallet.prune_states(block_id(38));
         assert_eq!(
             funding_transfer(fund(&wallet, 40)).commitment_merkle_root,
@@ -1660,9 +1666,9 @@ mod tests {
             .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
-        // The cost with a change note, 6279: 268 bytes at a storage price of 1, and
-        // 10 + 4177 + 1758 + 58 + 268 * 30 // 1000 = 6011 Execution Gas at a price
-        // of 1.
+        // The cost with a change note, 6279: 268 bytes at a storage price of 1,
+        // and 10 + 4177 + 1758 + 58 + 268 * 30 // 1000 = 6011 Execution
+        // Gas at a price of 1.
         assert_eq!(6279, fee);
         assert_eq!(i128::from(fee), funded_tx_builder.net_balance());
         assert_eq!(
@@ -1822,7 +1828,8 @@ mod tests {
         // 5000) and therefore no change note was added.
         assert_eq!(0, funded_tx_builder.net_balance());
 
-        // No funding Transfer is appended, so the built tx carries no transfer op.
+        // No funding Transfer is appended, so the built tx carries no transfer
+        // op.
         let funded_tx = funded_tx_builder.build(FORK_DIGEST).unwrap();
         assert!(
             !funded_tx.iter().any(|op| matches!(op, Op::Transfer(_))),
@@ -2015,12 +2022,12 @@ mod tests {
             .minimum_gas_cost(&context)
             .unwrap()
             .into_inner();
-        // 236 bytes at a storage price of 1, and 10 + 4177 + 1758 + 236 * 30 // 1000 =
-        // 5952 Execution Gas at a price of 1.
+        // 236 bytes at a storage price of 1, and 10 + 4177 + 1758 + 236 * 30 //
+        // 1000 = 5952 Execution Gas at a price of 1.
         assert_eq!(6188, cost_without_change);
 
-        // We can fund the tx if the note value is exactly the gas cost without change
-        // note
+        // We can fund the tx if the note value is exactly the gas cost without
+        // change note
         let funded_tx_wo_change = fund(cost_without_change).unwrap(); // successfully funded the tx
 
         // verify that no change output was used.
@@ -2046,7 +2053,8 @@ mod tests {
             );
         }
 
-        // We can fund the tx if the note value exceeds gas cost with change note
+        // We can fund the tx if the note value exceeds gas cost with change
+        // note
         let funded_tx_with_change = fund(cost_with_change + 1).unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.

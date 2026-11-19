@@ -79,12 +79,8 @@ impl BinaryDecode for Groth16LeaderProof {
         (): &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (rest, proof_bytes) = <[u8; COMPRESSED_PROOF_SIZE]>::decode(input, &())?;
-        let proof = lb_pol::PoLProof::try_from_bytes(&proof_bytes).map_err(|error| {
-            DecodeError::InvalidValue {
-                type_name: "PoLProof",
-                message: error.to_string().into(),
-            }
-        })?;
+        let proof = lb_pol::PoLProof::try_from_bytes(&proof_bytes)
+            .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
         let (rest, entropy_contribution) = Fr::decode(rest, &())?;
         let (rest, reward_commitment) = NoteCommitment::decode(rest, &())?;
         let (rest, reward_value) = Value::decode(rest, &())?;
@@ -453,7 +449,8 @@ pub fn pol_wallet_inputs(
     let (LowLeaf { leaf: low_aged, .. }, low_aged_path) = low_leaf_witness(aged_set, nullifier)?;
     let (low_leaf_aged_path, low_leaf_aged_selectors) = nodes_and_selectors(&low_aged_path);
 
-    // Both eligible trees hold the set at the same index, so the selectors agree.
+    // Both eligible trees hold the set at the same index, so the selectors
+    // agree.
     let (set_aged_path, set_selectors) =
         nodes_and_selectors(&aged.eligible_path(note_set).ok_or_else(unknown)?);
     let (set_latest_path, _) =
@@ -513,7 +510,7 @@ mod proof_serde {
 pub mod test_utils {
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
 
     use super::*;
     use crate::mantle::{
@@ -556,7 +553,7 @@ pub mod test_utils {
 
         let eligible = sets.eligible_root();
         let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+            LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
                 .compute_lottery_values(value);
         let public = (0..10_000u64)
             .map(|epoch_nonce| {
@@ -601,7 +598,7 @@ mod tests {
     use ark_ff::Field as _;
     use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
     use lb_pol::LotteryConstants;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
     use rand::RngCore as _;
 
     use super::*;
@@ -710,7 +707,7 @@ mod tests {
 
     #[test]
     fn test_check_winning() {
-        let slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
+        let slot_activation_coeff = ProperFraction::new(1, 10.try_into().unwrap()).unwrap();
         let constants = LotteryConstants::new(slot_activation_coeff);
 
         // winning rate of all the stake should be ~ active slot coeff
@@ -726,13 +723,14 @@ mod tests {
         let reward = notes::Note::new(500, Fr::from(13u64), ZkPublicKey::new(Fr::from(17u64)));
         let (public, private) =
             test_utils::note_set_leader_inputs(Fr::from(7u64), 1000, Fr::from(11u64), msg, &reward);
-        // The leader computes the entropy contribution before proving, to bind the
-        // proof to the block ID that covers it.
+        // The leader computes the entropy contribution before proving, to bind
+        // the proof to the block ID that covers it.
         let entropy_contribution = private.entropy_contribution();
         let proof = Groth16LeaderProof::prove(private).unwrap();
         assert!(proof.verify(&public, msg));
         assert_eq!(proof.entropy(), entropy_contribution);
-        // The circuit derives the commitment of the node's note, under its value.
+        // The circuit derives the commitment of the node's note, under its
+        // value.
         assert_eq!(proof.reward_commitment(), reward.commitment());
         assert_eq!(proof.reward_value(), 500);
 
@@ -857,7 +855,8 @@ mod tests {
         // The spending secret key does not lead.
         assert!(!check_winning(&note, public, *key.as_fr(), *key.as_fr()));
 
-        // A note staked under another key leads with its staking secret key only.
+        // A note staked under another key leads with its staking secret key
+        // only.
         let staking_secret_key = Fr::from(9u64);
         let staked = notes::Note {
             stake_public_key: kdf_public_key(&staking_secret_key),

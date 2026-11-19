@@ -530,9 +530,9 @@ mod tests {
         assert_eq!(current, tree.root());
     }
 
-    // `Blake2bTree` is a type alias for the foreign `MerkleTree`, so `Arbitrary`
-    // (also foreign) can't be implemented on it directly. Wrap it in a local
-    // newtype for the property test.
+    // `Blake2bTree` is a type alias for the foreign `MerkleTree`, so
+    // `Arbitrary` (also foreign) can't be implemented on it directly. Wrap
+    // it in a local newtype for the property test.
     #[derive(Clone, Debug)]
     struct ArbTree(Blake2bTree<TestLeaf, TestLeaf>);
 

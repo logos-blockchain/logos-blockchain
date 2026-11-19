@@ -226,14 +226,12 @@ mod tests {
                 .validation_mode(gossipsub::ValidationMode::None)
                 .build()
                 .unwrap();
-            let mut behaviour = gossipsub::Behaviour::<
-                gossipsub::IdentityTransform,
-                gossipsub::AllowAllSubscriptionFilter,
-            >::new(
-                gossipsub::MessageAuthenticity::Author(author),
-                config.clone(),
-            )
-            .unwrap();
+            let mut behaviour =
+                gossipsub::Behaviour::<
+                    gossipsub::IdentityTransform,
+                    gossipsub::AllowAllSubscriptionFilter,
+                >::new(gossipsub::MessageAuthenticity::Author(author), config)
+                .unwrap();
             assert!(!matches!(
                 behaviour.publish(gossipsub::IdentTopic::new(topic), vec![0; max_payload_size]),
                 Err(gossipsub::PublishError::MessageTooLarge)

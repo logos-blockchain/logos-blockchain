@@ -1315,6 +1315,8 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZero;
+
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -1335,7 +1337,8 @@ mod tests {
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
-    // ── helpers ───────────────────────────────────────────────────────────────
+    // ── helpers
+    // ───────────────────────────────────────────────────────────────
 
     fn valid_inscription() -> InscriptionOp {
         InscriptionOp {
@@ -1345,6 +1348,11 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    max_supply: 1000,
+                    pow_reward_pool: 5,
+                    rewards_reserve: 100,
+                    storage_gas_price: NonZero::<u64>::MIN,
+                    execution_gas_price: NonZero::<u64>::MIN,
                 }
                 .encode_to_vec(),
             ),
@@ -1362,6 +1370,11 @@ mod tests {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    max_supply: 1000,
+                    pow_reward_pool: 5,
+                    rewards_reserve: 100,
+                    storage_gas_price: NonZero::<u64>::MIN,
+                    execution_gas_price: NonZero::<u64>::MIN,
                 }
                 .encode_to_vec(),
             ),
@@ -1402,7 +1415,8 @@ mod tests {
         assert_eq!(block.transactions_iter().len(), 1);
     }
 
-    // ── helpers for the with_genesis_tx path ──────────────────────────────────
+    // ── helpers for the with_genesis_tx path
+    // ──────────────────────────────────
 
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedOps<Preverified, GenesisMode> {
         let notes = [make_note(1_000)];
@@ -1449,7 +1463,8 @@ mod tests {
         GenesisTx::from_tx(make_signed_genesis_tx(extra_ops)).expect("valid genesis tx")
     }
 
-    // ── with_genesis_tx path ──────────────────────────────────────────────────
+    // ── with_genesis_tx path
+    // ──────────────────────────────────────────────────
 
     #[test]
     fn with_genesis_tx_builds_block() {
@@ -1467,7 +1482,8 @@ mod tests {
         assert_block_valid(&block);
     }
 
-    // ── GenesisBlockBuilder traits ────────────────────────────────────────────
+    // ── GenesisBlockBuilder traits
+    // ────────────────────────────────────────────
 
     #[test]
     fn default_equals_new() {
@@ -1494,7 +1510,8 @@ mod tests {
         );
     }
 
-    // ── op-accumulation happy paths (all six orderings) ───────────────────────
+    // ── op-accumulation happy paths (all six orderings)
+    // ───────────────────────
 
     #[test]
     fn order_note_inscription_declaration() {
@@ -1612,7 +1629,8 @@ mod tests {
         assert_eq!(genesis_tx.sdp_declarations().count(), 2);
     }
 
-    // ── set_inscription overwrites ────────────────────────────────────────────
+    // ── set_inscription overwrites
+    // ────────────────────────────────────────────
 
     #[test]
     fn set_inscription_overwrites_previous() {
@@ -1639,7 +1657,8 @@ mod tests {
         assert_block_valid(&block);
     }
 
-    // ── invalid inscription is rejected at build time ─────────────────────────
+    // ── invalid inscription is rejected at build time
+    // ─────────────────────────
 
     #[test]
     fn invalid_inscription_fails_at_build() {
@@ -1659,7 +1678,8 @@ mod tests {
         );
     }
 
-    // ── add_notes / add_declarations batch helpers ────────────────────────────
+    // ── add_notes / add_declarations batch helpers
+    // ────────────────────────────
 
     #[test]
     fn add_declarations_accepts_maximum_capacity() {
@@ -1820,7 +1840,8 @@ mod tests {
         );
     }
 
-    // ── op ordering is correct ────────────────────────────────────────────────
+    // ── op ordering is correct
+    // ────────────────────────────────────────────────
 
     #[test]
     fn ops_are_ordered_inscriptions_declarations() {

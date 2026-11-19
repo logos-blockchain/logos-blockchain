@@ -513,8 +513,8 @@ mod tests {
                     .frontier_root(),
             ]
         );
-        // `exact` is leaf 1 of the extended ledger set: its level 0 sibling is `owned`,
-        // on the left.
+        // `exact` is leaf 1 of the extended ledger set: its level 0 sibling is
+        // `owned`, on the left.
         assert_eq!(
             witnesses[1].witness.inputs()[0].path_and_selectors[0],
             (owned.commitment().0, true)

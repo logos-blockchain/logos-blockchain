@@ -48,10 +48,10 @@ fn slot_interval(
         .strict_add(1.into());
     let next_slot_era = era_schedules.at_slot(next_slot).era;
 
-    // Take the era schedule, reverse it, and keep track of each era's starting slot
-    // to be used as the previous era ending slot. The first era in the reversed
-    // order (i.e., the last era of the schedule) will yield a forever interval
-    // since it does not have a scheduled end.
+    // Take the era schedule, reverse it, and keep track of each era's starting
+    // slot to be used as the previous era ending slot. The first era in the
+    // reversed order (i.e., the last era of the schedule) will yield a
+    // forever interval since it does not have a scheduled end.
     let current_and_future_eras_reversed = era_schedules
         .iter()
         .rev()
@@ -63,8 +63,8 @@ fn slot_interval(
     let current_and_future_eras_intervals = {
         let mut current_and_future_eras_intervals_reversed = current_and_future_eras_ending_slots
             .map(|(era, era_end)| {
-                // This only applies to the current era, so we don't start from its first slot
-                // but from the next slot.
+                // This only applies to the current era, so we don't start from
+                // its first slot but from the next slot.
                 let era_first_ticking_slot = next_slot.max(era.first_slot);
                 let tick_delay_from_start =
                     era_schedules.time_of(era_first_ticking_slot) - start_time;
@@ -74,11 +74,13 @@ fn slot_interval(
                 let slot_duration = era.parameters.slot_duration;
                 let mut interval = interval_at(first_tick, slot_duration);
                 interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                // A tick missed while the stream is not polled is skipped, so the slot
-                // of a tick follows from the time it was scheduled for, not from the
-                // number of ticks before it. The era ends with the first tick at or
-                // past the first slot of the next era; `era_end` is `None` for the
-                // last scheduled era, which never ends.
+                // A tick missed while the stream is not polled is skipped, so
+                // the slot of a tick follows from the time it
+                // was scheduled for, not from the
+                // number of ticks before it. The era ends with the first tick
+                // at or past the first slot of the next era;
+                // `era_end` is `None` for the last scheduled
+                // era, which never ends.
                 IntervalStream::new(interval)
                     .map(move |tick| {
                         let slots_since_first_tick =
@@ -132,8 +134,8 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn ticks_follow_the_slot_duration_of_each_era() {
-        // Slots of 1 s in epochs of 2 slots, then from epoch 2 (slot 4) slots of
-        // 3 s in epochs of 2 slots.
+        // Slots of 1 s in epochs of 2 slots, then from epoch 2 (slot 4) slots
+        // of 3 s in epochs of 2 slots.
         let genesis = OffsetDateTime::UNIX_EPOCH;
         let eras = Arc::new(
             EraTimingSchedule::new(
@@ -168,8 +170,8 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn missed_ticks_hold_back_neither_the_slots_nor_the_next_era() {
-        // Slots of 1 s in epochs of 2 slots, then from epoch 2 (slot 4) slots of
-        // 3 s in epochs of 2 slots.
+        // Slots of 1 s in epochs of 2 slots, then from epoch 2 (slot 4) slots
+        // of 3 s in epochs of 2 slots.
         let genesis = OffsetDateTime::UNIX_EPOCH;
         let eras = Arc::new(
             EraTimingSchedule::new(

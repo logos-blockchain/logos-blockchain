@@ -30,7 +30,7 @@ use lb_wallet_service::{
 };
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 #[cfg(test)]
-pub use pol_tests::{single_era, test_config};
+pub use pol_tests::{genesis_parameters, single_era, test_config};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
@@ -235,6 +235,16 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             eligible_aged,
             source,
         } = slot_context;
+        tracing::debug!(
+            target: LOG_TARGET,
+            event = "leader_eligible_notes",
+            path = "winning_slot_scan",
+            slot = ?slot,
+            epoch = ?epoch,
+            note_count = eligible_aged.len(),
+            total_value = eligible_aged.iter().map(|note| note.note.note.value).sum::<u64>(),
+            "Eligible notes for the winning slot scan"
+        );
         let state = PolEpochState {
             nonce: epoch_state.nonce,
             eligible_aged: epoch_state.eligible_root(),
@@ -262,10 +272,11 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
         );
 
         // Hand the subscriber a *lazy* stream over this epoch's slot range. No
-        // slot is scanned until the subscriber drives the stream, and it decides
-        // how far ahead to pre-compute, so the whole epoch is never materialized
-        // here. A scan made stale by an epoch rollover is implicitly abandoned:
-        // the subscriber just stops polling it once it moves to the next epoch.
+        // slot is scanned until the subscriber drives the stream, and it
+        // decides how far ahead to pre-compute, so the whole epoch is
+        // never materialized here. A scan made stale by an epoch
+        // rollover is implicitly abandoned: the subscriber just stops
+        // polling it once it moves to the next epoch.
         let winning_slots_stream = epoch_winning_slots_stream(
             &era_schedule,
             epoch_state,
@@ -286,8 +297,8 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             return;
         }
 
-        // Wait for the first tick of the next epoch to produce a new winning slot
-        // stream and pass it to consumers.
+        // Wait for the first tick of the next epoch to produce a new winning
+        // slot stream and pass it to consumers.
         current_slot_tick = next_epoch_tick(&mut slot_timer, epoch).await;
     }
 
@@ -336,6 +347,9 @@ where
         .await
         .ok()?
         .ok()?;
+    // Filter the wallet's notes by the aged UTXO set of the slot's epoch, not
+    // the one of the tip's epoch: on the first slots of an epoch, before any
+    // block of it is on the chain, the two differ.
     let eligible_utxos = wallet_api
         .get_leader_aged_notes(Some(wallet_tip), epoch_state.epoch)
         .await
@@ -470,12 +484,15 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
 #[cfg(test)]
 mod pol_tests {
     use core::fmt;
-    use std::{fmt::Formatter, num::NonZero};
+    use std::{
+        fmt::Formatter,
+        num::{NonZero, NonZeroU32},
+    };
 
     use lb_core::{
         era::{AcceptedForkDigests, ForkDigest},
         mantle::{
-            Note, Value,
+            GenesisParameters, GenesisTime, Note, Value,
             gas::{Gas, GasProfile},
             note_set::{CommitmentMmr, NoteSetIndex},
             notes::derive_note_nullifier,
@@ -488,13 +505,13 @@ mod pol_tests {
     use lb_key_management_system_service::keys::{UnsecuredZkKey, ZkKey};
     use lb_ledger::{
         LedgerState,
-        config::{BlendPoWConfig, EmissionRatio, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{
             Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
         },
     };
     use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
     use lb_wallet::OwnedNote;
 
     use super::*;
@@ -531,7 +548,7 @@ mod pol_tests {
         let (_, aged_path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
             .unwrap();
-        let note_sets = LedgerState::from_notes([note], &config, 0)
+        let note_sets = LedgerState::from_notes([note], &config, &genesis_parameters())
             .latest_note_sets()
             .clone();
 
@@ -631,10 +648,9 @@ mod pol_tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: core::num::NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: core::num::NonZeroU64::MIN,
-            target_claim_per_block: core::num::NonZeroU64::MIN,
             pow_share: 0,
             share_den: core::num::NonZeroU64::MIN,
             slot_window: core::num::NonZeroU64::new(100).unwrap(),
@@ -667,6 +683,41 @@ mod pol_tests {
         opening: Gas::new(470),
     };
 
+    /// The genesis parameters of a test chain: the supply cap and the genesis
+    /// gas prices of the deployments.
+    pub fn genesis_parameters() -> GenesisParameters {
+        GenesisParameters {
+            chain_id: "test".to_owned().try_into().unwrap(),
+            start_time: GenesisTime::new(0),
+            epoch_nonce: Fr::from(0u64),
+            max_supply: 10_000_000_000_000_000_000,
+            pow_reward_pool: 0,
+            rewards_reserve: 1_000_000_000_000_000_000,
+            storage_gas_price: 1_000_000_000.try_into().unwrap(),
+            execution_gas_price: 1_000_000_000.try_into().unwrap(),
+        }
+    }
+
+    /// The block rewards of the specification, on the supply cap of the
+    /// deployments and a block every 30 seconds.
+    const BLOCK_REWARDS: lb_ledger::config::BlockRewardsConfig =
+        lb_ledger::config::BlockRewardsConfig::new(
+            lb_ledger::config::BlockRewardsParameters {
+                max_emission_rate: ProperFraction::new(1, NonZero::new(100).unwrap()).unwrap(),
+                min_emission_rate: NonNegativeRatio::new(0, NonZero::new(1).unwrap()),
+                stake_target: ProperFraction::new(3, NonZero::new(10).unwrap()).unwrap(),
+                pooled_fees_target: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, NonZero::new(4).unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, NonZero::new(1).unwrap()),
+                pooled_fees_window: NonZero::new(120).unwrap(),
+                blend_share: ProperFraction::new(6, NonZero::new(10).unwrap()).unwrap(),
+            },
+            10_000_000_000_000_000_000,
+            NonZero::new(1).unwrap(),
+            ProperFraction::new(1, NonZero::new(30).unwrap()).unwrap(),
+        )
+        .unwrap();
+
     pub fn test_config() -> lb_ledger::Config {
         lb_ledger::Config {
             epoch_config: EpochConfig {
@@ -676,7 +727,7 @@ mod pol_tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(5).unwrap(),
-                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
                 1f64.try_into().expect("1 > 0"),
                 12,
                 4,
@@ -687,7 +738,6 @@ mod pol_tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -695,7 +745,8 @@ mod pol_tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: NonZero::new(10u64).unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
@@ -703,10 +754,7 @@ mod pol_tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
@@ -715,32 +763,14 @@ mod pol_tests {
             channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: lb_ledger::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
-            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
-            )
-            .unwrap(),
+            block_rewards: BLOCK_REWARDS,
             gas_profile: GAS_PROFILE,
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {

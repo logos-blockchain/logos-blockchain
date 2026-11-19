@@ -39,7 +39,7 @@ use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
-use lb_utils::{bounded::BoundedError, math::NonNegativeRatio, tokio::task::spawn};
+use lb_utils::{bounded::BoundedError, math::ProperFraction, tokio::task::spawn};
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -143,7 +143,7 @@ pub struct ChainNetworkEraSettings {
     /// The era's active slot coefficient `f`: blocks are expected `1/f` slots
     /// apart, which sets how often the tip poll runs and how far the local tip
     /// may lag before it polls.
-    pub slot_activation_coeff: NonNegativeRatio,
+    pub slot_activation_coeff: ProperFraction,
     /// The most uncles, transactions and transaction bytes a block of the era
     /// may hold: what a block rebuilt from a proposal of the era is held to.
     pub block_limits: BlockLimits,
@@ -379,8 +379,8 @@ where
         match initial_block_download_result {
             Ok(_) => {
                 info!(target: LOG_TARGET, "Initial Block Download completed successfully");
-                // Notify chain-service that IBD is complete so it can start the prolonged
-                // bootstrap timer
+                // Notify chain-service that IBD is complete so it can start the
+                // prolonged bootstrap timer
                 if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
                     error!(target: LOG_TARGET, "Failed to notify chain-service of IBD completion: {e:?}");
                 }
@@ -416,28 +416,23 @@ where
 
         // Set up the proactive tip-poll lag watchdog: in each era, derive the
         // polling cadence / lag threshold from the era's active slot
-        // coefficient `f`, every era's now so that one they can't be derived
-        // for is reported at startup. In such an era, or when polling is
-        // disabled, the watchdog stays inert and slot ticks only drive the eras.
+        // coefficient `f`. When polling is disabled, the watchdog stays inert
+        // and slot ticks only drive the eras.
         let tip_poll_params = sync_config.tip_poll.enabled.then(|| {
             era_schedule.map(|era| {
-                match TipPollParams::derive(&sync_config.tip_poll, era.parameters.slot_activation_coeff) {
-                    Ok(params) => {
-                        info!(
-                            target: LOG_TARGET,
-                            era = era.era.into_inner(),
-                            cadence_slots = params.cadence_slots,
-                            lag_threshold_slots = params.lag_threshold_slots,
-                            max_peers = params.max_peers,
-                            "Tip-poll lag watchdog enabled"
-                        );
-                        Some(params)
-                    }
-                    Err(e) => {
-                        error!(target: LOG_TARGET, era = era.era.into_inner(), %e, "Failed to derive tip-poll params; watchdog disabled in this era");
-                        None
-                    }
-                }
+                let params = TipPollParams::derive(
+                    &sync_config.tip_poll,
+                    era.parameters.slot_activation_coeff,
+                );
+                info!(
+                    target: LOG_TARGET,
+                    era = era.era.into_inner(),
+                    cadence_slots = params.cadence_slots,
+                    lag_threshold_slots = params.lag_threshold_slots,
+                    max_peers = params.max_peers,
+                    "Tip-poll lag watchdog enabled"
+                );
+                params
             })
         });
 
@@ -526,7 +521,7 @@ where
 
                         let Some(params) = tip_poll_params
                             .as_ref()
-                            .and_then(|params| *params.at_slot(tick.slot).parameters)
+                            .map(|params| *params.at_slot(tick.slot).parameters)
                         else {
                             continue;
                         };
@@ -920,7 +915,8 @@ where
         Ok(None) => Ok(()),
         Err(err) => {
             error!(target: LOG_TARGET, err = ?err, "Failure when checking if block already processed");
-            // block processing is idempotent, so we can safely re-process a block
+            // block processing is idempotent, so we can safely re-process a
+            // block
             Ok(())
         }
     }
@@ -1135,8 +1131,8 @@ async fn reconcile_mempool<Mempool>(
         error!(target: LOG_TARGET, err, "could not notify mempool of canonical chain update");
     }
 
-    // Notify the mempool to trigger evictions and release txs whose block became
-    // immutable.
+    // Notify the mempool to trigger evictions and release txs whose block
+    // became immutable.
     if let Err(err) = mempool
         .notify_processed_block(block_id, block_slot, lib_slot)
         .await

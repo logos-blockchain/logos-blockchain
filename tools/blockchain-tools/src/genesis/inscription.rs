@@ -1,9 +1,11 @@
+use core::num::NonZero;
+
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_config::consensus::{EMPTY_CHANNEL_ID, EMPTY_ED25519_PUBLIC_KEY};
 use lb_core::{
     crypto::ZkDigest,
     mantle::{
-        GenesisParameters, GenesisTime,
+        GenesisParameters, GenesisTime, Value,
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp, MiniBlocks},
@@ -24,12 +26,30 @@ pub struct InscribeParams {
     pub genesis_time: OffsetDateTime,
     #[serde_as(as = "Vec<Hex>")]
     pub entropy_sources: Vec<FrBytes>,
+    /// `S_cap`: the most tokens the chain will ever hold.
+    pub max_supply: Value,
+    /// The balance the `PoW` reward pool starts with.
+    pub pow_reward_pool: Value,
+    /// The balance the rewards reserve starts with.
+    pub rewards_reserve: Value,
+    /// The storage gas price of the first epoch.
+    pub storage_gas_price: NonZero<u64>,
+    /// The execution base fee of the first block.
+    pub execution_gas_price: NonZero<u64>,
 }
 
+#[must_use]
 pub fn inscribe<D: ZkDigest>(
-    chain_id: ChainId,
-    genesis_time: OffsetDateTime,
-    entropy_sources: impl IntoIterator<Item = FrBytes>,
+    InscribeParams {
+        chain_id,
+        genesis_time,
+        entropy_sources,
+        max_supply,
+        pow_reward_pool,
+        rewards_reserve,
+        storage_gas_price,
+        execution_gas_price,
+    }: InscribeParams,
 ) -> InscriptionOp {
     let mut hasher = D::new();
 
@@ -51,6 +71,11 @@ pub fn inscribe<D: ZkDigest>(
         chain_id,
         start_time: genesis_time,
         epoch_nonce: genesis_nonce_fr,
+        max_supply,
+        pow_reward_pool,
+        rewards_reserve,
+        storage_gas_price,
+        execution_gas_price,
     };
 
     InscriptionOp {

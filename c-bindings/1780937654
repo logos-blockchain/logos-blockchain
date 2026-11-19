@@ -1,3 +1,0 @@
-[2m2026-07-30T09:14:11.927111Z[0m [32m INFO[0m [2mlogos_blockchain::tracing::service[0m[2m:[0m Service 'Tracing' is ready.
-[2m2026-07-30T09:14:11.954872Z[0m [32m INFO[0m [2mlogos_blockchain::libp2p::behaviour::nat::gateway-monitor[0m[2m:[0m Initial gateway detected: 10.199.105.122
-[2m2026-07-30T09:14:11.955666Z[0m [31mERROR[0m [2mlogos_blockchain::node[0m[2m:[0m A panic occurred [3mpanic_payload[0m[2m=[0m"called `Result::unwrap()` on an `Err` value: \"Failed to listen on /ip4/0.0.0.0/udp/3000/quic-v1: \"" [3mpanic_location[0m[2m=[0m"services/network/src/backends/libp2p/swarm/mod.rs:80:53" [3mpanic_backtrace[0m[2m=[0m"disabled backtrace" [3mpanic_note[0m[2m=[0m"run with RUST_BACKTRACE=1 environment variable to display a backtrace"

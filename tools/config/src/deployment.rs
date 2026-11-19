@@ -5,7 +5,6 @@ use lb_core::{
     mantle::gas::{Gas, GasProfile},
     sdp::NumberOfEpochs,
 };
-use lb_cryptarchia_engine::Epoch;
 use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
     DeploymentSettings, EraDeclarations,
@@ -18,14 +17,14 @@ use lb_node::config::deployment::{
                 MinimumNetworkSize, SchedulerSettings, Settings as BlendDeploymentSettings,
             },
             cryptarchia::{
-                BlockRewardsConfig, EmissionRatio, EpochConfig, MaxGasPerBlock, ServiceParameters,
+                BlockRewardsParameters, EpochConfig, MaxGasPerBlock, ServiceParameters,
                 Settings as CryptarchiaDeploymentSettings,
             },
             time::Settings as TimeDeploymentSettings,
         },
     },
 };
-use lb_utils::math::{NonNegativeRatio, PositiveF64, ProperFraction};
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
 use crate::time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS};
 
@@ -45,7 +44,8 @@ const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
 const DATA_REPLICATION_FACTOR: u64 = 0;
 
-const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
+const COVER_MESSAGE_FREQUENCY_PER_ROUND: PositiveRatio =
+    PositiveRatio::new(1, NonZeroU32::MIN).unwrap();
 const COVER_REPLICATION_FACTOR: CoverReplicationFactor = CoverReplicationFactor::new(0).unwrap();
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
@@ -64,9 +64,7 @@ const EPOCH_PERIOD_NONCE_BUFFER: u8 = 3;
 const EPOCH_PERIOD_NONCE_STABILIZATION: u8 = 4;
 
 const SDP_INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
-const SDP_EPOCH: Epoch = Epoch::new(0);
 const MIN_STAKE_THRESHOLD: u64 = 1;
-const MIN_STAKE_TIMESTAMP: u64 = 0;
 const LEARNING_RATE: f64 = 0.1;
 const BLEND_POW_BASE_DIFFICULTY_EXPONENT: u32 = 19;
 const BLEND_POW_TARGET_TXS_PER_BLOCK: u64 = 512;
@@ -78,10 +76,9 @@ const BLEND_POW_DAMPING_DEN_OFFSET: u32 = 1;
 const REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT: u32 = 19;
 const REWARD_POW_EMA_SMOOTHING_FACTOR: u64 = 9;
 const REWARD_POW_EMA_SMOOTHING_PRECISION: u64 = 10;
-const REWARD_POW_TARGET_CLAIMS_PER_BLOCK: u64 = 100;
+const REWARD_POW_TARGET_CLAIMS_PER_BLOCK: NonZeroU64 = NonZeroU64::new(100).unwrap();
 const REWARD_POW_RATE_NUM: u64 = 0;
 const REWARD_POW_RATE_DEN: u64 = 1;
-const REWARD_POW_TARGET_CLAIM_PER_BLOCK: u64 = 1;
 const REWARD_POW_SHARE: u64 = 10;
 const REWARD_POW_SHARE_DEN: u64 = 100;
 const REWARD_POW_SLOT_WINDOW: u64 = 100;
@@ -131,18 +128,19 @@ pub const GAS_PROFILE: GasProfile = GasProfile {
     program_step: Gas::new(13528),
     opening: Gas::new(470),
 };
-/// The block rewards: the stake target, the scale of the emission's weight, the
-/// weight of the pooled fees, a block's emission in full, and the Blend nodes'
-/// share.
-const BLOCK_REWARDS: BlockRewardsConfig = BlockRewardsConfig::new(
-    3_000_000_000_000_000_000,
-    NonZeroU64::new(120_000_000_000_000_000).unwrap(),
-    NonZeroU16::new(120).unwrap(),
-    10_512,
-    EmissionRatio::new(62_500_000_000_000, NonZeroU64::new(657).unwrap()),
-    ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
-)
-.unwrap();
+/// The block rewards of the specification: `I_max`, `I_min`, the stake target
+/// and the target of the pooled fees as shares of the supply cap, `α_d`, `α_a`,
+/// the window of the pooled fees, and the Blend nodes' share.
+const BLOCK_REWARDS: BlockRewardsParameters = BlockRewardsParameters {
+    max_emission_rate: ProperFraction::new(1, NonZeroU32::new(100).unwrap()).unwrap(),
+    min_emission_rate: NonNegativeRatio::new(0, NonZeroU32::new(1).unwrap()),
+    stake_target: ProperFraction::new(3, NonZeroU32::new(10).unwrap()).unwrap(),
+    pooled_fees_target: NonNegativeRatio::new(1, NonZeroU32::new(1).unwrap()),
+    stake_deviation_weight: NonNegativeRatio::new(1, NonZeroU32::new(4).unwrap()),
+    pooled_fees_weight: NonNegativeRatio::new(1, NonZeroU32::new(1).unwrap()),
+    pooled_fees_window: NonZeroU16::new(120).unwrap(),
+    blend_share: ProperFraction::new(6, NonZeroU32::new(10).unwrap()).unwrap(),
+};
 
 #[must_use]
 #[expect(
@@ -190,10 +188,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .expect("The expected deliveries per observation window cannot be zero."),
                     scheduler: SchedulerSettings {
                         cover: CoverTrafficSettings {
-                            message_frequency_per_round: PositiveF64::try_from(
-                                COVER_MESSAGE_FREQUENCY_PER_ROUND,
-                            )
-                            .expect("Message frequency per round must be positive."),
+                            message_frequency_per_round: COVER_MESSAGE_FREQUENCY_PER_ROUND,
                             replication_factor: COVER_REPLICATION_FACTOR,
                         },
                         delayer: MessageDelayerSettings {
@@ -234,11 +229,9 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 sdp_config: v1::cryptarchia::SdpConfig {
                     service_params: [ServiceParameters {
                         inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
-                        epoch: SDP_EPOCH,
                     }],
                     min_stake: lb_core::sdp::MinStake {
                         threshold: MIN_STAKE_THRESHOLD,
-                        timestamp: MIN_STAKE_TIMESTAMP,
                     },
                 },
                 learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
@@ -261,8 +254,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         target_claims_per_block: REWARD_POW_TARGET_CLAIMS_PER_BLOCK,
                         rate_num: REWARD_POW_RATE_NUM,
                         rate_den: NonZero::new(REWARD_POW_RATE_DEN).unwrap(),
-                        target_claim_per_block: NonZero::new(REWARD_POW_TARGET_CLAIM_PER_BLOCK)
-                            .unwrap(),
                         pow_share: REWARD_POW_SHARE,
                         share_den: NonZero::new(REWARD_POW_SHARE_DEN).unwrap(),
                         slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),

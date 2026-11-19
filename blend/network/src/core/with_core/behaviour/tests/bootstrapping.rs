@@ -266,8 +266,8 @@ async fn concurrent_incoming_connections() {
         }
     }
 
-    // We check whether the dialer whose connection was dropped was also notified
-    // by its behaviour that the connection did not work out.
+    // We check whether the dialer whose connection was dropped was also
+    // notified by its behaviour that the connection did not work out.
     assert!((dialer_1_dropped && dialer_1_notified) ^ (dialer_2_dropped && dialer_2_notified));
 }
 
@@ -355,9 +355,9 @@ async fn outgoing_attempt_with_max_negotiated_peering_degree() {
     // The refusal has to be reported, not just acted on. A connection this node
     // opened and then refused never becomes one waiting for its upgrade and
     // never becomes negotiated, so closing it produces no event of its own: if
-    // the refusal itself said nothing, whoever asked for the dial would still be
-    // counting it as in flight, and would pass the peer over in every later
-    // draw for the rest of the epoch.
+    // the refusal itself said nothing, whoever asked for the dial would still
+    // be counting it as in flight, and would pass the peer over in every
+    // later draw for the rest of the epoch.
     let mut refusal_reported = false;
     let mut connection_closed = false;
     while !(refusal_reported && connection_closed) {
@@ -678,8 +678,8 @@ async fn concurrent_reverse_connections_between_peers() {
         .negotiated_peers
         .get(swarm_2.local_peer_id())
         .unwrap();
-    // If swarm 1 ID is lower, it must have closed the connection it opened, so the
-    // one it keeps is the one it accepted from swarm 2, or vice versa.
+    // If swarm 1 ID is lower, it must have closed the connection it opened, so
+    // the one it keeps is the one it accepted from swarm 2, or vice versa.
     assert_eq!(
         swarm_2_details_for_swarm_1.direction,
         if is_swarm_1_id_smaller {

@@ -121,8 +121,8 @@ mod tests {
         // because `Cipher` advances PRNG at each encryption.
         assert_ne!(xor_two_ciphers, xor_two_plains);
 
-        // Even if someone knows `plain1` "somehow" (while not knowing the seed),
-        // he can't recover `plain2` in the following way.
+        // Even if someone knows `plain1` "somehow" (while not knowing the
+        // seed), he can't recover `plain2` in the following way.
         let leaked_plain2 = xor(&plain1, &xor_two_ciphers);
         assert_ne!(leaked_plain2, plain2);
     }

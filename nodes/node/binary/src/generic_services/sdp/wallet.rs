@@ -129,7 +129,8 @@ where
                 return Err(error);
             }
         };
-        // A funding that fails releases the notes of `tx_builder` in the wallet.
+        // A funding that fails releases the notes of `tx_builder` in the
+        // wallet.
         let TipResponse {
             tip,
             response: funded,
