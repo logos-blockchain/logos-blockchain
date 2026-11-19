@@ -374,7 +374,8 @@ async fn reward_keys_wait_for_the_saved_count_and_are_registered_again_on_startu
     let mut saved_count_record = None;
 
     // A failed write uses index 0 without returning a key. The next two keys
-    // are returned only after their counts are saved, including the skipped index.
+    // are returned only after their counts are saved, including the skipped
+    // index.
     for (expected_count, write_result) in
         [(1, Err("write failed".into())), (2, Ok(())), (3, Ok(()))]
     {
@@ -561,7 +562,8 @@ async fn assert_restored_notes_are_spendable(
 
     let cryptarchia = chain_api();
 
-    // Restore once through the service's checkpoint startup, and once from genesis.
+    // Restore once through the service's checkpoint startup, and once from
+    // genesis.
     let from_checkpoint = TestWallet::start_state(
         RecoveryState::from_bytes(&checkpoint_bytes).unwrap(),
         settings,

@@ -966,11 +966,10 @@ where
                 )
                 .await
                 {
-                    Ok(public_key) => storage
-                        .store_wallet_reward_key_count(state.reward_key_count())
+                    Ok(public_key) => state
+                        .store_reward_key_count(storage)
                         .await
-                        .map(|()| public_key)
-                        .map_err(WalletServiceError::PersistedState),
+                        .map(|()| public_key),
                     Err(err) => Err(err),
                 };
                 if resp_tx.send(result).is_err() {
@@ -1037,9 +1036,10 @@ where
                         return;
                     }
                 };
-                let response = Self::channel_withdrawal(tip, channel_id, &notes, state, storage, kms)
-                    .await
-                    .map(|response| TipResponse { tip, response });
+                let response =
+                    Self::channel_withdrawal(tip, channel_id, &notes, state, storage, kms)
+                        .await
+                        .map(|response| TipResponse { tip, response });
                 if resp_tx.send(response).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to ChannelWithdrawal");
                 }
@@ -1454,7 +1454,7 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<KnownNote, WalletServiceError> {
         let known_note = Self::held_note(note, note_set, state, kms).await?;
-        Self::store_known_notes(state, storage, &[known_note]).await?;
+        state.store_known_notes(storage, &[known_note]).await?;
         Ok(known_note)
     }
 
@@ -1477,7 +1477,7 @@ where
                 known_notes.push(Self::known_note(kms, key_id, *note, note_set).await?);
             }
         }
-        Self::store_known_notes(state, storage, &known_notes).await?;
+        state.store_known_notes(storage, &known_notes).await?;
 
         Ok(ChannelStep {
             step,
@@ -1503,15 +1503,16 @@ where
         for note in &withdrawal.opening.outputs {
             known_notes.push(Self::held_note(*note, NoteSetIndex::Ledger, state, kms).await?);
         }
-        Self::store_known_notes(state, storage, &known_notes).await?;
+        state.store_known_notes(storage, &known_notes).await?;
 
         Ok(withdrawal)
     }
 
     // A new leader reward note under `public_key`, with a private random nonce.
-    // Nothing on chain opens the note, so it is returned only once it is written
-    // to storage: a process crash after publication cannot lose the reward.
-    // A note of value 0 holds nothing to lose, so the wallet does not track it.
+    // Nothing on chain opens the note, so it is returned only once it is
+    // written to storage: a process crash after publication cannot lose the
+    // reward. A note of value 0 holds nothing to lose, so the wallet does
+    // not track it.
     async fn new_leader_reward(
         value: Value,
         public_key: ZkPublicKey,
@@ -1524,21 +1525,8 @@ where
             return Ok(note);
         }
         let known_note = Self::held_note(note, NoteSetIndex::Ledger, state, kms).await?;
-        Self::store_known_notes(state, storage, &[known_note]).await?;
+        state.store_known_notes(storage, &[known_note]).await?;
         Ok(note)
-    }
-
-    async fn store_known_notes(
-        state: &mut ServiceState<'_>,
-        storage: &StorageApi<Tx>,
-        notes: &[KnownNote],
-    ) -> Result<(), WalletServiceError> {
-        storage
-            .store_wallet_known_notes(notes)
-            .await
-            .map_err(WalletServiceError::PersistedState)?;
-        state.add_stored_notes(notes.iter().copied());
-        Ok(())
     }
 
     // Registers the change note `funded` returns to a key of the wallet.
@@ -1560,7 +1548,7 @@ where
             .find(|note| note.nonce == change_nonce && note.public_key == change_pk);
         if let Some(change) = change {
             let known_note = Self::known_note(kms, key_id, change, NoteSetIndex::Ledger).await?;
-            Self::store_known_notes(state, storage, &[known_note]).await?;
+            state.store_known_notes(storage, &[known_note]).await?;
         }
         Ok(())
     }
@@ -1615,7 +1603,7 @@ where
         }
 
         let tx_builder = tx_builder.push_op_with_opening(Op::Transfer(split), opening)?;
-        Self::store_known_notes(state, storage, &known_notes).await?;
+        state.store_known_notes(storage, &known_notes).await?;
         Ok((tx_builder, exact_note, nullifiers))
     }
 
@@ -1639,7 +1627,7 @@ where
                 continue;
             }
             let known_note = Self::known_note(kms, key_id, *note, *note_set).await?;
-            Self::store_known_notes(state, storage, &[known_note]).await?;
+            state.store_known_notes(storage, &[known_note]).await?;
         }
         Ok(())
     }

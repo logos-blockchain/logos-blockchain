@@ -19,6 +19,7 @@ use lb_core::{
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
+use lb_storage_service::api::StorageApi;
 use lb_wallet::{KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
@@ -216,6 +217,16 @@ impl<'u> ServiceState<'u> {
         self.next_reward_key_index
     }
 
+    pub async fn store_reward_key_count<Tx>(
+        &self,
+        storage: &StorageApi<Tx>,
+    ) -> Result<(), WalletServiceError> {
+        storage
+            .store_wallet_reward_key_count(self.next_reward_key_index)
+            .await
+            .map_err(WalletServiceError::PersistedState)
+    }
+
     pub const fn next_reward_key_index(&mut self) -> u64 {
         let index = self.next_reward_key_index;
         self.next_reward_key_index = index.saturating_add(1);
@@ -226,10 +237,18 @@ impl<'u> ServiceState<'u> {
         self.wallet.add_known_key(pk, key_id);
     }
 
-    /// Registers notes in memory after their opening records were stored.
-    /// The caller must wait for the confirmed writes before calling this.
-    pub fn add_stored_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
-        self.wallet.add_known_notes(notes);
+    /// Stores opening records before registering the notes in memory.
+    pub async fn store_known_notes<Tx>(
+        &mut self,
+        storage: &StorageApi<Tx>,
+        notes: &[KnownNote],
+    ) -> Result<(), WalletServiceError> {
+        storage
+            .store_wallet_known_notes(notes)
+            .await
+            .map_err(WalletServiceError::PersistedState)?;
+        self.wallet.add_known_notes(notes.iter().copied());
+        Ok(())
     }
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
