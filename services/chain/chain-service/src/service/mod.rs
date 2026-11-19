@@ -1150,7 +1150,7 @@ where
     let prev_lib = candidate.lib();
     let VerifiedBlock {
         block,
-        mut candidate,
+        candidate,
         applied:
             TryApplyBlockOutcome {
                 pruned_blocks,
@@ -1191,7 +1191,7 @@ where
     let newly_canonical =
         newly_canonical_blocks_by_id(block, &newly_canonical_blocks, storage).await;
     log_newly_canonical_blocks(&candidate, &newly_canonical_blocks, &newly_canonical);
-    candidate.prune_ledger_states(&pruned_blocks);
+    let (candidate, pruned_blocks) = prune_ledger_states(candidate, pruned_blocks).await;
 
     // The block's own transactions were hashed along with its verification.
     let mut newly_canonical_txs = HashMap::new();
@@ -1719,7 +1719,7 @@ pub async fn go_online<Tx>(
     PrunedBlocks<HeaderId>,
     BTreeMap<Slot, HeaderId>,
 ) {
-    let (mut cryptarchia, pruned_blocks) = cryptarchia.online();
+    let (cryptarchia, pruned_blocks) = cryptarchia.online();
     let immutable_blocks = immutable_blocks_index(
         &pruned_blocks,
         None,
@@ -1727,8 +1727,23 @@ pub async fn go_online<Tx>(
         cryptarchia.lib_branch().slot(),
     );
     let failed_index = store_immutable_blocks_index(immutable_blocks, failed_index, storage).await;
-    cryptarchia.prune_ledger_states(&pruned_blocks);
+    let (cryptarchia, pruned_blocks) = prune_ledger_states(cryptarchia, pruned_blocks).await;
     (cryptarchia, pruned_blocks, failed_index)
+}
+
+/// Prunes the ledger states of the `pruned_blocks` from `cryptarchia`, on the
+/// blocking pool: it writes the nullifier trees and the LIB state to the store,
+/// and finalizing the stretch of blocks going online prunes can take a while.
+async fn prune_ledger_states(
+    mut cryptarchia: Cryptarchia,
+    pruned_blocks: PrunedBlocks<HeaderId>,
+) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
+    spawn_blocking("logos/chain/ledger-pruning-blocking", move || {
+        cryptarchia.prune_ledger_states(&pruned_blocks);
+        (cryptarchia, pruned_blocks)
+    })
+    .await
+    .expect("Ledger pruning should not fail")
 }
 
 async fn broadcast_finalized_block(
