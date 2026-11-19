@@ -201,6 +201,11 @@ where
         )
         .await?;
 
+        // Chain-network takes requests once it's ready, which it is after the
+        // initial block download, however long that takes.
+        wait_until_services_are_ready!(&overwatch_handle, None, Dispatcher::ChainNetworkService)
+            .await?;
+
         let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
         );
