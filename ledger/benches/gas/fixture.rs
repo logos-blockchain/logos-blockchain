@@ -293,7 +293,6 @@ const GAS_PROFILE: GasProfile = GasProfile {
     opening: Gas::new(470),
 };
 
-#[expect(clippy::too_many_lines, reason = "Fixture function.")]
 fn era_parameters() -> Config {
     let epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),
