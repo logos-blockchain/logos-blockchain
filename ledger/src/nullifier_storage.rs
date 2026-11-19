@@ -32,7 +32,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::mantle::note_set::{CommittedSets, NoteSetError, NoteSetIndex, NoteSets};
-use lb_imt::store::{BlockId, ImtError, LiveBlock, Version, VersionRegistry};
+use lb_imt::store::{BlockId, ImtError, Version, VersionRegistry};
 use lb_kv_store::{Bytes, DynKvStore, KvStore as _, Prefixed, WriteBatch};
 
 use crate::cryptarchia::LedgerState as CryptarchiaLedger;
@@ -115,15 +115,12 @@ impl NullifierStorage {
         self.versions_store.namespace_batch(writes)
     }
 
-    // The writes forgetting the version of `block_id`, and the sets it wrote
-    // to, if it has one.
+    // The writes forgetting the version of `block_id` and the sets it wrote to,
+    // if it has a version.
     fn release(&self, block_id: BlockId, batch: &mut WriteBatch) -> Result<(), NoteSetError> {
         if let Some(version) = self.versions.lookup(block_id)? {
             batch.append(self.versions_batch(
-                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(LiveBlock {
-                    version,
-                    block_id,
-                }),
+                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(block_id),
             ));
             batch.append(self.forget_written(version));
         }
@@ -239,11 +236,11 @@ impl NullifierStorage {
         Ok((lib, batch))
     }
 
-    /// Deletes what the blocks of the versions still recorded wrote, unless
-    /// `kept` keeps them, and forgets their versions. After a restart, these
-    /// are the blocks the replay did not apply again: forks lost with the
-    /// stop, or blocks pruned by a pruning the stop interrupted. Their writes
-    /// are deleted from the note sets each recorded at its commit.
+    /// Deletes the nodes and forgets the version of every block that still has
+    /// a version but is not `kept`. After a restart, these are the blocks the
+    /// replay did not apply again: forks lost when the node stopped, or blocks
+    /// of a pruning the stop interrupted. Each block's nodes are deleted from
+    /// the note sets it recorded at its commit.
     ///
     /// Returns the number of blocks discarded.
     pub fn discard_lost(&self, kept: impl Fn(BlockId) -> bool) -> Result<usize, NoteSetError> {
@@ -260,7 +257,7 @@ impl NullifierStorage {
             ));
             batch.append(self.forget_written(live.version));
             batch.append(self.versions_batch(
-                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(live),
+                VersionRegistry::<Prefixed<DynKvStore>>::release_writes(live.block_id),
             ));
             discarded = discarded.saturating_add(1);
         }
@@ -425,6 +422,11 @@ fn finalize_state(
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::Error as IoError,
+        sync::atomic::{AtomicBool, Ordering},
+    };
+
     use lb_core::{
         crypto::ZkHasher,
         events::Events,
@@ -434,18 +436,18 @@ mod tests {
             ops::channel::ChannelId,
         },
     };
-    use lb_cryptarchia_engine::{Cryptarchia, Slot, State, UncleSlots};
+    use lb_cryptarchia_engine::{Cryptarchia, PrunedBlocks, Slot, State, UncleSlots};
     use lb_groth16::Fr;
     use lb_imt::{
         IndexedMerkleTree, LeafIndex,
         store::{NodeKey, StaleKey},
     };
-    use lb_kv_store::{ErasedKv, MemKv};
+    use lb_kv_store::{ErasedKv, KvEntry, KvStore, MemKv, StoreError};
 
     use super::*;
     use crate::{
         Ledger, LedgerState, Restored,
-        cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config},
+        cryptarchia::tests::{config, genesis_parameters},
         test_utils::single_era,
         update::BatchVerifiedUpdate,
     };
@@ -456,6 +458,66 @@ mod tests {
     const GENESIS: Id = [0; 32];
     const LEDGER_SET: NoteSetIndex = NoteSetIndex::Ledger;
     const PROBES: [u64; 9] = [1, 3, 5, 8, 13, 21, 40, 77, 500];
+
+    struct FailingStore {
+        inner: DynKvStore,
+        fail_write: AtomicBool,
+        fail_read_after_write: AtomicBool,
+        fail_read: AtomicBool,
+    }
+
+    impl FailingStore {
+        fn new() -> Self {
+            Self {
+                inner: ErasedKv::into_dyn(MemKv::new()),
+                fail_write: AtomicBool::new(false),
+                fail_read_after_write: AtomicBool::new(false),
+                fail_read: AtomicBool::new(false),
+            }
+        }
+
+        fn fail_next_write(&self) {
+            self.fail_write.store(true, Ordering::Relaxed);
+        }
+
+        fn fail_read_after_next_write(&self) {
+            self.fail_read_after_write.store(true, Ordering::Relaxed);
+        }
+    }
+
+    impl KvStore for FailingStore {
+        type Error = StoreError;
+
+        fn get(&self, key: &[u8]) -> Result<Option<Bytes>, Self::Error> {
+            if self.fail_read.swap(false, Ordering::Relaxed) {
+                return Err(StoreError::new(IoError::other(
+                    "injected storage read failure",
+                )));
+            }
+            self.inner.get(key)
+        }
+
+        fn get_prev(&self, prefix: &[u8], key: &[u8]) -> Result<Option<KvEntry>, Self::Error> {
+            self.inner.get_prev(prefix, key)
+        }
+
+        fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<KvEntry>, Self::Error> {
+            self.inner.scan_prefix(prefix)
+        }
+
+        fn write_batch(&self, batch: WriteBatch) -> Result<(), Self::Error> {
+            if self.fail_write.swap(false, Ordering::Relaxed) {
+                return Err(StoreError::new(IoError::other(
+                    "injected pruning write failure",
+                )));
+            }
+            self.inner.write_batch(batch)?;
+            if self.fail_read_after_write.swap(false, Ordering::Relaxed) {
+                self.fail_read.store(true, Ordering::Relaxed);
+            }
+            Ok(())
+        }
+    }
 
     fn channel(n: u8) -> ChannelId {
         ChannelId::from([n; 32])
@@ -596,7 +658,7 @@ mod tests {
         fn with_store(store: DynKvStore) -> Self {
             let config = config();
             // a genesis state is built in memory, then moved to the store
-            let state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL)
+            let state = LedgerState::from_notes([], &config, &genesis_parameters())
                 .with_nullifier_store(&store)
                 .unwrap();
             let eras = single_era(config);
@@ -637,8 +699,9 @@ mod tests {
             self.extend_with(parent, &[(LEDGER_SET, nullifiers)], |state| state)
         }
 
-        // Applies a block on `parent`: `amend` to its state, then the spending of
-        // `spent` in each set. Then prunes what the consensus prunes.
+        // Applies a block on `parent`: `amend` to its state, then the spending
+        // of `spent` in each set. Then prunes what the consensus
+        // prunes.
         fn extend_with(
             &mut self,
             parent: Id,
@@ -984,6 +1047,277 @@ mod tests {
     }
 
     #[test]
+    fn test_failed_pruning_then_restart_preserves_finalized_nodes() {
+        let failing = Arc::new(FailingStore::new());
+        let store = ErasedKv::into_dyn(Arc::clone(&failing));
+        let mut chain = Chain::with_store(store);
+        let mut tip = GENESIS;
+        let mut pruning = 0;
+        let mut failures = 0;
+        for n in 1..=12u64 {
+            let id = chain.commit(
+                tip,
+                &[(LEDGER_SET, &[n * 10]), (channel_set(), &[n * 10 + 1])],
+                |mut state| {
+                    if n == 1 {
+                        state = create_channel(channel(2))(state);
+                    }
+                    if n == 4 || n == 8 {
+                        let snapshot = state.cryptarchia_ledger.note_sets.clone();
+                        state.cryptarchia_ledger.epoch_state.note_sets = snapshot.clone();
+                        state.cryptarchia_ledger.next_epoch_state.note_sets = snapshot;
+                    }
+                    state
+                },
+            );
+            let (pruned, _) = chain
+                .engine
+                .receive_block(id, tip, Slot::from(n), UncleSlots::default())
+                .unwrap();
+            if !pruned.is_empty() {
+                pruning += 1;
+                let lib = chain.engine.lib();
+                if pruning == 2 || pruning == 3 {
+                    failing.fail_next_write();
+                    assert!(
+                        chain
+                            .ledger
+                            .prune_with_lib_state(lib, &pruned, &lib[0])
+                            .is_err()
+                    );
+                    failures += 1;
+                } else {
+                    chain
+                        .ledger
+                        .prune_with_lib_state(lib, &pruned, &lib[0])
+                        .unwrap();
+                }
+            }
+            tip = id;
+        }
+        assert_eq!(failures, 2);
+
+        // A real lost fork must still be discarded after replay.
+        let lost = chain.commit(chain.engine.lib(), &[(LEDGER_SET, &[999])], |state| state);
+        let lost_version = chain.version(lost);
+        let Restored {
+            mut ledger, lib, ..
+        } = chain.restore();
+        for id in chain.path(lib, tip) {
+            let Applied { parent, spent } = chain.applied[&id].clone();
+            ledger
+                .commit_update(build(&ledger, id, parent, &spent, |state| state))
+                .unwrap();
+        }
+
+        let check = |ledger: &Ledger<Id>| {
+            for (id, state) in &ledger.states {
+                for (index, oracle) in &chain.oracles[id] {
+                    check_set(
+                        "restored set",
+                        state.latest_note_sets().get(*index).unwrap(),
+                        oracle,
+                        &PROBES,
+                    );
+                }
+                for sets in held_note_sets(&state.cryptarchia_ledger) {
+                    for (index, len) in sets.nullifier_lens() {
+                        let tree = sets.get(index).unwrap().nullifiers();
+                        for leaf in 0..len {
+                            tree.leaf(LeafIndex::new(leaf)).unwrap();
+                            tree.path(LeafIndex::new(leaf)).unwrap();
+                        }
+                    }
+                }
+            }
+        };
+        check(&ledger);
+        let discarded = ledger.discard_lost_blocks().unwrap();
+        check(&ledger);
+        assert_eq!(discarded, 1);
+        assert_eq!(chain.written(LEDGER_SET, lost_version), 0);
+        assert_eq!(ledger.discard_lost_blocks().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_failed_pruning_retries_without_new_pruned_blocks_after_clone() {
+        let failing = Arc::new(FailingStore::new());
+        let store = ErasedKv::into_dyn(Arc::clone(&failing));
+        let mut chain = Chain::with_store(store);
+        let b1 = chain.extend(GENESIS, &[10, 30]);
+        let fork = chain.extend(b1, &[20]);
+        let fork_version = chain.version(fork);
+        let parent = chain.extend(b1, &[25]);
+        let tip = chain.commit(parent, &[(LEDGER_SET, &[40])], |state| state);
+        let (pruned, _) = chain
+            .engine
+            .receive_block(
+                tip,
+                parent,
+                Slot::from(u64::from(tip[0])),
+                UncleSlots::default(),
+            )
+            .unwrap();
+        assert!(pruned.stale_blocks().any(|block| *block == fork));
+        let lib = chain.engine.lib();
+        let saved_lib = NullifierStorage::read_lib_state(&chain.store).unwrap();
+
+        failing.fail_next_write();
+        assert!(
+            chain
+                .ledger
+                .prune_with_lib_state(lib, &pruned, &lib[0])
+                .is_err()
+        );
+        assert_eq!(
+            NullifierStorage::read_lib_state(&chain.store).unwrap(),
+            saved_lib
+        );
+        assert!(chain.ledger.state(&fork).is_some());
+        assert!(chain.written(LEDGER_SET, fork_version) > 0);
+
+        // Block processing clones the ledger before applying the next block.
+        chain.ledger = chain.ledger.clone();
+        let removed = chain
+            .ledger
+            .prune_with_lib_state(lib, &PrunedBlocks::new(), &lib[0])
+            .unwrap();
+        assert_eq!(removed, pruned.len());
+        assert!(chain.ledger.state(&fork).is_none());
+        assert_eq!(chain.written(LEDGER_SET, fork_version), 0);
+        assert_eq!(chain.restore().lib, lib);
+        let ledger = &chain.ledger;
+        chain
+            .oracles
+            .retain(|block, _| ledger.state(block).is_some());
+        chain.check(&PROBES);
+        assert_eq!(
+            chain
+                .ledger
+                .prune_with_lib_state(lib, &PrunedBlocks::new(), &lib[0])
+                .unwrap(),
+            0,
+        );
+    }
+
+    #[test]
+    fn test_restart_before_pruning_retry_replays_from_unchanged_lib_state() {
+        let failing = Arc::new(FailingStore::new());
+        let store = ErasedKv::into_dyn(Arc::clone(&failing));
+        let mut chain = Chain::with_store(store);
+        let mut tip = GENESIS;
+        for n in 1..=4 {
+            tip = chain.extend(tip, &[n * 10]);
+        }
+        let old_lib = chain.engine.lib();
+        let parent = tip;
+        tip = chain.commit(parent, &[(LEDGER_SET, &[50])], |state| state);
+        let (pruned, _) = chain
+            .engine
+            .receive_block(
+                tip,
+                parent,
+                Slot::from(u64::from(tip[0])),
+                UncleSlots::default(),
+            )
+            .unwrap();
+        let lib = chain.engine.lib();
+        assert_ne!(lib, old_lib);
+
+        failing.fail_next_write();
+        assert!(
+            chain
+                .ledger
+                .prune_with_lib_state(lib, &pruned, &lib[0])
+                .is_err()
+        );
+        let Restored {
+            mut ledger, lib, ..
+        } = chain.restore();
+        assert_eq!(lib, old_lib);
+        for id in chain.path(lib, tip) {
+            let Applied { parent, spent } = chain.applied[&id].clone();
+            ledger
+                .commit_update(build(&ledger, id, parent, &spent, |state| state))
+                .unwrap();
+        }
+        assert_eq!(ledger.discard_lost_blocks().unwrap(), 0);
+        for (id, state) in &ledger.states {
+            check_set(
+                "replayed after failed pruning",
+                state.latest_note_sets().get(LEDGER_SET).unwrap(),
+                &chain.oracles[id][&LEDGER_SET],
+                &PROBES,
+            );
+        }
+    }
+
+    #[test]
+    fn test_rebase_failure_after_pruning_commit_preserves_finalized_nodes() {
+        let failing = Arc::new(FailingStore::new());
+        let store = ErasedKv::into_dyn(Arc::clone(&failing));
+        let mut chain = Chain::with_store(store);
+        let mut tip = GENESIS;
+        for n in 1..=4 {
+            tip = chain.extend(tip, &[n * 10]);
+        }
+        let parent = tip;
+        tip = chain.commit(parent, &[(LEDGER_SET, &[50])], |state| state);
+        let (pruned, _) = chain
+            .engine
+            .receive_block(
+                tip,
+                parent,
+                Slot::from(u64::from(tip[0])),
+                UncleSlots::default(),
+            )
+            .unwrap();
+        assert!(!pruned.is_empty());
+        let lib = chain.engine.lib();
+
+        // Fail the first rebase read, after finalization and its LIB state commit.
+        failing.fail_read_after_next_write();
+        assert!(
+            chain
+                .ledger
+                .prune_with_lib_state(lib, &pruned, &lib[0])
+                .is_err()
+        );
+        let Restored {
+            mut ledger,
+            lib: restored_lib,
+            ..
+        } = chain.restore();
+        assert_eq!(restored_lib, lib);
+        assert_eq!(
+            chain.ledger.storage.versions.lookup(BlockId(lib)).unwrap(),
+            None
+        );
+        for id in chain.path(lib, tip) {
+            let Applied { parent, spent } = chain.applied[&id].clone();
+            ledger
+                .commit_update(build(&ledger, id, parent, &spent, |state| state))
+                .unwrap();
+        }
+        assert_eq!(ledger.discard_lost_blocks().unwrap(), 0);
+        check_set(
+            "finalized despite rebase error",
+            ledger
+                .state(&lib)
+                .unwrap()
+                .latest_note_sets()
+                .get(LEDGER_SET)
+                .unwrap(),
+            &chain.oracles[&lib][&LEDGER_SET],
+            &PROBES,
+        );
+
+        // The running ledger can still advance and complete later maintenance.
+        chain.extend(tip, &[60]);
+        chain.check(&PROBES);
+    }
+
+    #[test]
     fn test_restart_reopens_the_store_on_disk() {
         let directory = tempfile::tempdir().expect("a temporary directory is created");
         let open = || {
@@ -1053,7 +1387,7 @@ mod tests {
     fn test_a_store_without_lib_state_restores_nothing() {
         let store = ErasedKv::into_dyn(MemKv::new());
         let config = config();
-        let state = LedgerState::from_notes([], &config, GENESIS_POW_REWARD_POOL)
+        let state = LedgerState::from_notes([], &config, &genesis_parameters())
             .with_nullifier_store(&store)
             .unwrap();
         let eras = Arc::new(single_era(config));

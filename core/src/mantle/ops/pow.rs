@@ -154,6 +154,21 @@ pub enum ClaimPowRewardError {
     NoteSet(#[from] NoteSetError),
 }
 
+impl ClaimPowRewardError {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::InsufficientPoolBalance { .. }
+            | Self::EmptyRewards
+            | Self::InvalidPoWRewardTicket
+            | Self::DoubleClaimed
+            | Self::OutOfWindowSlot { .. }
+            | Self::MissingBlock { .. } => false,
+        }
+    }
+}
+
 /// Ledger context needed to validate a [`ClaimPowRewardOp`].
 pub struct ClaimPoWRewardVerificationContext<'a> {
     // As per spec

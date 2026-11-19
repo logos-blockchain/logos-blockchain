@@ -110,7 +110,7 @@ members = [
   "zk/proofs/error",
   "zk/proofs/pol",
   "zk/proofs/poq",
-  "zk/proofs/program_spend",
+  "zk/proofs/program-spend",
   "zk/proofs/zktransfer",
 ]
 resolver = "2"
@@ -127,7 +127,6 @@ jf-poseidon2                       = { default-features = false, git = "https://
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
 lb-binary-codec                    = { default-features = false, package = "logos-blockchain-binary-codec", path = "./binary-codec" }
 lb-binary-codec-macros             = { default-features = false, package = "logos-blockchain-binary-codec-macros", path = "./binary-codec/macros" }
-lb-blake2btree                     = { default-features = false, package = "logos-blockchain-blake2btree", path = "merkle/blake2btree" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
 lb-blend-membership                = { default-features = false, package = "logos-blockchain-blend-membership", path = "./blend/membership" }
@@ -172,7 +171,7 @@ lb-pol                             = { default-features = false, package = "logo
 lb-poq                             = { default-features = false, package = "logos-blockchain-poq", path = "./zk/proofs/poq" }
 lb-poseidon2                       = { default-features = false, package = "logos-blockchain-poseidon2", path = "./zk/poseidon2" }
 lb-pow-service                     = { default-features = false, package = "logos-blockchain-pow-service", path = "./services/pow" }
-lb-program-spend                   = { default-features = false, package = "logos-blockchain-program-spend", path = "./zk/proofs/program_spend" }
+lb-program-spend                   = { default-features = false, package = "logos-blockchain-program-spend", path = "./zk/proofs/program-spend" }
 lb-sdp-service                     = { default-features = false, package = "logos-blockchain-sdp-service", path = "./services/sdp" }
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
@@ -216,13 +215,11 @@ ark-relations                      = { default-features = false, version = "0.5"
 ark-serialize                      = { default-features = false, version = "0.5" }
 astro-float                        = { default-features = false, version = "0.9" }
 async-ctrlc                        = { default-features = false, version = "1.2" }
-async-stream                       = { default-features = false, version = "0.3.6" }
 async-trait                        = { default-features = false, version = "0.1" }
 axum                               = { default-features = false, version = "0.8" }
 backon                             = { default-features = false, version = "1.3.0" }
 bincode                            = { default-features = false, version = "1.3" }
 bip39                              = { default-features = false, version = "2.2" }
-bitvec                             = { default-features = false, version = "1.0" }
 blake2                             = { default-features = false, version = "0.10" }
 boon                               = { default-features = false, version = "0.6" }
 bytes                              = { default-features = false, version = "1.3" }
@@ -276,7 +273,6 @@ opentelemetry-semantic-conventions = { default-features = false, version = "0.32
 opentelemetry_sdk                  = { default-features = false, version = "0.32.1" }
 overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch.git", rev = "f25266fb32b3c0651fdc7c368db8d66a544dcf68" }
 overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch.git", rev = "f25266fb32b3c0651fdc7c368db8d66a544dcf68" }
-owo-colors                         = { default-features = false, version = "4.2.3" }
 perf-event2                        = { default-features = false, version = "0.7.4" }
 pprof                              = { default-features = false, version = "0.15" }
 proc-macro2                        = { default-features = false, version = "1" }
@@ -494,3 +490,15 @@ trivial_casts                          = { level = "allow" }
 unreachable_pub                        = { level = "allow" }
 unsafe_code                            = { level = "allow" }
 variant_size_differences               = { level = "allow" }
+
+[workspace.lints.cargo]
+
+# Pedantic and allowed pedantic warnings (new lints will warn by default)
+pedantic = { level = "warn", priority = -1 }
+
+# Restriction and allowed restriction warnings (new lints will warn by default)
+restriction = { level = "warn", priority = -1 }
+
+# We use kebab case for features and package names, so we allow the non-snake lint
+non_snake_case_features = { level = "allow" }
+non_snake_case_packages = { level = "allow" }

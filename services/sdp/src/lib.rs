@@ -912,7 +912,8 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
-        // A withdrawal carries no nonce: it is valid while no withdrawal is scheduled.
+        // A withdrawal carries no nonce: it is valid while no withdrawal is
+        // scheduled.
         let signed_tx = match wallet_adapter
             .withdraw_tx(tx_builder, &declaration, &self.wallet_config)
             .await

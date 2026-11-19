@@ -1,11 +1,9 @@
 use std::time::Duration;
 
+use lb_config::consensus::UNITS_PER_LGO;
 use lb_core::mantle::{
-    Note, OpRef,
-    note_set::NoteSetIndex,
-    notes::NoteCommitment,
-    traits::Hashable as _,
-    transactions::{UNITS_PER_LGO, hash::TxHash},
+    Note, OpRef, note_set::NoteSetIndex, notes::NoteCommitment, traits::Hashable as _,
+    transactions::hash::TxHash,
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
 use lb_http_api_common::bodies::wallet::{

@@ -145,10 +145,10 @@ mod tests {
             parameters.cryptarchia.max_transactions_size = single_claim_tx_size() as u32;
         })
         .unwrap();
-        // 6,000 rounds shared by 2 nodes, 349 blending operations per message:
-        // 1,047,000 of the 1,048,575 a `Quota` holds.
+        // 9,000 rounds shared by 2 nodes, 233 blending operations per message:
+        // 1,048,500 of the 1,048,575 a `Quota` holds.
         validate(|parameters| {
-            parameters.blend.common.num_blend_layers = NonZero::new(349).unwrap();
+            parameters.blend.common.num_blend_layers = NonZero::new(233).unwrap();
         })
         .unwrap();
         // At a peering degree of 4, `⌊2V/3⌋` reaches 5.
@@ -166,12 +166,12 @@ mod tests {
 
     #[test]
     fn a_core_quota_past_the_poq_circuit_is_refused() {
-        // 6,000 rounds shared by 2 nodes, 350 blending operations per message.
+        // 9,000 rounds shared by 2 nodes, 234 blending operations per message.
         let reason = rejection(|parameters| {
-            parameters.blend.common.num_blend_layers = NonZero::new(350).unwrap();
+            parameters.blend.common.num_blend_layers = NonZero::new(234).unwrap();
         });
         assert!(
-            reason.contains("value 1050000 does not fit in 20 bits"),
+            reason.contains("value 1053000 does not fit in 20 bits"),
             "{reason}"
         );
     }

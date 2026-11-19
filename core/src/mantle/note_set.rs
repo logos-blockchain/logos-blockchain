@@ -167,6 +167,22 @@ pub enum NoteSetError {
     AlreadyStored(NoteSetIndex),
 }
 
+impl NoteSetError {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::Imt(err) => err.is_store_failure(),
+            Self::EmptyInputs
+            | Self::DuplicateInput(_)
+            | Self::UnknownRoot(_)
+            | Self::AlreadySpent(_)
+            | Self::BufferedTooLarge { .. }
+            | Self::MmrFull
+            | Self::AlreadyStored(_) => false,
+        }
+    }
+}
+
 // The commitment MMR of a referenced root extended by a prefix of the
 // transaction buffer is kept every `PREFIX_CHECKPOINT` commitments, so each
 // root replays the buffer once and each lookup at most that many commitments.
@@ -498,9 +514,9 @@ impl NoteSet {
         Ok(mmr.frontier_root())
     }
 
-    // Same root as `step_commitment_root`, resuming from the closest extended MMR
-    // `tx_roots` holds for the referenced root instead of replaying the whole
-    // buffer for every Operation and step.
+    // Same root as `step_commitment_root`, resuming from the closest extended
+    // MMR `tx_roots` holds for the referenced root instead of replaying the
+    // whole buffer for every Operation and step.
     pub fn cached_step_commitment_root(
         &self,
         tx_roots: &TxRoots,
@@ -596,8 +612,8 @@ impl NoteSet {
         }
     }
 
-    // Called at the end of `block` on a set the block changed. The nullifiers the
-    // block inserted are hashed into the tree here, once each.
+    // Called at the end of `block` on a set the block changed. The nullifiers
+    // the block inserted are hashed into the tree here, once each.
     fn record_commitment_root(
         mut self,
         block: BlockNumber,
@@ -1058,7 +1074,8 @@ impl NoteSets {
         root_window: BlockNumber,
     ) -> Result<Self, NoteSetError> {
         for index in self.changed.clone().iter().copied() {
-            // `record_commitment_root` computes the commitment root of the set once.
+            // `record_commitment_root` computes the commitment root of the set
+            // once.
             let set = self
                 .expect_set(index)
                 .clone()
@@ -1272,11 +1289,24 @@ impl NoteSets {
     }
 
     /// Drops from memory what the finalized base of the store holds (see
-    /// [`Imt::rebase`]).
+    /// [`Imt::rebase`]). A set without unfinalized blocks, such as an idle
+    /// channel, holds nothing the base took over: it is kept, shared with
+    /// `self`, without reading the store.
     pub fn rebase(&self) -> Result<Self, NoteSetError> {
-        Ok(self
-            .map_nullifiers(|nullifiers| Ok((nullifiers.rebase()?, WriteBatch::new())))?
-            .sets)
+        let mut sets = self.clone();
+        for (index, set) in self.sets() {
+            if set.nullifiers.has_unfinalized_blocks() {
+                let nullifiers = set.nullifiers.rebase()?;
+                sets.replace(
+                    index,
+                    NoteSet {
+                        nullifiers,
+                        ..set.clone()
+                    },
+                );
+            }
+        }
+        Ok(sets)
     }
 
     /// The writes deleting what the block of `version` wrote in the sets
@@ -1536,8 +1566,11 @@ mod serde_recent_commitment_roots {
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use ark_ff::AdditiveGroup as _;
     use lb_dynamic_merkle::MerkleNode;
+    use lb_kv_store::{KvEntry, KvStore};
 
     use super::*;
 
@@ -1560,14 +1593,18 @@ mod test {
         )
     }
 
+    fn block_id(block: u64) -> BlockId {
+        let mut id = [0; 32];
+        id[24..].copy_from_slice(&block.to_be_bytes());
+        BlockId(id)
+    }
+
     // The sets written to their store as its finalized base, as the sets of
     // the LIB are: only committed trees are encoded.
     fn finalized(sets: &NoteSets, block: u64) -> NoteSets {
         let CommittedSets { sets, writes, .. } = sets.commit(Version(block)).unwrap();
         sets.store().write_batch(writes).unwrap();
-        let mut id = [0; 32];
-        id[24..].copy_from_slice(&block.to_be_bytes());
-        let (sets, writes) = sets.finalize(BlockId(id)).unwrap();
+        let (sets, writes) = sets.finalize(block_id(block)).unwrap();
         sets.store().write_batch(writes).unwrap();
         sets
     }
@@ -1585,8 +1622,8 @@ mod test {
         sets.update_ledger(set).end_block(block, 1024).unwrap()
     }
 
-    // The recent roots of `set` with the first block that cannot reference each,
-    // after checking the order by expiry holds the same entries.
+    // The recent roots of `set` with the first block that cannot reference
+    // each, after checking the order by expiry holds the same entries.
     fn recent_entries(set: &NoteSet) -> HashMap<Fr, BlockNumber> {
         let roots = &set.recent_commitment_roots;
         let entries: HashMap<Fr, BlockNumber> = roots
@@ -1630,6 +1667,98 @@ mod test {
         }
     }
 
+    /// A store in memory that counts the reads it serves.
+    struct CountingKv {
+        inner: MemKv,
+        reads: Arc<AtomicUsize>,
+    }
+
+    impl KvStore for CountingKv {
+        type Error = <MemKv as KvStore>::Error;
+
+        fn get(&self, key: &[u8]) -> Result<Option<Bytes>, Self::Error> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.get(key)
+        }
+
+        fn get_prev(&self, prefix: &[u8], key: &[u8]) -> Result<Option<KvEntry>, Self::Error> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.get_prev(prefix, key)
+        }
+
+        fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<KvEntry>, Self::Error> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.scan_prefix(prefix)
+        }
+
+        fn write_batch(&self, batch: WriteBatch) -> Result<(), Self::Error> {
+            self.inner.write_batch(batch)
+        }
+    }
+
+    // The store reads of rebasing a state the base took over, `retained` by a
+    // fork until the pruning rebases it: its block spent in the ledger set and
+    // one channel set, next to `idle` channels it did not touch.
+    fn rebase_reads(idle: u8) -> (usize, NoteSets) {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let store = ErasedKv::into_dyn(CountingKv {
+            inner: MemKv::new(),
+            reads: Arc::clone(&reads),
+        });
+        let mut sets = NoteSets::with_store(store);
+        for n in 0..=idle {
+            sets = with_channel(sets, n).0;
+        }
+        let sets = finalized(&sets, 1);
+
+        let ledger = sets
+            .ledger()
+            .clone()
+            .execute_spending(&[nullifier(1)])
+            .unwrap();
+        let channel = sets
+            .channel(&channel_id(0))
+            .unwrap()
+            .clone()
+            .execute_spending(&[nullifier(2)])
+            .unwrap();
+        let block = sets
+            .update_ledger(ledger)
+            .update_channel(channel)
+            .end_block(2, 1024)
+            .unwrap();
+        let CommittedSets {
+            sets: retained,
+            writes,
+            ..
+        } = block.commit(Version(2)).unwrap();
+        retained.store().write_batch(writes).unwrap();
+        let (_, writes) = retained.finalize(block_id(2)).unwrap();
+        retained.store().write_batch(writes).unwrap();
+
+        reads.store(0, Ordering::Relaxed);
+        let rebased = retained.rebase().unwrap();
+        (reads.load(Ordering::Relaxed), rebased)
+    }
+
+    /// Rebasing reads the store for the sets a block changed, not for every
+    /// set: idle channels cost no reads.
+    #[test]
+    fn rebase_reads_only_the_sets_with_unfinalized_blocks() {
+        let (reads, rebased) = rebase_reads(0);
+        // The base of the ledger and of the spent channel.
+        assert_eq!(reads, 2);
+        assert_eq!(rebase_reads(100).0, reads);
+
+        let spent_channel = rebased.channel(&channel_id(0)).unwrap();
+        for set in [&rebased.ledger().set, &spent_channel.set] {
+            assert!(!set.nullifiers.has_unfinalized_blocks());
+        }
+        // The dropped nullifiers are read from the base.
+        assert!(rebased.ledger().contains_nullifier(&nullifier(1)).unwrap());
+        assert!(spent_channel.contains_nullifier(&nullifier(2)).unwrap());
+    }
+
     #[test]
     fn test_recent_roots_match_scanning_every_root() {
         let mut sets = NoteSets::new();
@@ -1640,8 +1769,8 @@ mod test {
         };
         let mut seen = vec![seed];
         for block in 0..3500 {
-            // blocks that leave the set unchanged, among them a gap longer than the
-            // window
+            // blocks that leave the set unchanged, among them a gap longer than
+            // the window
             if block % 7 == 3 || (1500..2700).contains(&block) {
                 continue;
             }
@@ -1902,8 +2031,8 @@ mod test {
     fn test_seed_root_leaves_the_window_1024_blocks_after_the_set_first_changes() {
         let empty = NoteSet::empty().commitment_root();
 
-        // Genesis changes the ledger set at block 0: the seed root was current before
-        // it.
+        // Genesis changes the ledger set at block 0: the seed root was current
+        // before it.
         let sets = add_and_end_block(NoteSets::new(), commitment(1), 0);
         let set = sets.ledger();
         assert!(
@@ -2130,7 +2259,8 @@ mod test {
             serde_json::from_str(&serde_json::to_string(&sets).unwrap()).unwrap();
         assert_eq!(decoded, sets);
         assert_eq!(decoded.eligible_root(), sets.eligible_root());
-        // `MerkleNode` has no `PartialEq`, so the paths compare as (side, sibling)
+        // `MerkleNode` has no `PartialEq`, so the paths compare as (side,
+        // sibling)
         let nodes = |path: MerklePath<Fr, 40>| {
             path.map(|node| (matches!(node, MerkleNode::Left(_)), *node.item()))
         };

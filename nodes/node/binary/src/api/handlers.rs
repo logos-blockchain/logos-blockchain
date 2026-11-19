@@ -1196,7 +1196,8 @@ where
                 return Err(error);
             }
         };
-        // A funding that fails releases the notes of `tx_builder` in the wallet.
+        // A funding that fails releases the notes of `tx_builder` in the
+        // wallet.
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,

@@ -95,7 +95,7 @@ optional `shared/` dir, so files common to every environment have a natural home
 deployment/ceremony/genesis/
   shared/                         # (optional) inputs common to ALL environments
   <env>/
-    inscribe.yaml                 # TEMPLATE entropy + PER-RELEASE chain_id/genesis_time
+    inscribe.yaml                 # TEMPLATE entropy/supply/reserves/gas prices + PER-RELEASE chain_id/genesis_time
     deployment-template.yaml      # PER-TYPE eras, keyed by first epoch (consensus / blend / time)
     stakeholders.yaml             # PER-TYPE genesis stake distribution
     providers.yaml                # PER-TYPE bootstrap providers (id, locators, declared amount)
@@ -203,7 +203,7 @@ Shared blueprints reused by every deployment type; not edited per release.
 - `Dockerfile`, `deployment/Dockerfile`
 - `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
 - `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`
-- the `# TEMPLATE` section (`entropy_sources`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
+- the `# TEMPLATE` section (`entropy_sources`, `max_supply`, `pow_reward_pool`, `rewards_reserve`, `storage_gas_price`, `execution_gas_price`) of each `deployment/ceremony/genesis/<env>/inscribe.yaml`
 
 ### 2. Template for a certain deployment type
 Per-type blueprints; change only when a network type is re-defined.

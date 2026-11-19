@@ -20,6 +20,7 @@ enum AssemblyState {
     Progress,
     NoProgress,
     GasCapacityReached,
+    StoreFailure,
 }
 
 /// Ledger state, gas, and fees for a proposal under construction.
@@ -162,6 +163,17 @@ pub fn select_transactions(
                     );
                     invalid_tx_hashes.push(tx.hash());
                 }
+                // The node's own store failed, so no transaction can be judged.
+                Err(err) if err.is_store_failure() => {
+                    tracing::warn!(
+                        target: LOG_TARGET,
+                        tx = ?tx.hash(),
+                        %err,
+                        "store failure during block assembly",
+                    );
+                    assembly_state = AssemblyState::StoreFailure;
+                    break;
+                }
                 Err(err) => {
                     tracing::trace!(
                         target: LOG_TARGET,
@@ -178,10 +190,13 @@ pub fn select_transactions(
     }
 
     // Transactions that never became applicable are genuinely invalid against
-    // this block's ledger state and can be evicted from the mempool. If assembly
-    // stopped at the gas limit, unprocessed transactions are not invalid and
-    // must remain in the mempool.
-    if !matches!(assembly_state, AssemblyState::GasCapacityReached) {
+    // this block's ledger state and can be evicted from the mempool. If
+    // assembly stopped at the gas limit or on a store failure, unprocessed
+    // transactions are not invalid and must remain in the mempool.
+    if !matches!(
+        assembly_state,
+        AssemblyState::GasCapacityReached | AssemblyState::StoreFailure
+    ) {
         invalid_tx_hashes.extend(pending.iter().map(Hashable::hash));
     }
 
@@ -309,7 +324,11 @@ mod tests {
                 max_transactions_size,
                 ..leadership::test_config()
             };
-            let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
+            let ledger_state = LedgerState::from_notes(
+                funding_notes.iter().copied(),
+                &config,
+                &leadership::genesis_parameters(),
+            );
             let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
             let transaction =
                 gas_heavy_transactions(&funding_notes, &funding_key, commitment_root).remove(0);
@@ -341,7 +360,11 @@ mod tests {
         let eras = leadership::single_era(config.clone());
         let funding_key = ZkKey::zero();
         let funding_notes = funding_notes(&funding_key, CANDIDATE_COUNT);
-        let ledger_state = LedgerState::from_notes(funding_notes.iter().copied(), &config, 0);
+        let ledger_state = LedgerState::from_notes(
+            funding_notes.iter().copied(),
+            &config,
+            &leadership::genesis_parameters(),
+        );
         let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
         let candidates = gas_heavy_transactions(&funding_notes, &funding_key, commitment_root);
         let gas_context = ledger_state.tx_context(config.gas_profile).gas_context;

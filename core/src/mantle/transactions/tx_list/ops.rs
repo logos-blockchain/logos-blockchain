@@ -194,8 +194,8 @@ impl TxGasCalculator for OpRefs<'_> {
                 Ok((state, total))
             },
         )?;
-        // The transaction itself, once: its bytes, the note sets it changed and the
-        // root extensions its proofs share.
+        // The transaction itself, once: its bytes, the note sets it changed and
+        // the root extensions its proofs share.
         operations_gas
             .checked_add(context.gas_profile.tx_terms_gas(
                 minimum_signed_transaction_size(self, context),
@@ -241,8 +241,8 @@ impl BinaryDecode for Ops {
 }
 
 impl Hashable for Ops {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> = tx_hasher;
     type Hash = TxHash;
 
@@ -502,8 +502,13 @@ mod tests {
     fn execution_gas_consumption_charges_only_the_base_cost_for_a_channel_the_context_does_not_hold()
      {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelConfig(ChannelConfigOp::sample())]);
-        let context = OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE);
-        // The config creates the channel, so the transaction changes its note set.
+        let context = OpsGasContext::new(
+            HashMap::new(),
+            GasPrices::new(1_000_000_000, 1_000_000_000),
+            GAS_PROFILE,
+        );
+        // The config creates the channel, so the transaction changes its note
+        // set.
         let terms = GAS_PROFILE
             .tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1)
             .unwrap();
@@ -517,7 +522,11 @@ mod tests {
     #[test]
     fn execution_gas_consumption_charges_the_spend_of_an_op_without_a_channel() {
         let ops = Ops::new(FORK_DIGEST, [Op::ChannelDeposit(DepositOp::sample())]);
-        let context = OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE);
+        let context = OpsGasContext::new(
+            HashMap::new(),
+            GasPrices::new(1_000_000_000, 1_000_000_000),
+            GAS_PROFILE,
+        );
         let terms = GAS_PROFILE
             .tx_terms_gas(minimum_signed_transaction_size(&ops.by_ref(), &context), 1)
             .unwrap();
@@ -547,7 +556,7 @@ mod tests {
                 .by_ref()
                 .storage_gas_consumption(&OpsGasContext::new(
                     HashMap::new(),
-                    GasPrices::default(),
+                    GasPrices::new(1_000_000_000, 1_000_000_000),
                     GAS_PROFILE
                 )),
             Ok(Gas::new(33))
@@ -561,7 +570,7 @@ mod tests {
         assert_eq!(
             ops.by_ref().storage_gas_consumption(&OpsGasContext::new(
                 HashMap::new(),
-                GasPrices::default(),
+                GasPrices::new(1_000_000_000, 1_000_000_000),
                 GAS_PROFILE
             )),
             Ok(Gas::new(211))

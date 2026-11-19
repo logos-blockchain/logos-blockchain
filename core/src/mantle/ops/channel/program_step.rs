@@ -93,21 +93,23 @@ pub struct ProgramStep {
 }
 
 impl ProgramStep {
-    // Checks that the ZkProgramSpend circuit fits the step and that `proof`, the
-    // proof of the step at `index`, opens every note of the program it creates.
+    // Checks that the ZkProgramSpend circuit fits the step and that `proof`,
+    // the proof of the step at `index`, opens every note of the program it
+    // creates.
     pub(super) fn preverify_proof(
         &self,
         proof: &ProgramStepProof,
         index: usize,
     ) -> Result<(), Error> {
-        // The ZkProgramSpend circuit fits the inputs and both output lists together
+        // The ZkProgramSpend circuit fits the inputs and both output lists
+        // together
         check_bounds(self.inputs.len(), self.outputs().len())?;
         self.check_openings(proof, index)
     }
 
-    // Every note of the program the step creates is opened, for the availability
-    // of its state; the check reads the step alone, so a copy failing it is
-    // dropped when it deserializes.
+    // Every note of the program the step creates is opened, for the
+    // availability of its state; the check reads the step alone, so a copy
+    // failing it is dropped when it deserializes.
     fn check_openings(&self, proof: &ProgramStepProof, index: usize) -> Result<(), Error> {
         if proof.program_notes.len() != self.program_outputs.len() {
             return Err(Error::ProgramNoteCount {
@@ -193,10 +195,10 @@ pub mod test_utils {
         notes::{Note, ProgramId},
     };
 
-    // Proves a ZkProgramSpend from note openings and their commitment MMR paths,
-    // as `prove_transfer`. Each input is a note of the program, held by `PK0`, and
-    // its path in the commitment MMR; the flags missing past `outputs_of_program`
-    // are false.
+    // Proves a ZkProgramSpend from note openings and their commitment MMR
+    // paths, as `prove_transfer`. Each input is a note of the program, held
+    // by `PK0`, and its path in the commitment MMR; the flags missing past
+    // `outputs_of_program` are false.
     #[must_use]
     pub fn prove_program_spend(
         inputs: &[(Note, MerklePath)],

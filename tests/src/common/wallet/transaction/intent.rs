@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use lb_config::deployment::GAS_PROFILE;
+use lb_config::{consensus::GENESIS_GAS_PRICE, deployment::GAS_PROFILE};
 use lb_core::mantle::{
     Note, Op,
     ops::channel::inscribe::InscriptionOp,
@@ -48,7 +48,11 @@ impl WalletTransactionIntent {
 
     pub fn transfer(receivers: &[(ZkPublicKey, u64)]) -> Result<Self, WalletTransactionError> {
         let empty_context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::default(), GAS_PROFILE),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get()),
+                GAS_PROFILE,
+            ),
         };
         let mut tx_builder = MantleTxBuilder::new();
 

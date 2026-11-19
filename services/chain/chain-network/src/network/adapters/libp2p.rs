@@ -303,7 +303,8 @@ where
         Self::subscribe(&relay, topic.as_str()).await;
         tracing::trace!(target: LOG_TARGET, "Starting up...");
         // this wait seems to be helpful in some cases since we give the time
-        // to the network to establish connections before we start sending messages
+        // to the network to establish connections before we start sending
+        // messages
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         Self {

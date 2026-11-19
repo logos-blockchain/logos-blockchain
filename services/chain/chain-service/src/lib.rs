@@ -82,7 +82,7 @@ use crate::{
     relays::CryptarchiaConsensusRelays,
     service::{
         Service, delete_stale_blocks_from_storage, load_block_ids_from_storage,
-        persist_recovery_state, process_block,
+        persist_recovery_state, process_block, store_immutable_blocks_index,
     },
     sync::block_provider::BlockProvider,
 };
@@ -608,8 +608,9 @@ impl Cryptarchia {
         let leader_proof = header.leader_proof();
 
         // Apply the block to the ledger, and batch-verify ZK proofs.
-        // This ledger update is not finalized yet, and will be committed only after
-        // checking if the block is accepted by the consensus engine.
+        // This ledger update is not finalized yet, and will be committed only
+        // after checking if the block is accepted by the consensus
+        // engine.
         let update = self
             .ledger
             .prepare_update(
@@ -642,8 +643,8 @@ impl Cryptarchia {
                 err => Error::Consensus(err),
             })?;
 
-        // Only a storage failure fails a commit, which leaves the consensus ahead
-        // of the ledger: the block is known but not its state.
+        // Only a storage failure fails a commit, which leaves the consensus
+        // ahead of the ledger: the block is known but not its state.
         let events = self.ledger.commit_update(update)?;
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
@@ -695,17 +696,11 @@ impl Cryptarchia {
             .prune_with_lib_state(self.lib(), pruned_blocks, &info)
         {
             Ok(pruned_states_count) => {
-                if pruned_states_count != pruned_blocks.len() {
-                    error!(
-                        target: LOG_TARGET,
-                        "Pruned {pruned_states_count} ledger states out of {} pruned blocks.",
-                        pruned_blocks.len()
-                    );
-                }
+                // The count can include work retried from earlier updates.
                 log_pruned_ledger_states(pruned_states_count);
             }
-            // A failed write leaves the states in place, and the next pruning
-            // finalizes the newer LIB.
+            // A failed finalization write leaves its work pending in the
+            // ledger. A later call retries it, possibly with a newer LIB.
             Err(err) => error!(
                 target: LOG_TARGET,
                 "Failed to prune the ledger states of {} pruned blocks: {err}",
@@ -714,18 +709,21 @@ impl Cryptarchia {
         }
     }
 
+    /// Switches the engine to online, which prunes the blocks the switch
+    /// finalizes. Their ledger states are left to
+    /// [`Self::prune_ledger_states`], which the caller runs once the immutable
+    /// index of the pruned blocks is stored: it writes the anchor, from which a
+    /// restart replays the chain.
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
-        let mut cryptarchia = Self {
-            ledger: self.ledger,
-            consensus,
-            genesis_id: self.genesis_id,
-        };
-
-        // Prune the ledger states of all the pruned blocks.
-        cryptarchia.prune_ledger_states(&pruned_blocks);
-
-        (cryptarchia, pruned_blocks)
+        (
+            Self {
+                ledger: self.ledger,
+                consensus,
+                genesis_id: self.genesis_id,
+            },
+            pruned_blocks,
+        )
     }
 
     const fn is_bootstrapping(&self) -> bool {
@@ -910,11 +908,18 @@ where
         .await
         .expect("The chain can't be recovered from storage. Remove the chain data, and sync from genesis");
 
-        // These are blocks that have been pruned by the cryptarchia engine but have not
-        // yet been deleted from the storage layer.
+        // These are blocks that have been pruned by the cryptarchia engine but
+        // have not yet been deleted from the storage layer.
         let storage_blocks_to_remove = delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             &self.state.storage_blocks_to_remove,
+            relays.storage(),
+        )
+        .await;
+
+        let immutable_blocks_to_index = store_immutable_blocks_index(
+            BTreeMap::new(),
+            &self.state.immutable_blocks_to_index,
             relays.storage(),
         )
         .await;
@@ -923,6 +928,7 @@ where
             persist_recovery_state(
                 &cryptarchia,
                 storage_blocks_to_remove.clone(),
+                immutable_blocks_to_index.clone(),
                 &fork_digests,
                 &self.service_resources_handle.state_updater,
             );
@@ -940,8 +946,9 @@ where
 
         let chain_online_notifier = ChainOnlineNotifier::new(*cryptarchia.state());
 
-        // Mark the service as ready. The service is operational and can handle requests
-        // even while in bootstrap mode waiting for IBD+PBP to complete.
+        // Mark the service as ready. The service is operational and can handle
+        // requests even while in bootstrap mode waiting for IBD+PBP to
+        // complete.
         self.notify_service_ready();
 
         let Self {
@@ -961,6 +968,7 @@ where
             chain_online_notifier,
             current_slot,
             storage_blocks_to_remove,
+            immutable_blocks_to_index,
             relays,
             sync_blocks_provider,
             slot_timer,
@@ -1087,9 +1095,9 @@ where
             .await?;
 
         let mut blocks = Vec::new();
-        // `load_block_ids_from_storage` walks from tip back to LIB and includes LIB.
-        // Replay recovery blocks in LIB->tip order, skipping LIB because Cryptarchia
-        // is already initialized from it.
+        // `load_block_ids_from_storage` walks from tip back to LIB and includes
+        // LIB. Replay recovery blocks in LIB->tip order, skipping LIB
+        // because Cryptarchia is already initialized from it.
         for id in ids.into_iter().rev().skip(1) {
             let block = BlockWithVerifiedHeader::load_stored(&storage, &id)
                 .await
@@ -1106,7 +1114,8 @@ where
         storage: StorageApi<Tx>,
     ) -> RecoveryBlocks<Tx> {
         if tip == lib {
-            // Cryptarchia already starts from LIB, so there is no branch to replay.
+            // Cryptarchia already starts from LIB, so there is no branch to
+            // replay.
             return RecoveryBlocks {
                 blocks: Vec::new(),
                 fell_back_to_lib: false,

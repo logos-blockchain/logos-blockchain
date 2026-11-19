@@ -54,6 +54,19 @@ pub enum Error {
     Program(#[from] ProgramRegisterError),
 }
 
+impl Error {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::Channel(err) => err.is_store_failure(),
+            Self::Sdp(err) => err.is_store_failure(),
+            Self::Transfer(err) => err.is_store_failure(),
+            Self::ClaimPow(err) => err.is_store_failure(),
+            Self::PowRewardPool(_) | Self::Program(_) => false,
+        }
+    }
+}
+
 /// A state of the mantle ledger
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
@@ -82,6 +95,7 @@ impl LedgerState {
         signed_operation_inscriptions: [SignedOperation<InscriptionOp, Verified, GenesisMode>; 2],
         signed_operation_declarations: GenesisDeclarations,
         config: &Config,
+        pow_reward_pool: PowReward,
         note_sets: NoteSets,
         epoch_state: &EpochState,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
@@ -102,10 +116,7 @@ impl LedgerState {
             Self {
                 channels,
                 sdp,
-                pow: pow::PowState::from_reward_pool_and_config(
-                    pow::POW_REWARD_POOL_GENESIS,
-                    config,
-                ),
+                pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
                 programs: Programs::new(),
             },
             note_sets,

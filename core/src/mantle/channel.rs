@@ -123,6 +123,35 @@ pub enum Error {
     ZkProgramSpendInputs(#[from] ZkProgramSpendInputsError),
 }
 
+impl Error {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::InvalidParent { .. }
+            | Self::UnauthorizedSigner { .. }
+            | Self::InvalidSigner
+            | Self::InvalidSignature
+            | Self::InvalidSignatureIndex { .. }
+            | Self::ChannelNotFound { .. }
+            | Self::InvalidChannelConfig
+            | Self::ThresholdUnmet { .. }
+            | Self::NoNoteSet { .. }
+            | Self::ZkTransferInputs(_)
+            | Self::StepProofCount { .. }
+            | Self::StepDoubleSpend(_)
+            | Self::UnknownProgram(_)
+            | Self::StepProofKind { .. }
+            | Self::UnconsumedDeposit(_)
+            | Self::DepositToAnotherProgram { .. }
+            | Self::ProgramNoteCount { .. }
+            | Self::ProgramNoteOpening { .. }
+            | Self::PaidValueOverflow { .. }
+            | Self::ZkProgramSpendInputs(_) => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
@@ -177,9 +206,10 @@ impl Channels {
     pub fn from_genesis(
         signed_operations: [SignedOperation<InscriptionOp, Verified, GenesisMode>; 2],
     ) -> Result<(Self, Vec<TxEvent>), Error> {
-        // The Cryptarchia inscription creates the null channel and the distribution
-        // inscription follows it; `GenesisTx` checked the null channel, the null key,
-        // the parent chain and the absence of steps. The null channel gets no note set.
+        // The Cryptarchia inscription creates the null channel and the
+        // distribution inscription follows it; `GenesisTx` checked the
+        // null channel, the null key, the parent chain and the absence
+        // of steps. The null channel gets no note set.
         let mut tx_notes = TxNoteState::new();
         let mut context = InscriptionExecutionContext {
             channels: Self::default(),
@@ -283,7 +313,8 @@ impl ChannelState {
         let timeframe_elapsed = tip_sequencer_duration.checked_div(posting_timeframe); // None if timeframe == 0
 
         // Timeout-based rotation takes priority when timed out.
-        // Falls back to timeframe-based rotation, then to the current sequencer.
+        // Falls back to timeframe-based rotation, then to the current
+        // sequencer.
         let index = sequencers_timed_out
             .filter(|_| is_timed_out)
             .or(timeframe_elapsed)

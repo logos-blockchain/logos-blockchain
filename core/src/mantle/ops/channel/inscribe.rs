@@ -1741,12 +1741,9 @@ mod tests {
         };
         // The steps of a mini-block cover the same buffer, whatever their
         // order.
-        for index in 0..2 {
+        for zk_transfer in &deferred.zk_transfers[..2] {
             assert_eq!(
-                deferred.zk_transfers[index]
-                    .inputs()
-                    .tx_commitment_root
-                    .into_inner(),
+                zk_transfer.inputs().tx_commitment_root.into_inner(),
                 extended(&[7])
             );
         }

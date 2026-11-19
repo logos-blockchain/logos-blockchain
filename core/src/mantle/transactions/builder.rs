@@ -156,8 +156,8 @@ impl MantleTxBuilder {
         Ok(builder)
     }
 
-    // TODO: Change this to a `Result` if trying to push too many ops in the genesis
-    // block.
+    // TODO: Change this to a `Result` if trying to push too many ops in the
+    // genesis block.
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
             self.ops
@@ -268,9 +268,9 @@ impl MantleTxBuilder {
     /// only a minimum, not an exact cost.
     pub fn minimum_gas_cost(&self, context: &OpsContext) -> Result<GasCost, TxBuilderError> {
         // The excess value has a fixed width, so the funding Transfer costs the
-        // same before the builder balances. Every fork digest has the same size,
-        // so the one the transaction will carry does not change its gas either:
-        // any prices it.
+        // same before the builder balances. Every fork digest has the same
+        // size, so the one the transaction will carry does not change
+        // its gas either: any prices it.
         let build = self.ops_with_funding(ForkDigest::new([0; 32]), 0)?;
         Ok(build.by_ref().total_gas_cost(&context.gas_context)?)
     }
@@ -343,6 +343,13 @@ impl MantleTxBuilder {
         &self.funding_inputs
     }
 
+    /// The `ZkTransfer` openings of the Operations by Op Index, without the one
+    /// of the funding Transfer.
+    #[must_use]
+    pub const fn op_openings(&self) -> &BTreeMap<usize, ZkTransferOpening> {
+        &self.openings
+    }
+
     // The ZkTransfer openings by Op Index, with the funding Transfer's at the
     // index `build` appends it.
     #[must_use]
@@ -369,8 +376,8 @@ impl MantleTxBuilder {
         &self.channel_multi_sig_proofs
     }
 
-    // TODO: Change this to a `Result` if genesis tx already contains max number of
-    // ops.
+    // TODO: Change this to a `Result` if genesis tx already contains max number
+    // of ops.
     /// The transaction, to be signed under the fork digest `fork_digest`,
     /// with the funding Transfer as its last operation.
     pub fn build(self, fork_digest: ForkDigest) -> Result<Ops, TxBuilderError> {

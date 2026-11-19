@@ -89,6 +89,16 @@ pub enum TransferError {
     ZkTransferInputs(#[from] ZkTransferInputsError),
 }
 
+impl TransferError {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::ZkTransferInputs(_) => false,
+        }
+    }
+}
+
 pub struct TransferValidationContext<'a> {
     pub note_sets: &'a NoteSets,
     pub tx_notes: &'a TxNoteState,
@@ -276,7 +286,8 @@ mod test {
     #[test]
     fn transfer_op_execution_gas_does_not_scale_with_the_threshold() {
         for threshold in [0, 1, 3] {
-            // 2 inputs, 2 outputs, nothing buffered: 10 + 4177 + 2 * 1758 + 2 * 58
+            // 2 inputs, 2 outputs, nothing buffered: 10 + 4177 + 2 * 1758 + 2 *
+            // 58
             assert_eq!(
                 TransferOp::sample().execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(7_819))

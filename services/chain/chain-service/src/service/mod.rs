@@ -112,22 +112,19 @@ impl SdpQuerySource for Cryptarchia {
         &self,
         state_id: HeaderId,
     ) -> HashMap<DeclarationId, Self::Declaration> {
-        self.ledger
-            .state(&state_id)
-            .map(|ledger_state| {
-                ledger_state
-                    .mantle_ledger()
-                    .sdp
-                    .declarations()
-                    .iter()
-                    .flat_map(|(_, declarations)| {
-                        declarations
-                            .iter()
-                            .map(|(id, declaration)| (*id, declaration.clone()))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        self.ledger.state(&state_id).map_or_default(|ledger_state| {
+            ledger_state
+                .mantle_ledger()
+                .sdp
+                .declarations()
+                .iter()
+                .flat_map(|(_, declarations)| {
+                    declarations
+                        .iter()
+                        .map(|(id, declaration)| (*id, declaration.clone()))
+                })
+                .collect()
+        })
     }
 
     fn finalized_declaration_at(
@@ -233,6 +230,9 @@ where
     chain_online_notifier: ChainOnlineNotifier,
     current_slot: Slot,
     storage_blocks_to_remove: HashSet<HeaderId>,
+    /// The immutable index entries a write failed to store, retried with the
+    /// next block.
+    immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
     relays: CryptarchiaConsensusRelays<Tx>,
     sync_blocks_provider: BlockProvider<Tx>,
     slot_timer: lb_time_service::EpochSlotTickStream,
@@ -273,6 +273,7 @@ where
             chain_online_notifier: self.chain_online_notifier,
             current_slot: self.current_slot,
             storage_blocks_to_remove: self.storage_blocks_to_remove,
+            immutable_blocks_to_index: self.immutable_blocks_to_index,
             relays: self.relays,
             sync_blocks_provider: self.sync_blocks_provider,
             slot_timer: self.slot_timer,
@@ -343,6 +344,13 @@ where
         self.storage_blocks_to_remove = delete_stale_blocks_from_storage(
             outcome.pruned_blocks.stale_blocks().copied(),
             &self.storage_blocks_to_remove,
+            self.relays.storage(),
+        )
+        .await;
+        // The block stored its own immutable index with its data.
+        self.immutable_blocks_to_index = store_immutable_blocks_index(
+            BTreeMap::new(),
+            &self.immutable_blocks_to_index,
             self.relays.storage(),
         )
         .await;
@@ -499,23 +507,22 @@ where
             }
             Query::GetSdpSnapshot { reply_channel } => {
                 let tip = self.cryptarchia.tip();
-                let declarations = self
-                    .cryptarchia
-                    .ledger
-                    .state(&tip)
-                    .map(|ledger_state| {
-                        ledger_state
-                            .epoch_state()
-                            .active_declarations
-                            .iter()
-                            .flat_map(|(_, declarations)| {
-                                declarations
-                                    .iter()
-                                    .map(|(id, declaration)| (*id, declaration.clone()))
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let declarations =
+                    self.cryptarchia
+                        .ledger
+                        .state(&tip)
+                        .map_or_default(|ledger_state| {
+                            ledger_state
+                                .epoch_state()
+                                .active_declarations
+                                .iter()
+                                .flat_map(|(_, declarations)| {
+                                    declarations
+                                        .iter()
+                                        .map(|(id, declaration)| (*id, declaration.clone()))
+                                })
+                                .collect()
+                        });
                 reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!(target: LOG_TARGET, "Could not send SDP snapshot through channel");
                 });
@@ -632,6 +639,7 @@ where
         persist_recovery_state(
             &self.cryptarchia,
             self.storage_blocks_to_remove.clone(),
+            self.immutable_blocks_to_index.clone(),
             &self.fork_digests,
             &self.state_updater,
         );
@@ -784,14 +792,12 @@ fn log_blend_snapshot_provider_decisions(
     let active_blend_declarations = active_declarations.for_service(&ServiceType::BlendNetwork);
 
     if tracing::enabled!(target: LOG_TARGET, tracing::Level::DEBUG) {
-        let active_provider_ids: Vec<_> = active_blend_declarations
-            .map(|active| {
-                active
-                    .values()
-                    .map(|declaration| format!("{:?}", declaration.provider_id))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let active_provider_ids: Vec<_> = active_blend_declarations.map_or_default(|active| {
+            active
+                .values()
+                .map(|declaration| format!("{:?}", declaration.provider_id))
+                .collect()
+        });
         debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
@@ -827,8 +833,9 @@ fn log_blend_snapshot_provider_decisions(
             }
             None => {
                 // The frozen EpochState retains only included declarations. The
-                // historical active fields for an excluded provider are therefore
-                // unavailable here and must not be reconstructed from the current
+                // historical active fields for an excluded provider are
+                // therefore unavailable here and must not be
+                // reconstructed from the current
                 // ledger declaration.
                 trace!(
                     target: LOG_TARGET,
@@ -1262,7 +1269,8 @@ where
         }
         if current == branch.parent() {
             debug!(target: LOG_TARGET, ?to_ancestor, "reached genesis while looking for ancestor from memory");
-            // Return collected blocks and an error since we couldn't reach `to_ancestor`.
+            // Return collected blocks and an error since we couldn't reach
+            // `to_ancestor`.
             return Box::pin(stream::iter(in_memory).chain(stream::once(async move {
                 Err(Error::ParentIdNotFound(current))
             })));
@@ -1444,14 +1452,67 @@ fn immutable_blocks_index(
     new_lib_slot: Slot,
 ) -> BTreeMap<Slot, HeaderId> {
     let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
-    // The new LIB is also immutable and should be immediately queryable by slot.
-    // prune_immutable_blocks() only returns blocks older than the new LIB,
-    // so we explicitly add the new LIB here.
+    // The new LIB is also immutable and should be immediately queryable by
+    // slot. prune_immutable_blocks() only returns blocks older than the new
+    // LIB, so we explicitly add the new LIB here.
     if prev_lib.is_none_or(|prev| prev != new_lib) {
         immutable_blocks.insert(new_lib_slot, new_lib);
     }
 
     immutable_blocks
+}
+
+/// Stores the immutable index of `immutable_blocks` together with `failed`,
+/// the entries earlier writes failed to store. Returns the entries to retry:
+/// none once the write succeeds, all of them otherwise.
+pub async fn store_immutable_blocks_index<Tx>(
+    immutable_blocks: BTreeMap<Slot, HeaderId>,
+    failed: &BTreeMap<Slot, HeaderId>,
+    storage: &StorageApi<Tx>,
+) -> BTreeMap<Slot, HeaderId> {
+    let mut entries = failed.clone();
+    entries.extend(immutable_blocks);
+    if entries.is_empty() {
+        return entries;
+    }
+    match storage.store_immutable_block_ids(entries.clone()).await {
+        Ok(()) => BTreeMap::new(),
+        Err(error) => {
+            error!(
+                target: LOG_TARGET,
+                %error,
+                entries = entries.len(),
+                "failed to store immutable block IDs, retried with the next block"
+            );
+            entries
+        }
+    }
+}
+
+/// Switches `cryptarchia` to online and finalizes the blocks it prunes: their
+/// immutable index first, then the anchor of the new LIB. A restart replays the
+/// chain above the anchor, so a stop between the two writes switches again and
+/// indexes the blocks again. Returns the index entries to retry, as
+/// [`store_immutable_blocks_index`] does: the ledger is finalized either way.
+pub async fn go_online<Tx>(
+    cryptarchia: Cryptarchia,
+    failed_index: &BTreeMap<Slot, HeaderId>,
+    storage: &StorageApi<Tx>,
+) -> (
+    Cryptarchia,
+    PrunedBlocks<HeaderId>,
+    BTreeMap<Slot, HeaderId>,
+) {
+    let (mut cryptarchia, pruned_blocks) = cryptarchia.online();
+    let immutable_blocks = immutable_blocks_index(
+        &pruned_blocks,
+        None,
+        cryptarchia.lib(),
+        cryptarchia.lib_branch().slot(),
+    );
+    let failed_index = store_immutable_blocks_index(immutable_blocks, failed_index, storage).await;
+    cryptarchia.prune_ledger_states(&pruned_blocks);
+    (cryptarchia, pruned_blocks, failed_index)
 }
 
 async fn broadcast_finalized_block(
@@ -1468,12 +1529,14 @@ async fn broadcast_finalized_block(
 pub fn persist_recovery_state(
     cryptarchia: &Cryptarchia,
     storage_blocks_to_remove: HashSet<HeaderId>,
+    immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
     fork_digests: &EraSchedule<ForkDigest>,
     state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
 ) {
     match CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
         cryptarchia,
         storage_blocks_to_remove,
+        immutable_blocks_to_index,
         fork_digests,
     ) {
         Ok(state) => {

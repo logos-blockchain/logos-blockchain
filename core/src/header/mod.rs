@@ -95,8 +95,8 @@ impl BinaryEncode for Header {
             proof_of_leadership,
         } = self;
 
-        // The wire layout leads with `bedrock_version`, which tells a node which
-        // rules parse the rest of the header.
+        // The wire layout leads with `bedrock_version`, which tells a node
+        // which rules parse the rest of the header.
         BEDROCK_VERSION.encode_into(out);
         parent_block.encode_into(out);
         slot.encode_into(out);
@@ -759,8 +759,8 @@ mod body_root_test_vectors {
         let header_id = header.id();
 
         // Self-check: recompute the preimage from the public accessors and make
-        // sure it matches `Header::id()` (the exact byte layout is documented in
-        // the module-level comment).
+        // sure it matches `Header::id()` (the exact byte layout is documented
+        // in the module-level comment).
         let proof = header.leader_proof();
         let mut h = Hasher::new();
         h.update(b"BLOCK_ID_V1");
@@ -778,7 +778,8 @@ mod body_root_test_vectors {
         );
 
         println!("================================================================");
-        // Field labels match the names in the `block_id`/`Header` specification.
+        // Field labels match the names in the `block_id`/`Header`
+        // specification.
         println!("vector 5  : HeaderId (block_id) reusing vector 3's body_root");
         println!("{:20}: {:02x}", "bedrock_version", BEDROCK_VERSION);
         println!("{:20}: {}", "parent_block", hex::encode(parent_block.0));

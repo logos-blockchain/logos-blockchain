@@ -54,7 +54,8 @@ async fn core_redial_same_peer() {
     assert_eq!(*dial_attempt_1.address(), empty_multiaddr);
     assert_eq!(dial_attempt_1.attempt_number(), 1.try_into().unwrap());
 
-    // Poll through all 3 dial attempts (each fails with OutgoingConnectionError).
+    // Poll through all 3 dial attempts (each fails with
+    // OutgoingConnectionError).
     for failed_attempt in 1..=3 {
         dialing_swarm
             .poll_next_until(|event| {
@@ -64,8 +65,8 @@ async fn core_redial_same_peer() {
                 *peer_id == Some(random_peer_id)
             })
             .await;
-        // Between errors, the failed peer backs off, with the number of its next
-        // attempt.
+        // Between errors, the failed peer backs off, with the number of its
+        // next attempt.
         let next_attempt = match dialing_swarm.peer_dials().get(&random_peer_id) {
             Some(PeerDialState::BackingOff(dial_attempt)) => {
                 Some(dial_attempt.attempt_number().get())
@@ -113,9 +114,9 @@ async fn core_redial_different_peer_after_redial_limit() {
         .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
     let dialing_peer_id = *dialing_swarm.local_peer_id();
 
-    // Dial a random peer on a random address, which should fail after the maximum
-    // number of attempts, after which the dialing swarm should connect to the
-    // listening swarm.
+    // Dial a random peer on a random address, which should fail after the
+    // maximum number of attempts, after which the dialing swarm should
+    // connect to the listening swarm.
     dialing_swarm.dial_peer_at_addr(PeerId::random(), Protocol::Memory(0).into());
 
     // Allow enough time for backoff retries to complete (2s + 4s + margin).
@@ -471,7 +472,8 @@ async fn core_drops_retry_to_a_peer_that_connected_in_the_meantime() {
     // ...and the remote connects to the node while the node backs off from it.
     remote_swarm.dial_peer_at_addr(dialing_node.id, dialing_node.address);
 
-    // Drive both swarms past the retry, which is due 2 seconds after the failure.
+    // Drive both swarms past the retry, which is due 2 seconds after the
+    // failure.
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
         select! {
@@ -686,9 +688,9 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     // Drive both swarms for a fixed window: the reachable peer connects and the
     // two unreachable peers fail. A node below the minimum peering degree keeps
     // retrying, so the swarm never goes quiet — we therefore run until a fixed
-    // deadline (NOT until quiescence, which would never arrive) and then inspect
-    // the steady state. The deadline is computed once; recreating `sleep` each
-    // iteration would reset the timer and loop forever.
+    // deadline (NOT until quiescence, which would never arrive) and then
+    // inspect the steady state. The deadline is computed once; recreating
+    // `sleep` each iteration would reset the timer and loop forever.
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
         select! {
@@ -707,18 +709,18 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     let pending = dialing_swarm.pending_retries_count();
     let full_retry = dialing_swarm.has_pending_full_membership_retry();
 
-    // Sanity: the reachable peer connected, so we are genuinely one short of the
-    // minimum (not simply failing to connect to anyone).
+    // Sanity: the reachable peer connected, so we are genuinely one short of
+    // the minimum (not simply failing to connect to anyone).
     assert_eq!(
         healthy, 1,
         "setup precondition: the single reachable peer should have negotiated"
     );
 
-    // Regression guard: a node below the minimum peering degree must not give up
-    // — it must still be trying to reach the minimum, whether via an ongoing
-    // dial, a pending per-peer retry, or a scheduled retry-from-scratch. Before
-    // the fix it ended with none of these, stranded at degree 1 < 2 until the
-    // next epoch.
+    // Regression guard: a node below the minimum peering degree must not give
+    // up — it must still be trying to reach the minimum, whether via an
+    // ongoing dial, a pending per-peer retry, or a scheduled
+    // retry-from-scratch. Before the fix it ended with none of these,
+    // stranded at degree 1 < 2 until the next epoch.
     assert!(
         healthy >= min_peering_degree || ongoing > 0 || pending > 0 || full_retry,
         "node gave up below the minimum peering degree: healthy={healthy} < {min_peering_degree}, \
@@ -757,16 +759,17 @@ async fn core_maintenance_task_dials_to_maintain_peering_degree() {
         .with_peering_degree_check_interval(time::interval(Duration::from_millis(200)))
         .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
 
-    // Precondition: the node is idle and below the (default) minimum degree of 1.
+    // Precondition: the node is idle and below the (default) minimum degree of
+    // 1.
     assert!(dialing_swarm.peer_dials().is_empty());
     assert_eq!(
         dialing_swarm.behaviour().blend.with_core().num_live_peers(),
         0
     );
 
-    // Drive both swarms until a fixed deadline. The only thing that can initiate a
-    // dial is the periodic maintenance tick; once it fires it must connect to the
-    // reachable peer.
+    // Drive both swarms until a fixed deadline. The only thing that can
+    // initiate a dial is the periodic maintenance tick; once it fires it
+    // must connect to the reachable peer.
     let deadline = time::Instant::now() + Duration::from_secs(2);
     loop {
         select! {
@@ -989,9 +992,10 @@ async fn core_does_not_retry_a_blacklisted_peer() {
     );
     tokio::spawn(async move { offender.run().await });
 
-    // The behaviour refuses a blacklisted peer once the transport has connected,
-    // which is the same shape of failure as a dropped handshake: an outgoing
-    // connection error the swarm has to decide what to do about.
+    // The behaviour refuses a blacklisted peer once the transport has
+    // connected, which is the same shape of failure as a dropped handshake:
+    // an outgoing connection error the swarm has to decide what to do
+    // about.
     victim.dial_peer_at_addr(offender_id, offender_node.address);
     time::timeout(
         Duration::from_secs(10),

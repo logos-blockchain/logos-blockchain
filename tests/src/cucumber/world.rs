@@ -1646,7 +1646,8 @@ impl CucumberWorld {
         }
 
         if self.lifecycle.node_binary_profile == Some(NodeBinaryProfile::TokioConsole) {
-            // The profiling build is resolved independently from the CI release binary.
+            // The profiling build is resolved independently from the CI release
+            // binary.
             return Ok(());
         }
 

@@ -119,8 +119,9 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
             staking_secret_key: nullifier_key,
             ..wallet
         };
-        // Not bound to a block yet: the proposer binds it with `with_msg` to the
-        // block ID, which covers the entropy contribution of this witness.
+        // Not bound to a block yet: the proposer binds it with `with_msg` to
+        // the block ID, which covers the entropy contribution of this
+        // witness.
         let private = LeaderPrivate::new(leader_public, wallet, Fr::ZERO, reward_value);
         if result_channel.send(private).is_err() {
             debug!(target: LOG_TARGET, "Failed to send result via channel");

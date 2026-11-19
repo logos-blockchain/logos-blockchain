@@ -33,7 +33,7 @@ use lb_blend_proofs::{
     },
     selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
 };
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, UnsecuredZkKey, kdf_public_key};
+use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
 use logos_blockchain_blend_message::{
     PaddedPayloadBody, PayloadType,
     crypto::proofs::{PoQVerificationInputsMinusSigningKey, RealProofsVerifier},
@@ -94,8 +94,7 @@ static FIXTURE: LazyLock<(EncapsulatedMessage, RealProofsVerifier)> = LazyLock::
     let mut zk_keys: Vec<(UnsecuredZkKey, ZkHash)> = (1..=CORE_NODES)
         .map(|seed| {
             let secret_key = UnsecuredZkKey::new(ZkHash::from(seed));
-            // The zk_id the core branch proves.
-            let public_key = kdf_public_key(secret_key.as_fr()).into_inner();
+            let public_key = secret_key.to_public_key().into_inner();
             (secret_key, public_key)
         })
         .collect();

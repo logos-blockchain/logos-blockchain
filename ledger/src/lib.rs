@@ -14,7 +14,7 @@ mod update;
 #[cfg(test)]
 mod test_utils;
 
-use std::{hash::Hash, sync::Arc};
+use std::{hash::Hash, mem::replace, sync::Arc};
 
 pub use config::Config;
 pub use cryptarchia::EpochState;
@@ -29,14 +29,15 @@ use lb_core::{
     mantle::{
         GenesisParameters, Value, VerificationError,
         batch::DeferredProofs,
+        channel::Channels,
         gas::{Gas, GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::{NoteSetError, NoteSets, TxNoteState},
         notes::{self, NoteCommitment},
         ops::{
-            SignedOp,
+            OpRef, SignedOp,
             channel::{deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext},
-            pow::{ClaimPoWRewardExecutionContext, PowReward},
+            pow::ClaimPoWRewardExecutionContext,
             program::ProgramRegisterExecutionContext,
             sdp::{SDPActiveOp, SDPDeclareOp},
         },
@@ -52,7 +53,7 @@ use lb_core::{
     proofs::leader_proof::LeaderPublic,
 };
 use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot, UncleSlots};
-use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_groth16::Fr;
 use lb_imt::store::BlockId;
 use lb_kv_store::{Bytes, DynKvStore};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
@@ -60,17 +61,13 @@ use mantle::LedgerState as MantleLedger;
 use nullifier_storage::{
     LIB_STATE_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
 };
-use rpds::HashTrieMapSync;
+use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
 
 use crate::{
-    block_rewards::{BlockRewardsError, MAX_SUPPLY, REWARDS_RESERVE_GENESIS},
+    block_rewards::BlockRewardsError,
     config::{EraScheduledConfig, ExecutionMarketConfig, config_for_slot},
-    mantle::{
-        helpers::MantleOperationVerificationHelper,
-        pow::{POW_REWARD_POOL_GENESIS, PowState},
-        sdp::SdpLedger,
-    },
+    mantle::{helpers::MantleOperationVerificationHelper, pow::PowState, sdp::SdpLedger},
     update::{BatchVerifiedUpdate, PreparedUpdate},
 };
 
@@ -95,6 +92,61 @@ type CountedTxOutcome = (
     DeferredProofs,
 );
 
+// The Execution Gas of the Operations of a transaction, priced as they are
+// admitted and held to the gas a transaction can have.
+struct OperationsGas {
+    profile: GasProfile,
+    limit: Gas,
+    // The gas of the Operations admitted, without their root extensions.
+    operations: Gas,
+    // The state the Operations are priced against, moved by those admitted.
+    state: TxGasState<Channels>,
+}
+
+impl OperationsGas {
+    // The Operations are priced against the channels as the transaction found
+    // them.
+    fn new(profile: GasProfile, limit: Gas, channels: Channels) -> Self {
+        Self {
+            profile,
+            limit,
+            operations: Gas::new(0),
+            state: TxGasState::new(channels),
+        }
+    }
+
+    // Prices `operation` against the state the Operations before moved, and
+    // admits it only if the transaction has the gas for it and for the root
+    // extensions so far, its own with them: verifying it extends the roots its
+    // proofs name over the commitments buffered so far, work that must be paid
+    // for before it is done.
+    fn admit<Id>(&mut self, operation: OpRef<'_>) -> Result<(), LedgerError<Id>> {
+        self.operations = self
+            .operations
+            .checked_add(operation.execution_gas(&self.profile, &self.state)?)?;
+        self.state.apply(operation);
+        let gas = self.total()?;
+        if gas > self.limit {
+            return Err(LedgerError::TooMuchTransactionExecutionGas {
+                gas,
+                limit: self.limit,
+            });
+        }
+        Ok(())
+    }
+
+    // The gas of the Operations admitted, with the root extensions their proofs
+    // share paid once.
+    fn total(&self) -> Result<Gas, GasOverflow> {
+        self.operations
+            .checked_add(self.state.root_extensions_gas(&self.profile)?)
+    }
+
+    fn changed_note_sets(&self) -> usize {
+        self.state.changed_note_sets()
+    }
+}
+
 // Mantle Validation step 2: the excess of TRANSFER, CHANNEL_DEPOSIT and
 // SDP_WITHDRAW adds to a checked uint64 balance.
 fn add_excess<Id>(balance: Balance, excess_value: Value) -> Result<Balance, LedgerError<Id>> {
@@ -105,12 +157,22 @@ fn add_excess<Id>(balance: Balance, excess_value: Value) -> Result<Balance, Ledg
 }
 
 /// What the published distribution and the `SDP_DECLARE` Operations of a
-/// genesis block hold together.
+/// genesis block hold together, unless the reserves exceed its maximum supply.
 ///
-/// It is the maximum supply minus the pow reward pool and the rewards reserve
-/// (Mantle Ledger Initialization in the genesis spec).
-pub const GENESIS_STAKE_SUPPLY: Value =
-    MAX_SUPPLY - POW_REWARD_POOL_GENESIS - REWARDS_RESERVE_GENESIS;
+/// It is the maximum supply less the `PoW` reward pool and the rewards reserve
+/// the genesis starts with (Mantle Ledger Initialization in the genesis spec).
+#[must_use]
+pub const fn genesis_stake_supply(
+    max_supply: Value,
+    pow_reward_pool: Value,
+    rewards_reserve: Value,
+) -> Option<Value> {
+    match max_supply.checked_sub(pow_reward_pool) {
+        Some(rest) => rest.checked_sub(rewards_reserve),
+        None => None,
+    }
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum LedgerError<Id> {
     #[error("Invalid block slot {block:?} for parent slot {parent:?}")]
@@ -133,6 +195,10 @@ pub enum LedgerError<Id> {
         "The genesis distribution and declarations hold {total}, the maximum supply requires {expected}"
     )]
     GenesisSupplyMismatch { total: Value, expected: Value },
+    #[error(
+        "The PoW reward pool and the rewards reserve the genesis starts with exceed its maximum supply"
+    )]
+    GenesisReservesExceedMaxSupply,
     #[error("The first Transfer Operation is missing in genesis tx")]
     MissingTransferGenesis(),
     #[error("Fees don't cover the minimal execution base fee cost")]
@@ -163,6 +229,39 @@ pub enum LedgerError<Id> {
     LibNotFound(Id),
     #[error("The LIB state could not be encoded or decoded: {0}")]
     LibState(String),
+}
+
+impl<Id> LedgerError<Id> {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::NoteSet(err) => err.is_store_failure(),
+            Self::Mantle(err) => err.is_store_failure(),
+            Self::VerificationError(err) => err.is_store_failure(),
+            Self::InvalidSlot { .. }
+            | Self::ParentNotFound(_)
+            | Self::InvalidProof
+            | Self::InsufficientBalance
+            | Self::BalanceOverflow
+            | Self::UnbalancedTransaction
+            | Self::GasOverflow(_)
+            | Self::GenesisSupplyMismatch { .. }
+            | Self::GenesisReservesExceedMaxSupply
+            | Self::MissingTransferGenesis()
+            | Self::InsufficientExecutionFee
+            | Self::TooMuchTransactionExecutionGas { .. }
+            | Self::TooMuchExecutionGas { .. }
+            | Self::TooManyTransactions { .. }
+            | Self::TransactionsTooLarge { .. }
+            | Self::OpDataTooLarge { .. }
+            | Self::InvalidStoragePrice
+            | Self::UnacceptedForkDigest(_)
+            | Self::BlockRewards(_)
+            | Self::WrongRewardValue { .. }
+            | Self::LibNotFound(_)
+            | Self::LibState(_) => false,
+        }
+    }
 }
 
 fn block_id<Id: Into<BlockHash>>(id: Id) -> BlockId {
@@ -226,6 +325,38 @@ pub struct Ledger<Id: Eq + Hash> {
     /// era of its slot, and each epoch is settled under the config of its era.
     era_schedule: Arc<EraScheduledConfig>,
     storage: NullifierStorage,
+    pending_pruning: PendingPruning<Id>,
+}
+
+// Consensus reports each pruned block once. Keep its storage work until the
+// finalization batch succeeds, even if consensus advances the LIB meanwhile.
+#[derive(Clone)]
+struct PendingPruning<Id: Eq + Hash> {
+    stale: HashTrieSetSync<Id>,
+    immutable: HashTrieSetSync<Id>,
+}
+
+impl<Id: Eq + Hash + Copy> PendingPruning<Id> {
+    fn new() -> Self {
+        Self {
+            stale: HashTrieSetSync::new_sync(),
+            immutable: HashTrieSetSync::new_sync(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.stale.is_empty() && self.immutable.is_empty()
+    }
+
+    fn extend(&mut self, lib: Id, pruned: &PrunedBlocks<Id>) {
+        for block in pruned.stale_blocks() {
+            self.stale.insert_mut(*block);
+        }
+        for block in pruned.immutable_blocks().values() {
+            self.immutable.insert_mut(*block);
+        }
+        self.immutable.insert_mut(lib);
+    }
 }
 
 impl<Id: Eq + Hash + core::fmt::Debug> core::fmt::Debug for Ledger<Id> {
@@ -303,8 +434,9 @@ where
         Ok(Some(Restored { ledger, lib, info }))
     }
 
-    // Creates a ledger with `state` as its LIB, and saves the nullifier trees of
-    // `state` in the DB as the base: the trees all later blocks build on.
+    // Creates a ledger with `state` as its LIB, and saves the nullifier trees
+    // of `state` in the DB as the base: the trees all later blocks build
+    // on.
     //
     // `lib_state_bytes` encodes the [`LibState`] to save in the same atomic
     // write, or returns `None` if it is already saved.
@@ -339,6 +471,7 @@ where
             states: HashTrieMapSync::new_sync().insert(id, state),
             era_schedule,
             storage,
+            pending_pruning: PendingPruning::new(),
         })
     }
 
@@ -457,7 +590,7 @@ where
     ///
     /// The pruned blocks must be every block that is not `lib` or one of its
     /// descendants, as [`lb_cryptarchia_engine::Cryptarchia`] prunes them.
-    /// Nothing happens when nothing is pruned: the LIB did not move.
+    /// Failed pruning work is retried even when no new blocks are pruned.
     ///
     /// Returns the number of states removed.
     pub fn prune(&mut self, lib: Id, pruned: &PrunedBlocks<Id>) -> Result<usize, LedgerError<Id>>
@@ -492,19 +625,28 @@ where
     where
         Id: Into<BlockHash>,
     {
-        if pruned.is_empty() {
+        if pruned.is_empty() && self.pending_pruning.is_empty() {
             return Ok(0);
         }
+        self.pending_pruning.extend(lib, pruned);
         let lib_state = self
             .states
             .get(&lib)
             .ok_or(LedgerError::LibNotFound(lib))?
             .clone();
-        let stale: Vec<BlockId> = pruned.stale_blocks().copied().map(block_id).collect();
-        let immutable: Vec<BlockId> = pruned
-            .immutable_blocks()
-            .values()
+        let stale: Vec<BlockId> = self
+            .pending_pruning
+            .stale
+            .iter()
             .copied()
+            .map(block_id)
+            .collect();
+        let immutable: Vec<BlockId> = self
+            .pending_pruning
+            .immutable
+            .iter()
+            .copied()
+            .filter(|block| *block != lib)
             .map(block_id)
             .collect();
         let (lib_ledger, mut batch) = self.storage.prune(
@@ -524,9 +666,12 @@ where
         }
         self.storage.write(batch)?;
 
+        // Registry releases and the LIB state have committed. Later rebase or GC
+        // failures must not leave this completed work pending.
+        let completed = replace(&mut self.pending_pruning, PendingPruning::new());
         let mut removed = 0usize;
-        for block in pruned.all() {
-            if self.states.remove_mut(block) {
+        for block in completed.stale.iter().chain(completed.immutable.iter()) {
+            if *block != lib && self.states.remove_mut(block) {
                 removed = removed.saturating_add(1);
             }
         }
@@ -692,8 +837,8 @@ impl LedgerState {
                 cryptarchia_ledger.pay_service_rewards::<Id>(&effect.reward_notes)?;
         }
 
-        // Block Execution step 2: the channel and SDP withdrawals due at this slot,
-        // before the transactions.
+        // Block Execution step 2: the channel and SDP withdrawals due at this
+        // slot, before the transactions.
         let (cryptarchia_ledger, released) = cryptarchia_ledger.release_withdrawals(slot)?;
         let mut events = effect.events;
         events.extend(
@@ -987,9 +1132,10 @@ impl LedgerState {
         let leader_reward;
         (self, leader_reward) =
             self.compute_block_rewards(gas_and_fees.fee_burned, gas_and_fees.fee_tip, config)?;
-        // Leader Reward Validation. The block ID covers the value and, through the
-        // body root every block has confirmed by now, the transactions, so this
-        // failure condemns the block and not one copy of it.
+        // Leader Reward Validation. The block ID covers the value and, through
+        // the body root every block has confirmed by now, the
+        // transactions, so this failure condemns the block and not one
+        // copy of it.
         if reward_value != leader_reward {
             return Err(LedgerError::WrongRewardValue {
                 header: reward_value,
@@ -1017,16 +1163,22 @@ impl LedgerState {
         Ok((self, block_events))
     }
 
+    /// The ledger state of a chain whose genesis inscribes `parameters` and
+    /// starts with `notes`.
     pub fn from_notes(
         notes: impl IntoIterator<Item = notes::Note>,
         config: &Config,
-        pow_reward_pool: PowReward,
+        parameters: &GenesisParameters,
     ) -> Self {
-        let cryptarchia_ledger = CryptarchiaLedger::from_notes(notes, config, Fr::ZERO);
-        let mantle_ledger =
-            MantleLedger::new(config, pow_reward_pool, cryptarchia_ledger.epoch_state());
-        // Seed the genesis epoch-state membership snapshots from the genesis SDP
-        // ledger, which only exists after the mantle ledger is built.
+        let cryptarchia_ledger = CryptarchiaLedger::from_notes(notes, config, parameters);
+        let mantle_ledger = MantleLedger::new(
+            config,
+            parameters.pow_reward_pool,
+            cryptarchia_ledger.epoch_state(),
+        );
+        // Seed the genesis epoch-state membership snapshots from the genesis
+        // SDP ledger, which only exists after the mantle ledger is
+        // built.
         let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Self {
             block_number: 0,
@@ -1042,7 +1194,7 @@ impl LedgerState {
         tx: impl GenesisTx,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
-        let GenesisParameters { epoch_nonce, .. } = tx.genesis_parameters();
+        let parameters = tx.genesis_parameters();
         let initial_notes = tx.initial_notes();
         let GenesisOps {
             inscription,
@@ -1055,25 +1207,35 @@ impl LedgerState {
                 .iter()
                 .map(|declaration| declaration.operation().amount),
         )?;
-        // Mantle Ledger Initialization: with the pow reward pool and the rewards
-        // reserve, the distribution and the declarations sum to the maximum supply.
-        if total_stake != GENESIS_STAKE_SUPPLY {
+        // Mantle Ledger Initialization: with the pow reward pool and the
+        // rewards reserve, the distribution and the declarations sum to
+        // the maximum supply.
+        let Some(expected) = genesis_stake_supply(
+            parameters.max_supply,
+            parameters.pow_reward_pool,
+            parameters.rewards_reserve,
+        ) else {
+            return Err(LedgerError::GenesisReservesExceedMaxSupply);
+        };
+        if total_stake != expected {
             return Err(LedgerError::GenesisSupplyMismatch {
                 total: total_stake,
-                expected: GENESIS_STAKE_SUPPLY,
+                expected,
             });
         }
         let cryptarchia_ledger =
-            CryptarchiaLedger::from_genesis_notes(&initial_notes, total_stake, config, epoch_nonce);
+            CryptarchiaLedger::from_genesis_notes(&initial_notes, total_stake, config, &parameters);
         let (mantle_ledger, note_sets, events) = MantleLedger::from_genesis_tx(
             [inscription, distribution_inscription],
             declarations,
             config,
+            parameters.pow_reward_pool,
             cryptarchia_ledger.latest_note_sets().clone(),
             cryptarchia_ledger.epoch_state(),
         )?;
-        // Once the whole genesis transaction is executed every note set records its
-        // root, and the epoch states and the Blend inputs are taken from the result.
+        // Once the whole genesis transaction is executed every note set records
+        // its root, and the epoch states and the Blend inputs are taken
+        // from the result.
         let cryptarchia_ledger =
             cryptarchia_ledger.with_genesis_note_sets(note_sets.end_block(0, config.root_window)?);
         let mantle_ledger =
@@ -1343,8 +1505,9 @@ impl LedgerState {
             }
             SignedOp::SDPWithdraw(signed_operation) => {
                 let excess_value = signed_operation.operation().excess_value;
-                // The declaration is removed, and the outputs released, at the first slot
-                // of the epoch after its `withdraw_at`.
+                // The declaration is removed, and the outputs released, at the
+                // first slot of the epoch after its
+                // `withdraw_at`.
                 let release_slot = eras.starting_slot_for_epoch(
                     self.mantle_ledger
                         .sdp
@@ -1467,14 +1630,18 @@ impl LedgerState {
         let mut verified_operations = tx.into_verified_operations();
 
         let mut balance: Balance = 0;
-        let mut execution_gas = Gas::new(0);
-        // The Operations are priced against the channels as the transaction
-        // found them, moved by the Operations before.
-        let mut gas_state = TxGasState::new(self.mantle_ledger.channels().clone());
+        let mut gas = OperationsGas::new(
+            config.gas_profile,
+            config.execution_market.max_gas_per_block.into(),
+            self.mantle_ledger.channels().clone(),
+        );
         let mut tx_events = Vec::new();
         let mut deferred_proofs = DeferredProofs::new();
 
-        loop {
+        // Each Operation is admitted before it is verified.
+        while let Some(operation) = verified_operations.peek_operation() {
+            gas.admit(operation)?;
+
             let helper = MantleOperationVerificationHelper::new(
                 &self.mantle_ledger,
                 &self.cryptarchia_ledger,
@@ -1487,17 +1654,9 @@ impl LedgerState {
                 .next(&helper, &mut deferred_proofs)
                 .transpose()?
             else {
-                // All operations have been processed, exit the loop.
                 break;
             };
             verified_operations = remaining_verified_operations;
-
-            // Price the operation against the state it was just verified
-            // against, before executing it.
-            let operation = signed_op.operation();
-            execution_gas = execution_gas
-                .checked_add(operation.execution_gas(&config.gas_profile, &gas_state)?)?;
-            gas_state.apply(operation);
 
             (self, balance, tx_events) = self.try_apply_op(
                 signed_op,
@@ -1510,15 +1669,11 @@ impl LedgerState {
             )?;
         }
 
-        // The root extensions the proofs share are paid once, across the Operations.
-        let execution_gas =
-            execution_gas.checked_add(gas_state.root_extensions_gas(&config.gas_profile)?)?;
-
         Ok((
             self,
             balance,
-            execution_gas,
-            gas_state.changed_note_sets(),
+            gas.total()?,
+            gas.changed_note_sets(),
             tx_events,
             deferred_proofs,
         ))
@@ -1545,13 +1700,15 @@ const fn check_op_data_size<Id>(size: usize, config: &Config) -> Result<(), Ledg
 mod tests {
     use std::num::NonZero;
 
-    use cryptarchia::tests::{GAS_PROFILE, GENESIS_POW_REWARD_POOL, config, generate_proof};
+    use cryptarchia::tests::{
+        GAS_PROFILE, GENESIS_GAS_PRICE, GENESIS_POW_REWARD_POOL, GENESIS_REWARDS_RESERVE,
+        GENESIS_STAKE_SUPPLY, MAX_SUPPLY, config, generate_proof, genesis_parameters,
+    };
     use lb_binary_codec::canonical::BinaryEncode as _;
     use lb_core::{
         block::genesis::GenesisBlockBuilder,
         mantle::{
             GenesisTime, Op, OpProof, SignedOps,
-            channel::Channels,
             gas::TxGasCalculator as _,
             note_set::{
                 CommitmentMmr, NoteSet, NoteSetIndex, NoteSetUpdate, TxBuffer, TxNoteState,
@@ -1591,7 +1748,7 @@ mod tests {
         },
         sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
-    use lb_groth16::{CompressedGroth16Proof, Field as _};
+    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Field as _};
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519PublicKey, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey,
         ZkPublicKey,
@@ -1600,7 +1757,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        config::ModulusShift,
+        config::{MaxGasPerBlock, ModulusShift},
         cryptarchia::tests::{
             apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot,
             ledger, note, note_with_sk, update_ledger,
@@ -1634,7 +1791,8 @@ mod tests {
         SignedOps::from_parts(mantle_tx, ops_proofs).unwrap()
     }
 
-    // Applies the contents of a block whose header carries the reward they compute.
+    // Applies the contents of a block whose header carries the reward they
+    // compute.
     #[expect(clippy::type_complexity, reason = "the block outcome tuple")]
     fn apply_contents<const N: usize>(
         state: LedgerState,
@@ -1657,7 +1815,7 @@ mod tests {
     pub fn create_test_ledger() -> (Ledger<HeaderId>, HeaderId, (Fr, notes::Note)) {
         let config = config();
         let (secret_key, note) = note_with_sk();
-        let mut genesis_state = LedgerState::from_notes([note], &config, GENESIS_POW_REWARD_POOL);
+        let mut genesis_state = LedgerState::from_notes([note], &config, &genesis_parameters());
         update_ledger_prices(&mut genesis_state, 1, 1);
         let ledger = Ledger::new([0; 32], genesis_state, Arc::new(single_era(config))).unwrap();
         (ledger, [0; 32], (secret_key, note))
@@ -1670,7 +1828,7 @@ mod tests {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let mut state =
-            LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
+            LedgerState::from_notes([genesis_note], &test_config, &genesis_parameters());
         state.block_number = 5;
         let old_root = state.latest_note_sets().ledger().commitment_root();
         let added = NoteCommitment(Fr::from(77u64));
@@ -1732,7 +1890,7 @@ mod tests {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let mut state =
-            LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
+            LedgerState::from_notes([genesis_note], &test_config, &genesis_parameters());
         state.block_number = 1;
         let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
@@ -1770,7 +1928,7 @@ mod tests {
     fn a_reward_value_differing_from_the_computed_reward_fails_the_block() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
 
         for header in [38_051_750_381, 38_051_750_379] {
             let result = state.clone().try_apply_block_contents::<_, HeaderId>(
@@ -1797,11 +1955,12 @@ mod tests {
         let genesis_note =
             notes::Note::new(10_000, Fr::from(1u64), ZkPublicKey::new(Fr::from(2u64)));
         let mut state =
-            LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
+            LedgerState::from_notes([genesis_note], &test_config, &genesis_parameters());
         state.block_number = 1;
         let reward_commitment = NoteCommitment(Fr::from(0x4444u64));
 
-        // The empty block reference: stake 10_000, the maximum release, no tips.
+        // The empty block reference: stake 10_000, the maximum release, no
+        // tips.
         let (_, tx_events, block_events, _) = state
             .try_apply_block_contents::<_, HeaderId>(
                 &eras,
@@ -1832,7 +1991,7 @@ mod tests {
     fn blend_rewards_pending_is_the_income_the_sdp_ledger_holds() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         for _ in 0..2 {
             (state, _, _, _) = apply_contents(state, &eras, []).unwrap();
         }
@@ -1915,8 +2074,8 @@ mod tests {
             )
         );
 
-        // The jump to epoch 5 returns the share of epoch 1 only: the two shares of
-        // epoch 2 wait for the next first block.
+        // The jump to epoch 5 returns the share of epoch 1 only: the two shares
+        // of epoch 2 wait for the next first block.
         let h_5 = update_ledger(&mut ledger, h_3, 5 * epoch_length, leader).unwrap();
         assert_eq!(
             stocks(&ledger, &h_5),
@@ -1950,8 +2109,8 @@ mod tests {
         let epoch_length = config.epoch_length();
         let (mut ledger, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
 
-        // Declared at epoch 3, so in the snapshot of epoch 5, and active for epoch 5
-        // during epoch 6.
+        // Declared at epoch 3, so in the snapshot of epoch 5, and active for
+        // epoch 5 during epoch 6.
         let h_1 = update_ledger(&mut ledger, genesis, epoch_length, leader_utxo).unwrap();
         let h_2 = update_ledger(&mut ledger, h_1, 2 * epoch_length, leader_utxo).unwrap();
         let (h_3, declare, zk_key) = apply_and_add_utxo_and_declaration(
@@ -1988,8 +2147,8 @@ mod tests {
             expected_reserve(6, 4 * BLEND_SHARE)
         );
 
-        // One provider, base and premium: floor(BLEND_SHARE / 2) * 2, the remainder
-        // 1 returning to the reserve.
+        // One provider, base and premium: floor(BLEND_SHARE / 2) * 2, the
+        // remainder 1 returning to the reserve.
         let h_7 = update_ledger(&mut ledger, h_6, 7 * epoch_length, leader_utxo).unwrap();
         assert_eq!(
             reserve_of(&ledger, &h_7),
@@ -2039,7 +2198,7 @@ mod tests {
         let test_config = config();
         let eras = single_era(test_config.clone());
         let genesis_note = note();
-        let state = LedgerState::from_notes([genesis_note], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([genesis_note], &test_config, &genesis_parameters());
         let root = ledger_root(&state);
 
         let (_, _, _, _, deferred) = state
@@ -2063,11 +2222,56 @@ mod tests {
         assert_eq!(tx_commitment_roots, vec![root, extended]);
     }
 
+    /// Verifying an Operation extends the roots its proofs name over the
+    /// commitments the Operations before buffered. That work is priced, and
+    /// held to the gas a transaction can have, before it is done: a transaction
+    /// that cannot pay for it is refused before its Operation is verified.
+    #[test]
+    fn root_extensions_are_held_to_the_transaction_gas_before_verification() {
+        let genesis_note = note();
+        let apply_under = |max_gas: u64, second_root: Option<Fr>| {
+            let test_config = Config {
+                execution_market: ExecutionMarketConfig {
+                    max_gas_per_block: MaxGasPerBlock::new(max_gas).unwrap(),
+                    ..config().execution_market
+                },
+                ..config()
+            };
+            let state =
+                LedgerState::from_notes([genesis_note], &test_config, &genesis_parameters());
+            let root = ledger_root(&state);
+            // The second Transfer extends the root over the output of the
+            // first.
+            let tx = transfer_tx(vec![
+                spend(1, 10, root, 0),
+                spend(2, 11, second_root.unwrap_or(root), 0),
+            ]);
+            state
+                .try_apply_tx_operations::<_, HeaderId>(&single_era(test_config), tx)
+                .map(|(_, _, gas, _, _)| gas)
+        };
+        let limit = u64::from(config().execution_market.max_gas_per_block);
+        let gas = apply_under(limit, None).unwrap();
+
+        assert_eq!(apply_under(gas.into_inner(), None), Ok(gas));
+        let over_budget = Err(LedgerError::TooMuchTransactionExecutionGas {
+            gas,
+            limit: Gas::new(gas.into_inner() - 1),
+        });
+        assert_eq!(apply_under(gas.into_inner() - 1, None), over_budget);
+        // A root verification would refuse, so the budget refused the
+        // transaction before verifying the second Transfer.
+        assert_eq!(
+            apply_under(gas.into_inner() - 1, Some(Fr::from(12_345u64))),
+            over_budget
+        );
+    }
+
     #[test]
     fn transactions_of_a_block_do_not_chain() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let root = ledger_root(&state);
         let (state, _, _, _, _) = state
             .try_apply_tx_operations::<_, HeaderId>(&eras, transfer_tx(vec![spend(1, 10, root, 0)]))
@@ -2105,7 +2309,7 @@ mod tests {
     fn a_nullifier_spent_by_an_earlier_transaction_of_the_block_is_rejected() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         update_ledger_prices(&mut state, 1, 1);
         let root = ledger_root(&state);
         let gas_context =
@@ -2160,7 +2364,7 @@ mod tests {
     fn transaction_balance_sums_the_excess_values() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let root = ledger_root(&state);
         let (_, balance, _, _, _) = state
             .try_apply_tx_operations::<_, HeaderId>(
@@ -2177,7 +2381,7 @@ mod tests {
 
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let key = ProgramVerificationKey::try_from(&lb_groth16::test_utils::three_input_setup(1).0)
             .unwrap();
         let register = Op::ProgramRegister(ProgramRegisterOp {
@@ -2215,7 +2419,7 @@ mod tests {
     fn transaction_balance_above_u64_is_rejected() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let root = ledger_root(&state);
         assert_eq!(
             state
@@ -2228,8 +2432,8 @@ mod tests {
         );
     }
 
-    // One SDP Operation proven by a zero ZkTransfer and signed by the provider of
-    // `SDPDeclareOp::sample()`.
+    // One SDP Operation proven by a zero ZkTransfer and signed by the provider
+    // of `SDPDeclareOp::sample()`.
     fn provider_signed_tx(op: Op) -> SignedOps<Preverified, StandardMode> {
         let ops = Ops::new(FORK_DIGEST, [op]);
         let signature = Ed25519Key::from_bytes(&[24; 32])
@@ -2255,7 +2459,7 @@ mod tests {
     fn sdp_declare_excess_does_not_pay_fees() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let root = ledger_root(&state);
         let declare = SDPDeclareOp {
             commitment_merkle_root: root,
@@ -2293,7 +2497,7 @@ mod tests {
     fn sdp_withdraw_excess_adds_to_the_balance() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let declare = SDPDeclareOp::sample();
         let (mantle_ledger, note_sets, _) = state
             .mantle_ledger
@@ -2385,8 +2589,8 @@ mod tests {
         let epoch_length = config.epoch_length();
         let (mut ledger, genesis) = ledger(&[leader_utxo], config.clone());
 
-        // Declared and withdrawn in epoch 1: `withdraw_at = 3`, released in the first
-        // block of epoch 4.
+        // Declared and withdrawn in epoch 1: `withdraw_at = 3`, released in the
+        // first block of epoch 4.
         let declare = SDPDeclareOp::sample();
         let withdraw = SDPWithdrawOp {
             declaration_id: declare.id(),
@@ -2428,7 +2632,8 @@ mod tests {
         .unwrap();
         let ledger_set_before = ledger.states[&h_1].latest_note_sets().ledger().clone();
 
-        // Every block also pays its leader, under the commitment its header names.
+        // Every block also pays its leader, under the commitment its header
+        // names.
         let leader_note = NoteCommitment(Fr::ZERO);
         let h_2 = update_ledger(&mut ledger, h_1, 2 * epoch_length, leader_utxo).unwrap();
         let h_3 = update_ledger(&mut ledger, h_2, 3 * epoch_length, leader_utxo).unwrap();
@@ -2468,7 +2673,7 @@ mod tests {
     #[test]
     fn genesis_seeds_epoch_state_sdp_from_mantle() {
         let config = config();
-        let ledger = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+        let ledger = LedgerState::from_notes([note()], &config, &genesis_parameters());
 
         let expected_for_epoch_0 = ledger
             .mantle_ledger
@@ -2496,7 +2701,7 @@ mod tests {
                 GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
                     start_time: GenesisTime::new(1000),
-                    epoch_nonce: Fr::ZERO,
+                    ..genesis_parameters()
                 }
                 .encode_to_vec(),
             ),
@@ -2518,8 +2723,8 @@ mod tests {
             .clone()
     }
 
-    // Nine distributed notes and a Blend declaration, which consumes none of them.
-    // The last note holds what the supply rule leaves.
+    // Nine distributed notes and a Blend declaration, which consumes none of
+    // them. The last note holds what the supply rule leaves.
     fn genesis_with_a_declaration() -> (GenesisTx, [GenesisAllocation; 9], SDPDeclareOp) {
         let declaration = SDPDeclareOp {
             inputs: InputNullifiers::default(),
@@ -2560,8 +2765,8 @@ mod tests {
             })
             .frontier_root();
         assert_eq!(ledger_set.commitment_root(), ledger_root);
-        // The declaration consumed no note, so the nullifier tree still holds its
-        // single sentinel leaf.
+        // The declaration consumed no note, so the nullifier tree still holds
+        // its single sentinel leaf.
         assert_eq!(
             ledger_set.nullifier_root().unwrap(),
             NoteSets::new().ledger().nullifier_root().unwrap()
@@ -2587,14 +2792,15 @@ mod tests {
         );
         assert!(state.latest_note_sets().channel(&NULL_CHANNEL_ID).is_none());
 
-        // C_LEAD of epochs 0 and 1 is the eligible root after the genesis transaction.
+        // C_LEAD of epochs 0 and 1 is the eligible root after the genesis
+        // transaction.
         let eligible_root = state.latest_note_sets().eligible_root();
         assert_ne!(eligible_root, NoteSets::new().eligible_root());
         assert_eq!(state.epoch_state().eligible_root(), eligible_root);
         assert_eq!(state.next_epoch_state().eligible_root(), eligible_root);
 
-        // The Blend leader inputs were taken from that epoch state, not from the sets
-        // before the declarations.
+        // The Blend leader inputs were taken from that epoch state, not from
+        // the sets before the declarations.
         let rewards_params = &config.sdp_config.service_rewards_params;
         let sdp = state.mantle_ledger().sdp_ledger().clone();
         assert_eq!(
@@ -2639,9 +2845,9 @@ mod tests {
         );
     }
 
-    // Mantle Ledger Initialization: the values of the published distribution, the
-    // amounts of the declarations, the pow reward pool and the rewards reserve must
-    // sum to the maximum supply.
+    // Mantle Ledger Initialization: the values of the published distribution,
+    // the amounts of the declarations, the pow reward pool and the rewards
+    // reserve must sum to the maximum supply.
     #[test]
     fn genesis_rejects_a_total_other_than_the_maximum_supply() {
         let (_, allocations, declaration) = genesis_with_a_declaration();
@@ -2677,16 +2883,40 @@ mod tests {
         );
     }
 
-    // Mantle Ledger Initialization: the pool starts at POW_REWARD_POOL_GENESIS,
-    // five thousandths of the maximum supply, whatever the inscription holds.
+    // Mantle Ledger Initialization: the pool starts with what the inscription
+    // holds.
     #[test]
-    fn genesis_seeds_the_pow_reward_pool_with_five_thousandths_of_the_maximum_supply() {
+    fn genesis_seeds_the_pow_reward_pool_with_the_inscribed_balance() {
         let config = config();
         let (tx, _, _) = genesis_with_a_declaration();
         let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config).unwrap();
         assert_eq!(
             state.mantle_ledger().pow,
-            PowState::from_reward_pool_and_config(50_000_000_000_000_000, &config)
+            PowState::from_reward_pool_and_config(GENESIS_POW_REWARD_POOL, &config)
+        );
+    }
+
+    // The pool and the reserve the genesis starts with may not hold more than
+    // its maximum supply.
+    #[test]
+    fn genesis_rejects_reserves_above_the_maximum_supply() {
+        let (_, allocations, declaration) = genesis_with_a_declaration();
+        let parameters = GenesisParameters {
+            rewards_reserve: MAX_SUPPLY,
+            ..genesis_parameters()
+        };
+        let block = GenesisBlockBuilder::new()
+            .add_notes(allocations)
+            .set_inscription(InscriptionOp {
+                inscription: Inscription::new_unchecked(parameters.encode_to_vec()),
+                ..cryptarchia_inscription()
+            })
+            .add_declaration(declaration)
+            .build()
+            .unwrap();
+        assert_eq!(
+            LedgerState::from_genesis_tx::<HeaderId>(block.genesis_tx().clone(), &config()).err(),
+            Some(LedgerError::GenesisReservesExceedMaxSupply)
         );
     }
     #[test]
@@ -2694,7 +2924,7 @@ mod tests {
         let (tx, _, _) = genesis_with_a_declaration();
         let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(tx, &config()).unwrap();
         let block_rewards = &state.cryptarchia_ledger.block_rewards;
-        assert_eq!(block_rewards.rewards_reserve(), 1_000_000_000_000_000_000);
+        assert_eq!(block_rewards.rewards_reserve(), GENESIS_REWARDS_RESERVE);
         assert_eq!(block_rewards.rewards_pool(), 0);
         assert_eq!(block_rewards.blend_rewards_closed(), 0);
         assert_eq!(block_rewards.blend_rewards_pending(), 0);
@@ -2706,8 +2936,8 @@ mod tests {
         );
     }
 
-    // Genesis Validation Exemptions 1: the placeholder ZkTransfer and signature of
-    // a declaration are not verified.
+    // Genesis Validation Exemptions 1: the placeholder ZkTransfer and signature
+    // of a declaration are not verified.
     #[test]
     fn genesis_accepts_a_declaration_with_placeholder_proofs() {
         let (tx, _, declaration) = genesis_with_a_declaration();
@@ -2939,8 +3169,8 @@ mod tests {
             &ZkKey::new(secret_key).nullifier_key(),
         );
 
-        // The fee depends on the encoded size only, so a draft with placeholder values
-        // prices it.
+        // The fee depends on the encoded size only, so a draft with placeholder
+        // values prices it.
         let draft = Ops::new(
             FORK_DIGEST,
             [Op::Transfer(TransferOp::new(
@@ -3035,7 +3265,7 @@ mod tests {
     fn test_channel_inscribe_operation() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([2; 32]);
 
@@ -3087,7 +3317,7 @@ mod tests {
         );
         let size = tx.storage_size();
         let apply_under = |test_config: Config| {
-            let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+            let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
             apply_contents(state, &single_era(test_config), [tx.clone()]).err()
         };
 
@@ -3120,7 +3350,7 @@ mod tests {
             ..config()
         };
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([4; 32]);
         // Inscribes the 4 bytes the era allows.
@@ -3185,7 +3415,7 @@ mod tests {
             ..config()
         };
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let inscribe = |size| {
             let op = Op::Inscribe(InscribeOp {
                 inscription: Inscription::new_unchecked(vec![7; size]),
@@ -3217,7 +3447,7 @@ mod tests {
     fn test_channel_config_operation() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (_, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([3; 32]);
 
@@ -3262,7 +3492,7 @@ mod tests {
     fn test_jit_config_requires_zero_parent() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (_, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -3314,7 +3544,7 @@ mod tests {
     fn test_channel_config_valid_after_inscriptions() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -3348,7 +3578,8 @@ mod tests {
         .unwrap();
         let config_tx = create_config_tx(config_op.clone(), &signing_key);
 
-        // Inscriptions keep extending the channel, none of them moves the config tip
+        // Inscriptions keep extending the channel, none of them moves the
+        // config tip
         for byte in [4u8, 5, 6] {
             let inscribe = InscriptionOp {
                 channel_id,
@@ -3387,7 +3618,7 @@ mod tests {
     fn test_channel_config_rejected_after_later_config() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -3449,7 +3680,7 @@ mod tests {
     fn test_inscription_valid_after_config() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([0u8; 32]);
 
@@ -3530,7 +3761,7 @@ mod tests {
     fn deposit_moves_ledger_notes_into_the_channel_set_and_pays_with_its_excess() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
         let state = create_channel(
@@ -3619,7 +3850,7 @@ mod tests {
     fn deposit_then_step_in_one_transaction_covers_the_deposit() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
         let state = create_channel(
@@ -3692,7 +3923,7 @@ mod tests {
     fn a_step_cannot_consume_a_note_an_earlier_inscription_of_the_transaction_consumed() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
         let state = create_channel(
@@ -3781,8 +4012,8 @@ mod tests {
     fn test_program_key() -> ProgramVerificationKey {
         ProgramVerificationKey::try_from(&lb_groth16::test_utils::three_input_setup(1).0).unwrap()
     }
-    // A deposit and the program step consuming it, paying no opened note, so the
-    // sample proofs pass preverification.
+    // A deposit and the program step consuming it, paying no opened note, so
+    // the sample proofs pass preverification.
     fn program_steps(
         program_id: Fr,
         nullifier: u64,
@@ -3815,7 +4046,7 @@ mod tests {
     fn a_program_registered_earlier_in_the_transaction_runs_its_step() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
         let state = create_channel(
@@ -3881,9 +4112,9 @@ mod tests {
                 .frontier_root()
         );
         // The registration, the inscription with its signature, the program
-        // deposit of one input and no output (144 + 4177 + 1758), then the program
-        // step (13528, no opening) and its spend of one output (4177 + 58), nothing
-        // buffered in the channel.
+        // deposit of one input and no output (144 + 4177 + 1758), then the
+        // program step (13528, no opening) and its spend of one output
+        // (4177 + 58), nothing buffered in the channel.
         assert_eq!(
             execution_gas,
             Gas::new(15_114 + (26 + 557) + (144 + 4_177 + 1_758) + 13_528 + (4_177 + 58))
@@ -3894,7 +4125,7 @@ mod tests {
     fn an_unregistered_program_rejects_the_transaction() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
         let state = create_channel(
@@ -3947,7 +4178,7 @@ mod tests {
     fn a_program_deposit_covers_a_channel_deposit_of_the_same_transaction() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
         let state = create_channel(
@@ -4033,7 +4264,7 @@ mod tests {
     fn wallet_estimate_matches_the_ledger_charge() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         update_ledger_prices(&mut state, 1, 1);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
@@ -4118,13 +4349,14 @@ mod tests {
             .try_apply_transaction::<_, HeaderId>(&eras, &tx)
             .unwrap();
 
-        // The first Transfer (10 + 4177 + 1758 + 2 * 58), the second one with its
-        // root extended over the 2 commitments buffered (10 + 4177 + 2332 +
-        // 2 * 60 + 1758 + 58), the registration, the creating inscription, the
-        // Deposit with its root extended over the 3 buffered (26 + 4177 + 2332 +
-        // 3 * 60 + 1758 + 58) and the inscription of the user step buffering 1
-        // (28 + 4177 + 2332 + 60 + 1758 + 58), the program deposit sharing the
-        // extension of the user step (144 + 4177 + 1758) and the program step
+        // The first Transfer (10 + 4177 + 1758 + 2 * 58), the second one with
+        // its root extended over the 2 commitments buffered (10 + 4177
+        // + 2332 + 2 * 60 + 1758 + 58), the registration, the creating
+        // inscription, the Deposit with its root extended over the 3
+        // buffered (26 + 4177 + 2332 + 3 * 60 + 1758 + 58) and the
+        // inscription of the user step buffering 1 (28 + 4177 + 2332 +
+        // 60 + 1758 + 58), the program deposit sharing the extension of
+        // the user step (144 + 4177 + 1758) and the program step
         // (13528), its spend extended over the 2 buffered of the channel.
         assert_eq!(
             operations_gas,
@@ -4154,7 +4386,7 @@ mod tests {
     fn withdrawal_waits_for_its_due_slot_and_adds_nothing_to_the_balance() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
         let state = create_channel(
@@ -4218,7 +4450,7 @@ mod tests {
     fn a_proposal_header_is_the_header_without_its_proof() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let slot = Slot::from(1u64);
         let proof = generate_proof(&state.cryptarchia_ledger, &note(), slot);
 
@@ -4231,7 +4463,8 @@ mod tests {
             .try_apply_proposal_header::<HeaderId>(slot, &UncleSlots::default(), &eras)
             .unwrap();
 
-        // only the header with its proof folds the proof's entropy into the nonce
+        // only the header with its proof folds the proof's entropy into the
+        // nonce
         assert_ne!(
             header.cryptarchia_ledger.nonce,
             state.cryptarchia_ledger.nonce
@@ -4249,7 +4482,7 @@ mod tests {
     fn due_withdrawals_are_released_before_the_transactions_of_the_block() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let channel_id = ChannelId::from([4u8; 32]);
         let channel_set = NoteSetIndex::Channel(channel_id);
         state.cryptarchia_ledger.note_sets = state
@@ -4310,7 +4543,7 @@ mod tests {
     fn test_fee_estimate_covers_inscribe_then_config_in_one_tx() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
 
@@ -4343,7 +4576,7 @@ mod tests {
         ))));
         let tx = create_multi_signed_tx(ops, vec![&inscribe_key, &config_key]);
 
-        let prices = GasPrices::default();
+        let prices = GasPrices::new(GENESIS_GAS_PRICE.get(), GENESIS_GAS_PRICE.get());
         let gas_context = OpsGasContext::from_channels(
             state.mantle_ledger().channels(),
             prices.clone(),
@@ -4359,7 +4592,8 @@ mod tests {
         // The config is priced against the channel the inscription created.
         assert_eq!(operations_gas.into_inner(), (26 + 557) + (24 + 557));
 
-        // The transaction adds its bytes and the one channel note set it changed.
+        // The transaction adds its bytes and the one channel note set it
+        // changed.
         let execution_gas = operations_gas
             .checked_add(GAS_PROFILE.tx_terms_gas(tx.storage_size(), 1).unwrap())
             .unwrap();
@@ -4377,7 +4611,7 @@ mod tests {
     fn test_invalid_parent_error() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([5; 32]);
 
@@ -4425,7 +4659,8 @@ mod tests {
             ))
         ));
 
-        // Writing into an empty channel with a parent != MsgId::root() should also fail
+        // Writing into an empty channel with a parent != MsgId::root() should
+        // also fail
         let empty_channel_id = ChannelId::from([8; 32]);
         let empty_inscribe = InscriptionOp {
             channel_id: empty_channel_id,
@@ -4454,7 +4689,7 @@ mod tests {
     fn test_unauthorized_signer_error() {
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let mut state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let mut state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (signing_key, verifying_key) = create_test_keys();
         let (unauthorized_signing_key, unauthorized_verifying_key) = create_test_keys_with_seed(3);
         let channel_id = ChannelId::from([6; 32]);
@@ -4510,7 +4745,7 @@ mod tests {
         // Post another inscription in channel 1
         let test_config = config();
         let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, GENESIS_POW_REWARD_POOL);
+        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
         let (sk1, vk1) = create_test_keys_with_seed(1);
         let (sk2, vk2) = create_test_keys_with_seed(2);
         let (sk3, vk3) = create_test_keys_with_seed(3);
@@ -4704,8 +4939,8 @@ mod tests {
     }
 
     // TODO: Update this test to work with the new SDP API
-    // This test needs to be rewritten to use the new SDP ledger API which no longer
-    // exposes get_declaration() or uses declaration_id() methods.
+    // This test needs to be rewritten to use the new SDP ledger API which no
+    // longer exposes get_declaration() or uses declaration_id() methods.
     // #[test]
     // #[expect(clippy::, reason = "Test function.")]
     #[test]
@@ -4717,7 +4952,7 @@ mod tests {
     fn test_fee_rejection() {
         let config = config();
         let eras = single_era(config.clone());
-        let mut ledger = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+        let mut ledger = LedgerState::from_notes([note()], &config, &genesis_parameters());
         update_ledger_prices(&mut ledger, 1, 1);
         let root = ledger_root(&ledger);
 
@@ -4740,22 +4975,22 @@ mod tests {
         .unwrap();
 
         let result = apply_contents(ledger.clone(), &eras, [tx.clone()]);
-        // The `unwrap` should succeed because the user pays at least the base fee of
-        // 2705
+        // The `unwrap` should succeed because the user pays at least the base
+        // fee of 2705
         let _apply_result = result.unwrap();
 
         ledger.cryptarchia_ledger = ledger.cryptarchia_ledger.set_execution_base_fee(10.into());
 
         let err = apply_contents(ledger, &eras, [tx]).err().unwrap();
-        // The transaction should be rejected because the price indicated for execution
-        // doesn't cover the base fee that cost 27 050
+        // The transaction should be rejected because the price indicated for
+        // execution doesn't cover the base fee that cost 27 050
         assert_eq!(err, LedgerError::InsufficientBalance);
     }
 
     #[test]
     fn a_transaction_whose_fork_digest_the_era_does_not_accept_is_rejected() {
         let config = config();
-        let ledger = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+        let ledger = LedgerState::from_notes([note()], &config, &genesis_parameters());
         let other_fork = ForkDigest::new([0x22; 32]);
         let mantle_tx = Ops::new(
             other_fork,
@@ -4784,7 +5019,7 @@ mod tests {
     fn test_priority_fees_go_to_leader() {
         let config = config();
         let eras = single_era(config.clone());
-        let mut ledger = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+        let mut ledger = LedgerState::from_notes([note()], &config, &genesis_parameters());
         let root = ledger_root(&ledger);
 
         let tx = create_tx(
@@ -4814,13 +5049,13 @@ mod tests {
             38_051_750_380,
             std::iter::once(tx),
         );
-        // The `unwrap` should succeed because the user pays at least the base fee of
-        // 823
+        // The `unwrap` should succeed because the user pays at least the base
+        // fee of 823
         let (no_priority_fee_ledger, events, _, _) = result.unwrap();
         assert_eq!(events, []);
 
-        // The tx ays 1823 fees = 619 execution base fee + 1000 execution tip + 204
-        // storage
+        // The tx ays 1823 fees = 619 execution base fee + 1000 execution tip +
+        // 204 storage
         let tx = create_tx(
             vec![NoteNullifier(Fr::ONE)],
             vec![NoteCommitment(Fr::from(2u64))],
@@ -4836,8 +5071,8 @@ mod tests {
             38_051_751_380,
             std::iter::once(tx),
         );
-        // The `unwrap` should succeed because the user pays at least the base fee of
-        // 823
+        // The `unwrap` should succeed because the user pays at least the base
+        // fee of 823
         let (priority_fee_ledger, events, _, _) = result.unwrap();
 
         assert_eq!(events, []);
@@ -4853,7 +5088,7 @@ mod tests {
     fn test_apply_contents_accumulates_storage_gas() {
         let config = config();
         let eras = single_era(config.clone());
-        let mut ledger = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+        let mut ledger = LedgerState::from_notes([note()], &config, &genesis_parameters());
         update_ledger_prices(&mut ledger, 1, 1);
         let root = ledger_root(&ledger);
 
@@ -4896,10 +5131,9 @@ mod tests {
                 minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZeroU64::new(10).expect("10 is non-zero"),
-                target_claims_per_block: 100,
+                target_claims_per_block: NonZeroU64::new(100).expect("100 is non-zero"),
                 rate_num: 0,
                 rate_den: NonZeroU64::MIN,
-                target_claim_per_block: NonZeroU64::MIN,
                 pow_share: 0,
                 share_den: NonZeroU64::MIN,
                 slot_window: NonZeroU64::new(100).expect("100 is non-zero"),
@@ -4907,16 +5141,15 @@ mod tests {
         }
 
         /// A payout rate of `1/100`: `sigma_e = pool / 100`, used to give the
-        /// `PoW` state a nonzero per-claim reward in tests. The denominator is
-        /// `rate_den (1) * target_claim_per_block (10) *
+        /// `PoW` state a nonzero per-claim reward in tests. The rate is `10`
+        /// over `rate_den (1) * target_claims_per_block (100) *
         /// expected_blocks_per_epoch (10, derived from the test consensus
         /// schedule)`.
         fn test_pool_config() -> Config {
             let mut config = config();
             config.pow_config.reward = RewardPoWConfig {
-                rate_num: 1,
+                rate_num: 10,
                 rate_den: NonZeroU64::MIN,
-                target_claim_per_block: NonZeroU64::new(10).expect("10 is non-zero"),
                 ..disabled_reward_config()
             };
             config
@@ -4926,7 +5159,7 @@ mod tests {
         /// a seeded reward difficulty.
         fn pow_ledger_state(reward_difficulty: u64) -> (LedgerState, Config) {
             let config = config();
-            let mut state = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+            let mut state = LedgerState::from_notes([note()], &config, &genesis_parameters());
             state.mantle_ledger.pow.credit_reward_pool(1_000).unwrap();
             state
                 .mantle_ledger
@@ -5044,12 +5277,13 @@ mod tests {
 
         #[test]
         fn claim_tx_validation_rejects_disabled_rewards() {
-            // End-to-end through `try_apply_tx_operations`: with `sigma_e` forced to
-            // zero the claim fails the §5.6 safety cutoff. This exercises
-            // the full wiring: preverification, the stateful
-            // `ClaimPowReward` arm and the helper-built context.
+            // End-to-end through `try_apply_tx_operations`: with `sigma_e`
+            // forced to zero the claim fails the §5.6 safety
+            // cutoff. This exercises the full wiring:
+            // preverification, the stateful `ClaimPowReward` arm
+            // and the helper-built context.
             let config = config();
-            let mut state = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+            let mut state = LedgerState::from_notes([note()], &config, &genesis_parameters());
             // The default reward config disables claiming (`rate_num = 0`).
             state.mantle_ledger.pow.update_epoch_reward(&config);
             assert_eq!(state.mantle_ledger.pow.epoch_reward(), 0);
@@ -5141,9 +5375,10 @@ mod tests {
 
         #[test]
         fn claim_tx_end_to_end_pays_the_reward() {
-            // The full §5.3 pipeline through `try_apply_tx_operations`: preverification,
-            // helper-built validation context (pool, window, epoch nonce,
-            // difficulty, double-claim) and execution.
+            // The full §5.3 pipeline through `try_apply_tx_operations`:
+            // preverification, helper-built validation context
+            // (pool, window, epoch nonce, difficulty, double-claim)
+            // and execution.
             let (state, config) = claim_accepting_state();
             let pool_before = state.mantle_ledger.pow.reward_pool();
             let epoch_reward = state.mantle_ledger.pow.epoch_reward();
@@ -5366,8 +5601,8 @@ mod tests {
         fn claim_execution_alone_has_no_double_claim_guard() {
             // `try_apply_op` is execute-only by design (like the other op
             // arms): the double-claim check lives in
-            // `ClaimPowRewardOp::validate`, which `try_apply_tx_operations` runs via
-            // `verify_stateful_op` before execution (see
+            // `ClaimPowRewardOp::validate`, which `try_apply_tx_operations`
+            // runs via `verify_stateful_op` before execution (see
             // `claim_tx_double_claim_is_rejected`). Calling the execution
             // path directly therefore pays the same solution twice — pinned
             // here to document that the guard lives in validation, not
@@ -5425,7 +5660,7 @@ mod tests {
             let mut config = config();
             config.pow_config.reward.pow_share = 10;
             config.pow_config.reward.share_den = NonZeroU64::new(100).unwrap();
-            let mut state = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+            let mut state = LedgerState::from_notes([note()], &config, &genesis_parameters());
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             (state, _) = state
@@ -5449,7 +5684,7 @@ mod tests {
             // With `pow_share = 0` every collected fee is pooled for block
             // rewards and nothing goes to the PoW pool.
             let config = config();
-            let mut state = LedgerState::from_notes([note()], &config, GENESIS_POW_REWARD_POOL);
+            let mut state = LedgerState::from_notes([note()], &config, &genesis_parameters());
             let pool_before = state.mantle_ledger.pow.reward_pool();
 
             (state, _) = state

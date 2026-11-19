@@ -12,6 +12,7 @@ use lb_core::{
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
+use lb_ledger::LedgerError;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -75,6 +76,11 @@ pub enum ApiError {
     InvalidBody(String),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
+    /// The local storage failed while the block was applied, which says
+    /// nothing of the block: it can be applied again once the storage
+    /// recovers.
+    #[error("Local storage failed while applying block {id}: {reason}")]
+    Storage { id: HeaderId, reason: String },
     #[error("Unexpected Error: {0}")]
     Unexpected(String),
 }
@@ -83,11 +89,17 @@ pub enum ApiError {
 pub(crate) fn apply_block_api_error(err: crate::Error, id: HeaderId) -> ApiError {
     match err {
         crate::Error::BatchDeferredProofVerification(_) => ApiError::InvalidOperationProof(id),
-        crate::Error::Ledger(lb_ledger::LedgerError::VerificationError(err))
+        crate::Error::Ledger(LedgerError::VerificationError(err))
             if err.is_operation_proof_failure() =>
         {
             ApiError::InvalidOperationProof(id)
         }
+        crate::Error::Storage(reason) => ApiError::Storage { id, reason },
+        // The nullifier tree reads the store while the block is applied.
+        crate::Error::Ledger(err) if err.is_store_failure() => ApiError::Storage {
+            id,
+            reason: err.to_string(),
+        },
         err => err.into(),
     }
 }

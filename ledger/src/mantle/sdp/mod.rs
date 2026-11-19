@@ -145,14 +145,14 @@ impl Service {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub service_params: std::sync::Arc<HashMap<ServiceType, ServiceParameters>>,
     pub service_rewards_params: ServiceRewardsParameters,
     pub min_stake: MinStake,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ServiceRewardsParameters {
     pub blend: blend::RewardsParameters,
 }
@@ -188,6 +188,27 @@ pub enum Error {
     SdpOp(#[from] SdpError),
     #[error("Invalid deferral")]
     InvalidDeferral,
+}
+
+impl Error {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::SdpOp(err) => err.is_store_failure(),
+            Self::DeclarationNotFound(_)
+            | Self::WithdrawalWhileUsedInService
+            | Self::ServiceNotFound(_)
+            | Self::DuplicateDeclaration(_)
+            | Self::EpochParamsNotFound(_)
+            | Self::ServiceParamsNotFound(_)
+            | Self::NotGenesisBlock
+            | Self::TimeTravel { .. }
+            | Self::InvalidSignature
+            | Self::InvalidProof
+            | Self::RewardsError(_)
+            | Self::InvalidDeferral => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -237,8 +258,9 @@ impl<R: Rewards> ServiceState<R> {
                 }
             }));
 
-            // Remove the withdrawn declarations; the outputs of their withdrawals are
-            // released through the pending withdrawals.
+            // Remove the withdrawn declarations; the outputs of their
+            // withdrawals are released through the pending
+            // withdrawals.
             events.extend(self.remove_withdrawn_declarations(epoch_state.epoch()));
         }
 
@@ -384,8 +406,9 @@ impl SdpLedger {
         rewards_params: &ServiceRewardsParameters,
         epoch_state: &EpochState,
     ) -> Self {
-        // The declarations run before the genesis epoch state is final; no income
-        // exists at genesis, so the reward state is rebuilt from the final one.
+        // The declarations run before the genesis epoch state is final; no
+        // income exists at genesis, so the reward state is rebuilt from
+        // the final one.
         self.services = self
             .services
             .iter()
@@ -726,7 +749,10 @@ pub struct HeaderEffect {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::Arc};
+    use std::{
+        num::{NonZeroU32, NonZeroU64},
+        sync::Arc,
+    };
 
     use lb_core::{
         mantle::{
@@ -747,7 +773,7 @@ mod tests {
     use lb_key_management_system_keys::keys::{
         Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, kdf_public_key,
     };
-    use lb_utils::math::PositiveF64;
+    use lb_utils::math::PositiveRatio;
     use num_bigint::BigUint;
 
     use super::*;
@@ -763,7 +789,7 @@ mod tests {
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
                     rounds_per_epoch: NonZeroU64::new(10).unwrap(),
-                    message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
                     cover_replication_factor: 0,
                     num_blend_layers: NonZeroU64::new(3).unwrap(),
                     minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -771,10 +797,7 @@ mod tests {
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: MinStake { threshold: 1 },
         }
     }
 
@@ -822,8 +845,8 @@ mod tests {
         }
     }
 
-    // The registry checks run first, so the empty note sets are never reached by a
-    // duplicate.
+    // The registry checks run first, so the empty note sets are never reached
+    // by a duplicate.
     fn verify_declaration(ledger: &SdpLedger, operation: SDPDeclareOp) -> Result<(), SdpError> {
         let tx_hash_view = TxHashView::from(TxHash::from([98; 32]));
         SignedOperation::<_, Unverified, StandardMode>::new(
@@ -845,10 +868,7 @@ mod tests {
             provider_index: ledger
                 .get_provider_index_by_service(ServiceType::BlendNetwork)
                 .expect("Blend service is registered"),
-            min_stake: &MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: &MinStake { threshold: 1 },
         })
         .map(|_| ())
     }
@@ -913,7 +933,6 @@ mod tests {
     fn failed_activity_does_not_return_partially_updated_ledger() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
         let epoch0 = dummy_epoch_state(0.into());
         let ledger = dummy_sdp_ledger(0.into(), &config);
@@ -964,7 +983,6 @@ mod tests {
     fn active_declarations_filters_out_inactive() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());
@@ -1027,7 +1045,6 @@ mod tests {
     fn active_declarations_includes_genesis_at_epochs_0_and_1() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         // Build an SDP ledger with a declaration at epoch 0.
@@ -1070,7 +1087,6 @@ mod tests {
         // is the withdrawn-effective-epoch check.
         let config = setup(ServiceParameters {
             inactivity_period: 100.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());
@@ -1100,7 +1116,8 @@ mod tests {
             .map(|(sdp_ledger, _, _)| sdp_ledger)
             .unwrap();
 
-        // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY = 3`.
+        // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY =
+        // 3`.
         let withdraw_op = withdraw_op(declaration_id, 100);
         let proof = ZkAndEd25519Proof::sample();
         let signed_operation_withdraw =
@@ -1152,7 +1169,6 @@ mod tests {
     fn active_message_refreshes_declaration() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         // Init ledger with no declaration
@@ -1187,8 +1203,9 @@ mod tests {
             .unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Move forward to epoch 4 where the provider can submit an activity message.
-        // (The provider is expected to provide the service from epoch 3)
+        // Move forward to epoch 4 where the provider can submit an activity
+        // message. (The provider is expected to provide the service
+        // from epoch 3)
         let epoch2 = next_epoch_state(2.into(), &ledger, &config);
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch1, &epoch2)
@@ -1250,8 +1267,8 @@ mod tests {
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch6, &epoch7)
             .unwrap();
-        // Nevertheless, the declaration should be still present because no withdrawal
-        // message was submitted.
+        // Nevertheless, the declaration should be still present because no
+        // withdrawal message was submitted.
         let declarations = ledger
             .get_declarations_by_service(ServiceType::BlendNetwork)
             .unwrap();
@@ -1275,7 +1292,6 @@ mod tests {
     fn rewards_distributed_to_active_provider() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         // Init ledger with no declaration.
@@ -1401,7 +1417,6 @@ mod tests {
     fn accepts_reused_ids_after_withdrawn_epoch() {
         let config = setup(ServiceParameters {
             inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let signing_key = create_signing_key();
@@ -1510,8 +1525,8 @@ mod tests {
         );
 
         // Re-declare the same `(service, zk_id)` with new locators, reusing the
-        // former provider. The stable ID persists, but the lifecycle nonce starts
-        // at sequence zero.
+        // former provider. The stable ID persists, but the lifecycle nonce
+        // starts at sequence zero.
         let declare_b = SDPDeclareOp {
             locators: "/ip4/2.2.2.2/udp/3000".parse::<Locator>().unwrap().into(),
             ..declare_op(&zk_key, &signing_key, &utxo_b)
@@ -1541,8 +1556,9 @@ mod tests {
             Some(&declaration_id_a)
         );
 
-        // A withdrawal of the previous lifecycle cannot replay against this one: it
-        // carries no nonce, but the nullifier it consumed is spent.
+        // A withdrawal of the previous lifecycle cannot replay against this
+        // one: it carries no nonce, but the nullifier it consumed is
+        // spent.
         let tx_hash_view = TxHashView::from(TxHash::from([99; 32]));
         let spent = NoteSets::new().update_sdp(
             NoteSets::new()
@@ -1579,7 +1595,6 @@ mod tests {
     fn test_withdraw_provider() {
         let config = setup(ServiceParameters {
             inactivity_period: 20.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let utxo = note_with_sk();
@@ -1677,7 +1692,6 @@ mod tests {
     fn last_served_epoch_is_rewarded_before_removal() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());

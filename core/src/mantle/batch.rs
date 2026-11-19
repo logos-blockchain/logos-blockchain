@@ -139,8 +139,8 @@ impl DeferredProofs {
         }
     }
 
-    // Each program proof is verified alone, it cannot share the batch of another
-    // key.
+    // Each program proof is verified alone, it cannot share the batch of
+    // another key.
     fn verify_program_proofs(proofs: Vec<DeferredProgramProof>) -> Result<(), Error> {
         for (proof, input) in proofs.into_iter().map(DeferredProgramProof::into_parts) {
             match input.program.verify(&proof, &input.public) {

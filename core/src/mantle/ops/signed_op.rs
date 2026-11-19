@@ -95,17 +95,17 @@ impl<State: VerificationState, Mode: VerificationMode> SignedOp<State, Mode> {
         self,
     ) -> SignedOp<NewState, Mode> {
         match self {
-            Self::ChannelInscribe(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::ChannelConfig(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::ChannelDeposit(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::ChannelWithdraw(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::SDPDeclare(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::SDPWithdraw(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::SDPActive(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::Transfer(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::ClaimPowReward(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::ProgramRegister(signed_operation) => signed_operation.into_state_trusted().into(),
-            Self::Inscribe(signed_operation) => signed_operation.into_state_trusted().into(),
+            Self::ChannelInscribe(signed_operation) => signed_operation.into_state().into(),
+            Self::ChannelConfig(signed_operation) => signed_operation.into_state().into(),
+            Self::ChannelDeposit(signed_operation) => signed_operation.into_state().into(),
+            Self::ChannelWithdraw(signed_operation) => signed_operation.into_state().into(),
+            Self::SDPDeclare(signed_operation) => signed_operation.into_state().into(),
+            Self::SDPWithdraw(signed_operation) => signed_operation.into_state().into(),
+            Self::SDPActive(signed_operation) => signed_operation.into_state().into(),
+            Self::Transfer(signed_operation) => signed_operation.into_state().into(),
+            Self::ClaimPowReward(signed_operation) => signed_operation.into_state().into(),
+            Self::ProgramRegister(signed_operation) => signed_operation.into_state().into(),
+            Self::Inscribe(signed_operation) => signed_operation.into_state().into(),
         }
     }
 }

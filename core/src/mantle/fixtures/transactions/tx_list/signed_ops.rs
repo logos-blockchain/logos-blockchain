@@ -102,8 +102,8 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
     SignedOps {
         fork_digest: FORK_DIGEST,
         ops: TxList::from([
-            SignedOp::Transfer(transfer.into_state_trusted()),
-            SignedOp::ChannelInscribe(inscription.into_state_trusted()),
+            SignedOp::Transfer(transfer.into_state()),
+            SignedOp::ChannelInscribe(inscription.into_state()),
         ]),
     }
 }
@@ -130,7 +130,7 @@ fn all_ops_hex() -> String {
 fn all_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<State, Mode> {
     macro_rules! signed {
         ($variant:ident, $op:ident, $proof:expr) => {
-            SignedOp::$variant(SignedOperation::new($op.clone(), $proof).into_state_trusted())
+            SignedOp::$variant(SignedOperation::new($op.clone(), $proof).into_state())
         };
     }
 

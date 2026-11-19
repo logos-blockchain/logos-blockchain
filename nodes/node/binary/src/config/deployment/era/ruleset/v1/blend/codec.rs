@@ -3,7 +3,7 @@
 use core::num::{NonZeroU32, NonZeroU64, NonZeroU128};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
-use lb_utils::math::PositiveF64;
+use lb_utils::math::PositiveRatio;
 
 use super::{
     CommonSettings, CoreSettings, CoverReplicationFactor, CoverTrafficSettings,
@@ -42,7 +42,7 @@ fn fixture_minimum_network_size() -> MinimumNetworkSize {
     MinimumNetworkSize::try_new(2).unwrap()
 }
 
-fn fixture_core_settings() -> CoreSettings {
+const fn fixture_core_settings() -> CoreSettings {
     CoreSettings {
         scheduler: scheduler_settings(),
         target_peering_degree: NonZeroU32::new(7).unwrap(),
@@ -54,16 +54,16 @@ fn fixture_core_settings() -> CoreSettings {
     }
 }
 
-fn scheduler_settings() -> SchedulerSettings {
+const fn scheduler_settings() -> SchedulerSettings {
     SchedulerSettings {
         cover: cover_traffic_settings(),
         delayer: message_delayer_settings(),
     }
 }
 
-fn cover_traffic_settings() -> CoverTrafficSettings {
+const fn cover_traffic_settings() -> CoverTrafficSettings {
     CoverTrafficSettings {
-        message_frequency_per_round: PositiveF64::try_from(5.0).unwrap(),
+        message_frequency_per_round: PositiveRatio::new(5, NonZeroU32::new(13).unwrap()).unwrap(),
         replication_factor: fixture_cover_replication_factor(),
     }
 }
@@ -79,7 +79,7 @@ const fn message_delayer_settings() -> MessageDelayerSettings {
 }
 
 pub const SETTINGS_HEX: &str = "
-    0100000000000000 0200000000000000 0300000000000000 0400000000000000 0000000000001440 0000000000000000
+    0100000000000000 0200000000000000 0300000000000000 0400000000000000 05000000 0d000000 0000000000000000
     0600000000000000 07000000 08000000 0900000000000000 0a000000000000000000000000000000
     0b00000000000000 0c00000000000000
 ";
@@ -87,16 +87,16 @@ const COMMON_SETTINGS_HEX: &str = "
     0100000000000000 0200000000000000 0300000000000000 0400000000000000
 ";
 const CORE_SETTINGS_HEX: &str = "
-    0000000000001440 0000000000000000 0600000000000000 07000000 08000000 0900000000000000
+    05000000 0d000000 0000000000000000 0600000000000000 07000000 08000000 0900000000000000
     0a000000000000000000000000000000 0b00000000000000 0c00000000000000
 ";
-const SCHEDULER_SETTINGS_HEX: &str = "0000000000001440 0000000000000000 0600000000000000";
+const SCHEDULER_SETTINGS_HEX: &str = "05000000 0d000000 0000000000000000 0600000000000000";
 
 codec_fixtures!(Settings, encode_only, fixture_settings() => SETTINGS_HEX);
 codec_fixtures!(CommonSettings, encode_only, fixture_common_settings() => COMMON_SETTINGS_HEX);
 codec_fixtures!(MinimumNetworkSize, encode_only, fixture_minimum_network_size() => "0200000000000000");
 codec_fixtures!(CoreSettings, encode_only, fixture_core_settings() => CORE_SETTINGS_HEX);
 codec_fixtures!(SchedulerSettings, encode_only, scheduler_settings() => SCHEDULER_SETTINGS_HEX);
-codec_fixtures!(CoverTrafficSettings, encode_only, cover_traffic_settings() => "00000000000014400000000000000000");
+codec_fixtures!(CoverTrafficSettings, encode_only, cover_traffic_settings() => "050000000d0000000000000000000000");
 codec_fixtures!(CoverReplicationFactor, encode_only, fixture_cover_replication_factor() => "0000000000000000");
 codec_fixtures!(MessageDelayerSettings, encode_only, message_delayer_settings() => "0600000000000000");

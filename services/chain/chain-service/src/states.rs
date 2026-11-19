@@ -1,4 +1,7 @@
-use std::{collections::HashSet, time::SystemTime};
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::SystemTime,
+};
 
 use lb_binary_codec::bincode::DeserializeOp as _;
 use lb_core::{era::ForkDigest, header::HeaderId};
@@ -71,6 +74,11 @@ pub struct CryptarchiaConsensusState {
     /// been deleted from the persistence layer because of some unexpected
     /// error.
     pub(crate) storage_blocks_to_remove: HashSet<HeaderId>,
+    /// The immutable index entries of finalized blocks a write failed to store.
+    /// The anchor of the nullifier store may already be above them, so a
+    /// restart, which replays the chain above the anchor, doesn't index them
+    /// again: they are retried instead.
+    pub(crate) immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
     /// Last engine state and timestamp for offline grace period tracking
     pub(crate) last_engine_state: Option<LastEngineState>,
 }
@@ -86,10 +94,11 @@ impl CryptarchiaConsensusState {
     ///
     /// Furthermore, it allows to specify blocks deleted from the cryptarchia
     /// engine (hence not tracked anymore) but that should be deleted from the
-    /// persistence layer.
+    /// persistence layer, and the immutable index entries still to store.
     pub(crate) fn from_cryptarchia_and_unpruned_blocks(
         cryptarchia: &Cryptarchia,
         storage_blocks_to_remove: HashSet<HeaderId>,
+        immutable_blocks_to_index: BTreeMap<Slot, HeaderId>,
         fork_digests: &EraSchedule<ForkDigest>,
     ) -> Result<Self, DynError> {
         let lib = cryptarchia.consensus.lib_branch();
@@ -112,6 +121,7 @@ impl CryptarchiaConsensusState {
             lib_block_slot,
             lib_block_uncle_slots,
             storage_blocks_to_remove,
+            immutable_blocks_to_index,
             last_engine_state: Some(LastEngineState {
                 timestamp: SystemTime::now(),
                 state: *cryptarchia.consensus.state(),
@@ -143,6 +153,7 @@ impl ServiceState for CryptarchiaConsensusState {
             lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
+            immutable_blocks_to_index: BTreeMap::new(),
             last_engine_state: None,
         })
     }
@@ -157,7 +168,7 @@ pub struct LastEngineState {
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZero, NonZeroU64, NonZeroUsize},
+        num::{NonZero, NonZeroU32, NonZeroU64, NonZeroUsize},
         sync::Arc,
         time::Duration,
     };
@@ -169,10 +180,10 @@ mod tests {
     };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
-        config::{BlendPoWConfig, EmissionRatio, ModulusShift, PoWConfig, RewardPoWConfig},
+        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
     use crate::{
@@ -194,10 +205,9 @@ mod tests {
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
@@ -212,7 +222,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -234,7 +244,6 @@ mod tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -242,7 +251,8 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -250,10 +260,7 @@ mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
@@ -262,30 +269,27 @@ mod tests {
             channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: lb_ledger::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                lb_ledger::config::BlockRewardsParameters {
+                    max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -303,8 +307,8 @@ mod tests {
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
-            // Boostrapping mode since we are pursposefully adding old forks to test the
-            // recovery mechanism.
+            // Boostrapping mode since we are pursposefully adding old forks to
+            // test the recovery mechanism.
             let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_genesis(
                 genesis_header_id,
                 Arc::new(
@@ -320,8 +324,8 @@ mod tests {
             //    \    \    \
             //      b6   b7   b8
             //
-            // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3` represent
-            // the canonical chain now.
+            // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3`
+            // represent the canonical chain now.
             cryptarchia
                 .receive_block(
                     [1; 32].into(),
@@ -381,7 +385,8 @@ mod tests {
                     UncleSlots::default(),
                 )
                 .expect("Block 7 to be added successfully on top of block 1.");
-            // Add a single-block fork from the second block after genesis (block `2`)
+            // Add a single-block fork from the second block after genesis
+            // (block `2`)
             cryptarchia
                 .receive_block(
                     [8; 32].into(),
@@ -397,7 +402,11 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
+            lb_ledger::LedgerState::from_notes(
+                [],
+                &ledger_config,
+                &crate::tests::genesis_parameters(),
+            ),
             single_era(ledger_config),
         )
         .unwrap();
@@ -415,6 +424,7 @@ mod tests {
                 genesis_id: genesis_header_id,
             },
             pruned_stale_blocks.clone(),
+            BTreeMap::new(),
             &fork_digests,
         )
         .unwrap();
@@ -442,7 +452,7 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
             12,
             4,
@@ -464,7 +474,6 @@ mod tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -472,7 +481,8 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
                         cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -480,10 +490,7 @@ mod tests {
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
@@ -492,30 +499,27 @@ mod tests {
             channel_withdraw_delay: 86_400.into(),
             execution_market: lb_ledger::config::ExecutionMarketConfig {
                 max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
-                fee_adjustment_rate: lb_utils::math::ProperFraction::new(1, 8.try_into().unwrap())
-                    .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(
-                    9,
-                    10.try_into().unwrap(),
-                )
-                .unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
             },
             storage_market: lb_ledger::config::StorageMarketConfig {
-                max_adjustment_factor: lb_utils::math::ProperFraction::new(
-                    1,
-                    8.try_into().unwrap(),
-                )
-                .unwrap(),
-                ema_smoothing_factor: lb_utils::math::ProperFraction::new(1, 2.try_into().unwrap())
-                    .unwrap(),
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
             },
             block_rewards: lb_ledger::config::BlockRewardsConfig::new(
-                3_000_000_000_000_000_000,
-                120_000_000_000_000_000.try_into().unwrap(),
-                120.try_into().unwrap(),
-                10_512,
-                EmissionRatio::new(62_500_000_000_000, 657.try_into().unwrap()),
-                lb_utils::math::ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                lb_ledger::config::BlockRewardsParameters {
+                    max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
+                    min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                    stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
+                    pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                    pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                    pooled_fees_window: 120.try_into().unwrap(),
+                    blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+                },
+                10_000_000_000_000_000_000,
+                1.try_into().unwrap(),
+                ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
             )
             .unwrap(),
             gas_profile: GAS_PROFILE,
@@ -567,7 +571,11 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new_with_lib_state(
                 lib_id,
-                lb_ledger::LedgerState::from_notes([], &ledger_config, 0),
+                lb_ledger::LedgerState::from_notes(
+                    [],
+                    &ledger_config,
+                    &crate::tests::genesis_parameters(),
+                ),
                 single_era(ledger_config.clone()),
                 &crate::LibInfo::of(engine.lib_branch()),
             )
@@ -580,6 +588,7 @@ mod tests {
         let saved_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
             &original,
             HashSet::new(),
+            BTreeMap::new(),
             &fork_digests(original.ledger.era_schedule()),
         )
         .unwrap();

@@ -114,9 +114,9 @@ pub fn prepare_network(
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{OpRef, traits::MantleTx as _};
-    use lb_ledger::GENESIS_STAKE_SUPPLY;
 
     use super::*;
+    use crate::funding::GENESIS_STAKE_SUPPLY;
 
     fn genesis_supply(network: &PreparedNetwork) -> u128 {
         let tx = network.genesis.genesis_tx();

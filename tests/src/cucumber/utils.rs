@@ -6,8 +6,9 @@ use std::{
 
 use hex::ToHex as _;
 use lb_binary_codec::bincode::SerializeOp as _;
+use lb_config::consensus::UNITS_PER_LGO;
 use lb_core::{
-    mantle::{GenesisTime, TxHash, transactions::UNITS_PER_LGO},
+    mantle::{GenesisTime, TxHash},
     sdp::Locator,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;

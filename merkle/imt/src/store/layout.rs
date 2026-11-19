@@ -128,16 +128,10 @@ pub struct NullifierKey {
     pub nullifier: Fr,
 }
 
-/// A block, to the version of its writes.
+/// A committed block, to the version it writes its nodes under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlockVersionKey {
     pub block_id: BlockId,
-}
-
-/// A version not final yet, to its block.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct LiveVersionKey {
-    pub version: Version,
 }
 
 /// The finalized base of the tree.
@@ -165,11 +159,6 @@ pub enum StoredNode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct IndexEntry {
     pub leaf_index: LeafIndex,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LiveVersion {
-    pub block_id: BlockId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -370,7 +359,7 @@ impl NullifierKey {
     }
 }
 
-impl LiveVersionKey {
+impl BlockVersionKey {
     #[must_use]
     pub fn prefix() -> Vec<u8> {
         Self::TAG.to_vec()
@@ -429,20 +418,6 @@ impl StoreKey for BlockVersionKey {
     fn read_fields(reader: &mut Reader<'_>) -> Result<Self, CodecError> {
         Ok(Self {
             block_id: BlockId(reader.take()?),
-        })
-    }
-}
-
-impl StoreKey for LiveVersionKey {
-    const TAG: &'static [u8] = b"live_version/";
-
-    fn write_fields(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.version.0.to_be_bytes());
-    }
-
-    fn read_fields(reader: &mut Reader<'_>) -> Result<Self, CodecError> {
-        Ok(Self {
-            version: Version(reader.u64()?),
         })
     }
 }
@@ -569,18 +544,6 @@ impl StoreValue for IndexEntry {
     }
 }
 
-impl StoreValue for LiveVersion {
-    fn write(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.block_id.0);
-    }
-
-    fn read(reader: &mut Reader<'_>) -> Result<Self, CodecError> {
-        Ok(Self {
-            block_id: BlockId(reader.take()?),
-        })
-    }
-}
-
 impl StoreValue for GcMarker {
     fn write(&self, _out: &mut Vec<u8>) {}
 
@@ -648,9 +611,6 @@ mod tests {
         roundtrip_key(&BlockVersionKey {
             block_id: BlockId([3; 32]),
         });
-        roundtrip_key(&LiveVersionKey {
-            version: Version(u64::MAX),
-        });
         roundtrip_key(&GcKey {
             end_len: 12,
             version: Version(4),
@@ -684,9 +644,6 @@ mod tests {
         });
         roundtrip_value(&IndexEntry {
             leaf_index: LeafIndex::new(11),
-        });
-        roundtrip_value(&LiveVersion {
-            block_id: BlockId([1; 32]),
         });
         roundtrip_value(&StaleMarker);
         roundtrip_value(&GcMarker);

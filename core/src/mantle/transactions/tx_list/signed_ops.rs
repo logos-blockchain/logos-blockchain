@@ -303,8 +303,8 @@ impl BinaryDecode for SignedOps<Preverified, StandardMode> {
 }
 
 impl<State: VerificationState, Mode: VerificationMode> Hashable for SignedOps<State, Mode> {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> = tx_hasher;
     type Hash = TxHash;
 
@@ -489,8 +489,8 @@ pub mod test_utils {
         }
     }
 
-    // TODO: The generated channels are bare. We should add more realistic channel
-    // states for testing.
+    // TODO: The generated channels are bare. We should add more realistic
+    // channel states for testing.
     #[must_use]
     pub fn make_channel_state(accredited_keys: Option<UnverifiedChannelKeys>) -> ChannelState {
         let keys = accredited_keys.unwrap_or_else(|| {
@@ -688,8 +688,8 @@ mod tests {
         // The withdrawal also pays the update of its channel set on release.
         let expected_withdraw_gas = 33 + 8961 + 4177 + 1758;
         // The bytes of the transaction alone: the deposit, with no output, adds
-        // nothing to its channel set, and the withdrawal changes its channel set
-        // only when it is released.
+        // nothing to its channel set, and the withdrawal changes its channel
+        // set only when it is released.
         let expected_terms = GAS_PROFILE
             .tx_terms_gas(
                 minimum_signed_transaction_size(&mantle_tx.by_ref(), &context),
@@ -1066,13 +1066,13 @@ mod tests {
 
         let serialized = serde_json::to_string(&helper).unwrap();
 
-        // Deserialization into `SignedMantleTx<Unverified>` should succeed, even with
-        // invalid signature.
+        // Deserialization into `SignedMantleTx<Unverified>` should succeed,
+        // even with invalid signature.
         serde_json::from_str::<SignedOps<Unverified, StandardMode>>(&serialized)
             .expect("Unverified deserialization should succeed");
 
-        // Deserialization into `SignedMantleTx<Preverified>` should fail due to invalid
-        // signature.
+        // Deserialization into `SignedMantleTx<Preverified>` should fail due to
+        // invalid signature.
         let deserialized: Result<SignedOps<Preverified, StandardMode>, _> =
             serde_json::from_str(&serialized);
 

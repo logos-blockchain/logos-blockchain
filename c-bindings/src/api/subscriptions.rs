@@ -39,8 +39,8 @@ pub struct TxWithId {
 }
 
 impl Hashable for TxWithId {
-    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
-    // the closure.
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused
+    // by the closure.
     const HASHER: hashable::Hasher<Self> =
         |tx| <SignedOps<Unverified, StandardMode> as Hashable>::HASHER(&tx.tx);
     type Hash = <SignedOps<Unverified, StandardMode> as Hashable>::Hash;

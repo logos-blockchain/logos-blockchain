@@ -289,8 +289,8 @@ mod tests {
         )
     }
 
-    // Mock NtpResultStream that yields a sequence of NtpResults with increasing or
-    // decreasing time
+    // Mock NtpResultStream that yields a sequence of NtpResults with increasing
+    // or decreasing time
     struct MockNtpResultStream {
         data: Vec<NtpTestData>,
         idx: usize,
@@ -459,8 +459,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_monotonicity_on_backward_ntp_update() {
-        // Simulate NTP responses with varying sec_fraction, offset, roundtrip, stratum,
-        // leap
+        // Simulate NTP responses with varying sec_fraction, offset, roundtrip,
+        // stratum, leap
         let (ntp_data, initial_slot) = ntp_data_set_backward_ntp_update();
         check_monotonic_slots(ntp_data, initial_slot);
     }
@@ -595,7 +595,8 @@ mod tests {
         };
 
         // Step 1: consume a backward NTP correction to slot 7.
-        // Expected: the old synthetic `11` is discarded and nothing is emitted yet.
+        // Expected: the old synthetic `11` is discarded and nothing is emitted
+        // yet.
         assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
 
         // Step 2: corrected time has only reached synthetic slot 8.
@@ -615,7 +616,8 @@ mod tests {
         assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
 
         // Step 5: corrected time reaches slot 11.
-        // Expected: emission resumes at the first slot strictly greater than 10.
+        // Expected: emission resumes at the first slot strictly greater than
+        // 10.
         tokio::time::advance(Duration::from_secs(1)).await;
         assert!(matches!(
             futures::poll!(stream.next()),
@@ -671,8 +673,8 @@ mod tests {
         };
 
         // Step 1: consume a forward NTP correction to slot 20.
-        // Expected: the stale synthetic `11` is discarded and the corrected slot
-        // 20 is emitted at once, skipping 11..19.
+        // Expected: the stale synthetic `11` is discarded and the corrected
+        // slot 20 is emitted at once, skipping 11..19.
         assert!(matches!(
             futures::poll!(stream.next()),
             Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(20)
@@ -785,20 +787,21 @@ mod tests {
         };
 
         // Step 1: consume an on-time NTP update for slot 10.
-        // Expected: the timer is rebased to the same slot and still emits nothing
-        // immediately.
+        // Expected: the timer is rebased to the same slot and still emits
+        // nothing immediately.
         assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
 
         // Step 2: consume a forward NTP update to slot 20.
-        // Expected: the old synthetic `11` is discarded and the corrected slot 20
-        // is emitted at once.
+        // Expected: the old synthetic `11` is discarded and the corrected slot
+        // 20 is emitted at once.
         assert!(matches!(
             futures::poll!(stream.next()),
             Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(20)
         ));
 
-        // Step 3: no NTP update on this poll; one second of simulated time passes.
-        // Expected: the rebased forward timer now emits slot 21.
+        // Step 3: no NTP update on this poll; one second of simulated time
+        // passes. Expected: the rebased forward timer now emits slot
+        // 21.
         tokio::time::advance(Duration::from_secs(1)).await;
         assert!(matches!(
             futures::poll!(stream.next()),
@@ -810,8 +813,8 @@ mod tests {
         // immediately.
         assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
 
-        // Step 5: no NTP update on this poll; one second of simulated time passes.
-        // Expected: the rebased on-time timer emits slot 22.
+        // Step 5: no NTP update on this poll; one second of simulated time
+        // passes. Expected: the rebased on-time timer emits slot 22.
         tokio::time::advance(Duration::from_secs(1)).await;
         assert!(matches!(
             futures::poll!(stream.next()),
@@ -819,8 +822,8 @@ mod tests {
         ));
 
         // Step 6: consume a backward NTP update to slot 19.
-        // Expected: no regression is emitted; the stream pauses at last_emitted_slot =
-        // 22.
+        // Expected: no regression is emitted; the stream pauses at
+        // last_emitted_slot = 22.
         assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
 
         // Step 7: corrected time reaches slot 20.
@@ -839,7 +842,8 @@ mod tests {
         assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
 
         // Step 10: corrected time reaches slot 23.
-        // Expected: emission resumes at the first slot strictly greater than 22.
+        // Expected: emission resumes at the first slot strictly greater than
+        // 22.
         tokio::time::advance(Duration::from_secs(1)).await;
         assert!(matches!(
             futures::poll!(stream.next()),
@@ -863,8 +867,8 @@ mod tests {
     }
 
     #[tokio::test]
-    // Fast polling will pick up jitter from the real NTP server, testing real-world
-    // monotonicity and robustness of the tick stream
+    // Fast polling will pick up jitter from the real NTP server, testing
+    // real-world monotonicity and robustness of the tick stream
     async fn test_real_ntp_server_fast_poll() {
         let backend_settings = NtpTimeBackendSettings {
             ntp_server: "pool.ntp.org:123".to_owned(),

@@ -81,9 +81,9 @@ impl VerifiableOperation<StandardMode>
     type Error = ProgramRegisterError;
 
     fn verify(&self, _context: &Self::Context<'_>) -> Result<Self::DeferredProof, Self::Error> {
-        // Every point on its curve, in its prime order subgroup and not the point
-        // at infinity, since an invalid point would make the proofs of the program
-        // unsound.
+        // Every point on its curve, in its prime order subgroup and not the
+        // point at infinity, since an invalid point would make the
+        // proofs of the program unsound.
         self.operation()
             .verification_key
             .to_groth16()
@@ -100,8 +100,8 @@ impl ExecutableOperation for SignedOperation<ProgramRegisterOp, Verified, Standa
         &self,
         context: Self::Context<'a>,
     ) -> Result<(Self::Context<'a>, Vec<TxEvent>), Self::Error> {
-        // Storing an already registered key has no effect, and e(α, β) is computed
-        // once here, paid by the registration.
+        // Storing an already registered key has no effect, and e(α, β) is
+        // computed once here, paid by the registration.
         let program = RegisteredProgram::new(self.operation().verification_key.clone())?;
         let (programs, _) = context.programs.register(program);
         Ok((ProgramRegisterExecutionContext { programs }, Vec::new()))

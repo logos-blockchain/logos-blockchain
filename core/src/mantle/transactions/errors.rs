@@ -71,4 +71,21 @@ impl VerificationError {
                 | Self::SDPVerificationError(SdpError::InvalidEddsaSignature)
         )
     }
+
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::ChannelVerificationError(err) => err.is_store_failure(),
+            Self::TransferVerificationError(err) => err.is_store_failure(),
+            Self::SDPVerificationError(err) => err.is_store_failure(),
+            Self::ClaimPowRewardError(err) => err.is_store_failure(),
+            Self::ChannelNotFound { .. }
+            | Self::KeyNotFound { .. }
+            | Self::ChannelMultiSigProofNotEnoughSignatures { .. }
+            | Self::ChannelMultiSigProofInvalidSignature { .. }
+            | Self::ProgramRegisterError(_)
+            | Self::InscribeError(_)
+            | Self::BoundsError(_) => false,
+        }
+    }
 }

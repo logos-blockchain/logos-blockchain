@@ -16,7 +16,7 @@ use lb_core::{
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
 use lb_log_targets::ledger;
-use lb_utils::math::PositiveF64;
+use lb_utils::math::PositiveRatio;
 use tracing::debug;
 
 use crate::{
@@ -242,10 +242,10 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RewardsParameters {
     pub rounds_per_epoch: NonZeroU64,
-    pub message_frequency_per_round: PositiveF64,
+    pub message_frequency_per_round: PositiveRatio,
     pub cover_replication_factor: u64,
     pub num_blend_layers: NonZeroU64,
     pub data_replication_factor: u64,
@@ -313,7 +313,7 @@ impl RewardsParameters {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, convert::Infallible};
+    use std::{collections::HashMap, convert::Infallible, num::NonZeroU32};
 
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::{
@@ -342,7 +342,7 @@ mod tests {
     ) -> RewardsParameters {
         RewardsParameters {
             rounds_per_epoch: rounds_per_epoch.try_into().unwrap(),
-            message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+            message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
             cover_replication_factor: 0,
             num_blend_layers: NonZeroU64::new(3).unwrap(),
             minimum_network_size: minimum_network_size.try_into().unwrap(),
@@ -657,7 +657,8 @@ mod tests {
 
     // If the SDP snapshot of the target epoch has fewer providers than the
     // minimum network size, all activity messages for the epoch must be
-    // rejected, and no rewards should be calculated at the next epoch transition.
+    // rejected, and no rewards should be calculated at the next epoch
+    // transition.
     #[test]
     fn test_blend_network_too_small() {
         let provider1 = create_provider_id(1);
@@ -934,7 +935,8 @@ mod tests {
         let (new_state, rewards) =
             rewards_tracker.update_epoch(&epoch1, &epoch3, &config, &params, &params);
 
-        // Rewards earned during epoch 1 must be distributed from epoch 0's income pool.
+        // Rewards earned during epoch 1 must be distributed from epoch 0's
+        // income pool.
         assert_eq!(rewards.len(), 1);
         let total_paid: Value = rewards.iter().map(|note| note.value).sum();
         assert_eq!(total_paid, epoch0_income);
@@ -990,8 +992,8 @@ mod tests {
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
         let (rewards_tracker, rewards) =
             rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
-        // One provider, base and premium: floor(1001 / 2) * 2 = 1000; the remainder 1
-        // is not paid.
+        // One provider, base and premium: floor(1001 / 2) * 2 = 1000; the
+        // remainder 1 is not paid.
         assert_eq!(
             rewards.iter().map(|note| note.value).collect::<Vec<_>>(),
             vec![1000]
@@ -1018,7 +1020,8 @@ mod tests {
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
-        // provider1 submits an activity proof that is larger than activity threshold.
+        // provider1 submits an activity proof that is larger than activity
+        // threshold.
         let err = rewards_tracker
             .update_active(
                 provider1,
@@ -1053,7 +1056,8 @@ mod tests {
         let (rewards_tracker, _) = Rewards::<AlwaysFailureProofsVerifier>::new(&params, &epoch0)
             .update_epoch(&epoch0, &epoch1, &config, &params, &params);
 
-        // provider1 submits an activity proof, but PoQ/PoSel verification fails.
+        // provider1 submits an activity proof, but PoQ/PoSel verification
+        // fails.
         let err = rewards_tracker
             .update_active(
                 provider1,
@@ -1113,8 +1117,9 @@ mod tests {
         let (rewards_tracker, _) =
             rewards_tracker.update_epoch(&epoch1, &epoch2, &config, &params, &params);
 
-        // provider submits an activity proof again, and it should be accepted since the
-        // proof verifier should be updated after epoch update.
+        // provider submits an activity proof again, and it should be accepted
+        // since the proof verifier should be updated after epoch
+        // update.
         rewards_tracker
             .update_active(
                 provider,
