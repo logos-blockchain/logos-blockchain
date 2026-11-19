@@ -36,8 +36,9 @@ impl Default for RocksKvOptions {
 
 /// A [`KvStore`] on a `RocksDB` database.
 ///
-/// Reads and writes run on the calling thread: the ledger applies blocks
-/// synchronously, outside of the async runtime's worker threads.
+/// Reads and writes run on the calling thread, which is to be one that may
+/// block, such as one of the async runtime's blocking pool, never one of its
+/// workers: the ledger reads and writes its trees synchronously.
 pub struct RocksKv {
     db: Arc<DB>,
     sync_writes: bool,

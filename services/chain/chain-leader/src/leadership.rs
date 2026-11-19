@@ -29,7 +29,10 @@ use lb_wallet_service::{
     AgedNote,
     api::{WalletApi, WalletServiceData},
 };
-use overwatch::services::{AsServiceId, relay::OutboundRelay};
+use overwatch::{
+    DynError,
+    services::{AsServiceId, relay::OutboundRelay},
+};
 #[cfg(test)]
 pub use pol_tests::{genesis_parameters, single_era, test_config};
 use tokio::sync::{mpsc, oneshot};
@@ -121,19 +124,38 @@ pub async fn find_winning_note<RuntimeServiceId>(
 }
 
 // The wallet half of the PoL witness of an aged note, proven against the aged
-// note sets of the epoch and the `latest` note sets, or `None` if it fails. Its
-// paths are read from the nullifier store, so it's built on the blocking pool.
+// note sets of the epoch and the `latest` note sets, or `None` if it fails.
 async fn leader_wallet_inputs(
     aged: &AgedNote,
     epoch_state: &EpochState,
     latest: &NoteSets,
     slot: Slot,
 ) -> Option<PolWalletInputsData> {
+    pol_wallet_inputs_off_loop(aged, &epoch_state.note_sets, latest)
+        .await
+        .inspect_err(|e| {
+            metrics::consensus_proposals_create_failed("private_inputs");
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
+                aged.note.note.commitment(),
+            );
+        })
+        .ok()
+}
+
+// The wallet half of the PoL witness of `aged`, proven against the `aged_sets`
+// and the `latest` note sets. Its paths are read from the nullifier store, so
+// it's built on the blocking pool.
+async fn pol_wallet_inputs_off_loop(
+    aged: &AgedNote,
+    aged_sets: &NoteSets,
+    latest: &NoteSets,
+) -> Result<PolWalletInputsData, DynError> {
     let note = aged.note.clone();
     let aged_path = aged.aged_path.clone();
-    let (aged_sets, latest) = (epoch_state.note_sets.clone(), latest.clone());
-    let commitment = note.note.commitment();
-    let witness = spawn_blocking("logos/chain/leader-witness-blocking", move || {
+    let (aged_sets, latest) = (aged_sets.clone(), latest.clone());
+    spawn_blocking("logos/chain/leader-witness-blocking", move || {
         pol_wallet_inputs(
             &note.note,
             note.note_set,
@@ -143,21 +165,9 @@ async fn leader_wallet_inputs(
             &latest,
         )
     })
-    .await;
-
-    let failed = |e: &dyn Display| {
-        metrics::consensus_proposals_create_failed("private_inputs");
-        tracing::error!(
-            target: LOG_TARGET,
-            "Failed to build the witness of winning note {commitment:?} for {slot:?}: {e}",
-        );
-        None
-    };
-    match witness {
-        Ok(Ok(wallet_inputs)) => Some(wallet_inputs),
-        Ok(Err(e)) => failed(&e),
-        Err(e) => failed(&e),
-    }
+    .await
+    .map_err(DynError::from)?
+    .map_err(DynError::from)
 }
 
 // C_LEAD and eligible_LATEST.
@@ -181,7 +191,7 @@ pub enum PrivateInputsError {
     #[error("Leader witness error: {0}")]
     Witness(#[from] LeaderWitnessError),
     #[error("KMS API error: {0}")]
-    KmsApi(#[from] overwatch::DynError),
+    KmsApi(#[from] DynError),
     #[error("KMS API did not respond")]
     KmsResponse,
 }
@@ -480,14 +490,9 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
                     continue;
                 }
                 tracing::trace!(target: LOG_TARGET, "Found winning note {:?} for slot {slot}", note.note.note.commitment());
-                let wallet = match pol_wallet_inputs(
-                    &note.note.note,
-                    note.note.note_set,
-                    &note.note.nullifier,
-                    &note.aged_path,
-                    &epoch_state.note_sets,
-                    latest,
-                ) {
+                let wallet = match pol_wallet_inputs_off_loop(note, &epoch_state.note_sets, latest)
+                    .await
+                {
                     Ok(wallet) => wallet,
                     Err(e) => {
                         tracing::error!(
@@ -897,7 +902,7 @@ mod pol_tests {
             _: Self::KeyId,
             note: &Note,
             leader_public: &LeaderPublic,
-        ) -> Result<bool, overwatch::DynError> {
+        ) -> Result<bool, DynError> {
             let nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
             Ok(check_winning(
                 note,
