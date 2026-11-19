@@ -167,6 +167,11 @@ impl NullifierStorage {
     /// Commits the state of block `block_id`, written in the store before it
     /// is returned. A block replayed at restart gets the version it had, and
     /// writes the same nodes again.
+    ///
+    /// The returned state holds in memory only what is above the finalized
+    /// base (see [`rebase_state`]). It drops the rest here, once, where it
+    /// shares everything else with its parent state: dropping it from every
+    /// kept state at each move of the base would leave them sharing nothing.
     pub fn commit(
         &self,
         block_id: BlockId,
@@ -178,7 +183,7 @@ impl NullifierStorage {
         batch.append(committed.writes);
         batch.append(self.record_written(allocation.version, &committed.written)?);
         self.write(batch)?;
-        Ok(state)
+        rebase_state(state)
     }
 
     /// Makes the trees of the state of block `block_id` the base of the DB:
@@ -521,6 +526,11 @@ mod tests {
         }
 
         fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<KvEntry>, Self::Error> {
+            if self.fail_read.swap(false, Ordering::Relaxed) {
+                return Err(StoreError::new(IoError::other(
+                    "injected storage read failure",
+                )));
+            }
             self.inner.scan_prefix(prefix)
         }
 
@@ -1433,7 +1443,40 @@ mod tests {
     }
 
     #[test]
-    fn test_rebase_failure_after_pruning_commit_preserves_finalized_nodes() {
+    fn test_a_kept_state_holds_only_its_blocks_above_the_base_of_its_commit() {
+        let mut chain = Chain::new();
+        let mut tip = GENESIS;
+        let mut heights = HashMap::from([(GENESIS, 0usize)]);
+        for n in 1..=12 {
+            let parent = tip;
+            let base = heights[&chain.engine.lib()];
+            tip = chain.extend(parent, &[n * 10]);
+            heights.insert(tip, heights[&parent] + 1);
+            // The blocks the base held when the block was committed are
+            // dropped, the others are kept whatever the base became since.
+            let above_base = chain
+                .state(&tip)
+                .note_sets
+                .get(LEDGER_SET)
+                .unwrap()
+                .nullifiers()
+                .unfinalized_versions()
+                .count();
+            assert_eq!(above_base, heights[&tip] - base, "block {n}");
+        }
+        assert_ne!(chain.engine.lib(), GENESIS);
+        for (id, state) in &chain.ledger.states {
+            check_set(
+                "kept state",
+                state.latest_note_sets().get(LEDGER_SET).unwrap(),
+                &chain.oracles[id][&LEDGER_SET],
+                &PROBES,
+            );
+        }
+    }
+
+    #[test]
+    fn test_collection_failure_after_pruning_commit_preserves_finalized_nodes() {
         let failing = Arc::new(FailingStore::new());
         let store = ErasedKv::into_dyn(Arc::clone(&failing));
         let mut chain = Chain::with_store(store);
@@ -1455,8 +1498,8 @@ mod tests {
         assert!(!pruned.is_empty());
         let lib = chain.engine.lib();
 
-        // Fail the first rebase read, after finalization and its LIB state
-        // commit.
+        // Fail the first read of the garbage collection, after finalization
+        // and its LIB state commit.
         failing.fail_read_after_next_write();
         assert!(
             chain
@@ -1482,7 +1525,7 @@ mod tests {
         }
         assert_eq!(ledger.discard_lost_blocks().unwrap(), 0);
         check_set(
-            "finalized despite rebase error",
+            "finalized despite collection error",
             ledger
                 .state(&lib)
                 .unwrap()
