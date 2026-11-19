@@ -34,7 +34,8 @@ use lb_http_api_common::bodies::{
     channel::{
         ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelPayment,
         ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
-        ChannelWithdrawResponseBody, ProgramDepositBody, ProgramOutputBody, ProgramPayoutBody,
+        ChannelWithdrawResponseBody, ProgramDepositBody, ProgramFollowRequestBody,
+        ProgramOutputBody, ProgramPayoutBody, ProgramPayoutExpectRequestBody,
         ProgramRegisterRequestBody, ProgramRegisterResponseBody, ProgramStepProveRequestBody,
         ProgramStepProveResponseBody, ProgramStepRequestBody, ProgramStepResponseBody,
     },
@@ -546,10 +547,10 @@ async fn channel_note_round_trip() {
 /// 1. Register a program, create a channel and deposit into it.
 /// 2. Inscribe a program deposit from the node's wallet together with the
 ///    program step that consumes it into a note of the program.
-/// 3. Inscribe a second program step that consumes that note and pays it to a
-///    user key, once the wallet follows the note and it is deep enough.
-/// 4. Withdraw the paid note, which the wallet holds only if it followed the
-///    outputs of the program step.
+/// 3. Inscribe a program step the other node builds, following the program from
+///    the blocks: it consumes that note and pays it to a user key.
+/// 4. Withdraw the paid note, which the wallet holds only if it found the
+///    payout it expects in the program step.
 #[tokio::test]
 #[serial]
 async fn channel_program_step() {
@@ -557,6 +558,7 @@ async fn channel_program_step() {
     let (_base, nodes, funding_pk) =
         start_channel_cluster("channel_program_step", deposit_amount).await;
     let node = &nodes[0].client;
+    let sequencer = &nodes[1].client;
     let mut block_stream = node.blocks_stream().await.unwrap();
 
     // The program accepts any public inputs, so its proofs only need the
@@ -585,6 +587,12 @@ async fn channel_program_step() {
     )
     .await;
     wait_for_tx_inclusion(&mut block_stream, register_tx_hash, "program register").await;
+    post_until_success::<_, ()>(
+        sequencer,
+        "program/follow",
+        &ProgramFollowRequestBody { program_id },
+    )
+    .await;
 
     let (channel_id, parent) = create_channel(node, &mut block_stream, funding_pk).await;
     deposit(
@@ -675,11 +683,23 @@ async fn channel_program_step() {
     )
     .await;
 
-    // The note the program kept is consumed once the wallet adopted it and
-    // its block is deep enough; the step pays it to a user key.
+    // The other node takes the program over: its wallet adopted the note the
+    // program kept from the block opening it. The step pays it to a key of the
+    // first node, which finds the payout it expects without its opening.
     let paid = kept;
-    let payout = build_program_step(
+    post_until_success::<_, ()>(
         node,
+        "program/payout/expect",
+        &ProgramPayoutExpectRequestBody {
+            channel_id,
+            public_key: funding_pk,
+            stake_public_key: None,
+            value: paid,
+        },
+    )
+    .await;
+    let payout = build_program_step(
+        sequencer,
         channel_id,
         program_id,
         vec![program_note],
@@ -690,7 +710,7 @@ async fn channel_program_step() {
     .await;
     let paid_notes = payout.paid_notes.clone();
     let op = channel_inscription(channel_id, parent, vec![Step::Program(payout.step.clone())]);
-    let step_proof = prove_program_step(node, &op, 0, &payout, &[], &program_proof).await;
+    let step_proof = prove_program_step(sequencer, &op, 0, &payout, &[], &program_proof).await;
     inscribe(node, &mut block_stream, funding_pk, op, vec![step_proof]).await;
 
     // The wallet holds the note the program paid.
@@ -934,7 +954,8 @@ async fn post_until_success<Request: Serialize + Sync, Response: DeserializeOwne
     path: &str,
     body: &Request,
 ) -> Response {
-    timeout(Duration::from_mins(2), async {
+    let mut refusals = Vec::new();
+    let response = timeout(Duration::from_mins(2), async {
         loop {
             let response = reqwest::Client::new()
                 .post(api_url(node, path))
@@ -948,11 +969,17 @@ async fn post_until_success<Request: Serialize + Sync, Response: DeserializeOwne
                     .await
                     .expect("response should be valid JSON");
             }
+            let refusal = (response.status(), response.text().await.ok());
+            if refusals.last() != Some(&refusal) {
+                refusals.push(refusal);
+            }
             sleep(Duration::from_millis(500)).await;
         }
     })
-    .await
-    .unwrap_or_else(|_| panic!("timed out waiting for {path} to succeed"))
+    .await;
+    response.unwrap_or_else(|_| {
+        panic!("timed out waiting for {path} to succeed, refused with {refusals:?}")
+    })
 }
 
 fn channel_signing_key() -> Ed25519Key {
