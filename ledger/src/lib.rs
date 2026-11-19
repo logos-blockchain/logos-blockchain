@@ -666,8 +666,8 @@ where
         }
         self.storage.write(batch)?;
 
-        // Registry releases and the LIB state have committed. Later rebase or GC
-        // failures must not leave this completed work pending.
+        // Registry releases and the LIB state have committed. Later rebase or
+        // GC failures must not leave this completed work pending.
         let completed = replace(&mut self.pending_pruning, PendingPruning::new());
         let mut removed = 0usize;
         for block in completed.stale.iter().chain(completed.immutable.iter()) {
@@ -1721,7 +1721,10 @@ mod tests {
                     ChannelId, MsgId, NULL_CHANNEL_ID,
                     config::ChannelConfigOp,
                     deposit::{DepositOp, Metadata},
-                    inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
+                    inscribe::{
+                        Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep,
+                        user_step_id,
+                    },
                     program_step::{ProgramDeposit, ProgramStep},
                     withdraw::{ChannelWithdrawOp, PendingWithdrawal, PendingWithdrawals},
                 },
@@ -1740,7 +1743,7 @@ mod tests {
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
-            leader_proof::LeaderProof as _,
+            leader_proof::{LeaderProof as _, LeaderWitnessError, pol_wallet_inputs},
         },
         sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
@@ -3716,6 +3719,134 @@ mod tests {
         ZkTransferProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]))
     }
 
+    fn note_commitments_with_paths(
+        commitments: &[NoteCommitment],
+    ) -> (CommitmentMmr, Vec<lb_mmr::MerklePath>) {
+        let mut mmr = CommitmentMmr::new();
+        let mut paths = Vec::with_capacity(commitments.len());
+        for commitment in commitments {
+            let (next, path) = mmr.push_with_paths(*commitment, &mut paths).unwrap();
+            mmr = next;
+            paths.push(path);
+        }
+        (mmr, paths)
+    }
+
+    fn note_nullifier(note: &notes::Note, secret_key: Fr) -> NoteNullifier {
+        derive_note_nullifier(&note.commitment(), &ZkKey::new(secret_key).nullifier_key())
+    }
+
+    fn prove_note_transfer(
+        input: notes::Note,
+        secret_key: Fr,
+        input_index: usize,
+        outputs: &[notes::Note],
+        commitments: &[NoteCommitment],
+        message: Fr,
+    ) -> ZkTransferProof {
+        let (mmr, paths) = note_commitments_with_paths(commitments);
+        ZkTransferProof::new(prove_transfer(
+            &[(input, secret_key, paths[input_index].clone())],
+            outputs,
+            mmr.frontier_root(),
+            message,
+        ))
+    }
+
+    fn assert_deferred_transfers_are_valid(deferred: &DeferredProofs) {
+        assert!(!deferred.zk_transfers().is_empty());
+        for transfer in deferred.zk_transfers() {
+            assert!(lb_zktransfer::verify(transfer.proof(), transfer.inputs()).unwrap());
+        }
+    }
+
+    fn eligible_stake_value(
+        result: Result<lb_pol::PolWalletInputsData, LeaderWitnessError>,
+    ) -> Value {
+        result.map_or(0, |inputs| inputs.note_value)
+    }
+
+    fn pol_witness_for(
+        note: &notes::Note,
+        secret_key: Fr,
+        note_set: NoteSetIndex,
+        aged_commitments: &[NoteCommitment],
+        aged: &NoteSets,
+        latest: &NoteSets,
+    ) -> Result<lb_pol::PolWalletInputsData, LeaderWitnessError> {
+        let Some(aged_set) = aged.get(note_set) else {
+            return Err(LeaderWitnessError::UnknownNoteSet(note_set));
+        };
+        let (mmr, paths) = note_commitments_with_paths(aged_commitments);
+        assert_eq!(mmr.frontier_root(), aged_set.commitment_root());
+        let path_index = aged_commitments
+            .iter()
+            .position(|commitment| *commitment == note.commitment())
+            .unwrap_or(0);
+        pol_wallet_inputs(
+            note,
+            note_set,
+            &note_nullifier(note, secret_key),
+            &paths[path_index],
+            aged,
+            latest,
+        )
+    }
+
+    fn finish_test_block(
+        state: LedgerState,
+        eras: &EraScheduledConfig,
+        gas_and_fees: &GasAndFees,
+        reward_nonce: u64,
+    ) -> (LedgerState, NoteCommitment) {
+        let reward_value = state.leader_reward::<HeaderId>(gas_and_fees, eras).unwrap();
+        let reward_note = notes::Note::new(
+            reward_value,
+            Fr::from(reward_nonce),
+            ZkKey::new(Fr::from(reward_nonce + 1_000)).to_public_key(),
+        );
+        let (state, _) = state
+            .try_finish_block::<HeaderId>(
+                eras,
+                gas_and_fees,
+                reward_note.commitment(),
+                reward_value,
+            )
+            .unwrap();
+        (state, reward_note.commitment())
+    }
+
+    fn apply_empty_test_block(
+        state: LedgerState,
+        eras: &EraScheduledConfig,
+        slot: Slot,
+        reward_nonce: u64,
+    ) -> (LedgerState, NoteCommitment) {
+        let (state, _) = state
+            .try_apply_header::<HeaderId>(slot, &Fr::ZERO, &UncleSlots::default(), eras)
+            .unwrap();
+        let (state, gas_and_fees, _, _) = state
+            .try_apply_block_transactions::<SignedOps<Preverified, StandardMode>, HeaderId>(
+                eras,
+                std::iter::empty(),
+            )
+            .unwrap();
+        finish_test_block(state, eras, &gas_and_fees, reward_nonce)
+    }
+
+    fn assert_fee_budget(gas_and_fees: &GasAndFees, budget: Value) {
+        assert_eq!(
+            gas_and_fees.fee_burned.into_inner() + gas_and_fees.fee_tip.into_inner(),
+            budget,
+            "the operation excess is fully accounted for as fees and tips"
+        );
+    }
+
+    fn assert_set_commitments(note_set: &NoteSet, commitments: &[NoteCommitment]) {
+        let (mmr, _) = note_commitments_with_paths(commitments);
+        assert_eq!(note_set.commitment_root(), mmr.frontier_root());
+    }
+
     #[test]
     fn deposit_moves_ledger_notes_into_the_channel_set_and_pays_with_its_excess() {
         let test_config = config();
@@ -3767,6 +3898,966 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [TxEvent { payload: TxEventPayload::Deposit { outputs, .. }, .. }] if *outputs == deposit.outputs
+        ));
+    }
+
+    #[test]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "The regression follows one note value through deposit, transfer, release, and cancellation branches."
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The regression asserts cross-set value and PoL invariants across the complete lifecycle."
+    )]
+    fn channel_note_transitions_conserve_value_and_pol_eligibility() {
+        let deposit_secret = Fr::from(1u64);
+        let fee_transfer_secret = Fr::from(2u64);
+        let fee_withdraw_secret = Fr::from(3u64);
+        let fee_cancel_secret = Fr::from(4u64);
+        let alice_secret = Fr::from(5u64);
+        let carol_secret = Fr::from(6u64);
+        let fee_budget = 100_000_000;
+
+        let deposit_input = notes::Note::new(
+            1_000_000_000,
+            Fr::from(101u64),
+            ZkKey::new(deposit_secret).to_public_key(),
+        );
+        let fee_transfer_input = notes::Note::new(
+            1_000_000_000,
+            Fr::from(102u64),
+            ZkKey::new(fee_transfer_secret).to_public_key(),
+        );
+        let fee_withdraw_input = notes::Note::new(
+            1_000_000_000,
+            Fr::from(103u64),
+            ZkKey::new(fee_withdraw_secret).to_public_key(),
+        );
+        let fee_cancel_input = notes::Note::new(
+            1_000_000_000,
+            Fr::from(104u64),
+            ZkKey::new(fee_cancel_secret).to_public_key(),
+        );
+        let genesis_notes = [
+            deposit_input,
+            fee_transfer_input,
+            fee_withdraw_input,
+            fee_cancel_input,
+        ];
+        let mut ledger_commitments = genesis_notes
+            .iter()
+            .map(notes::Note::commitment)
+            .collect::<Vec<_>>();
+        let (genesis_mmr, _) = note_commitments_with_paths(&ledger_commitments);
+
+        let mut test_config = config();
+        test_config.channel_withdraw_delay = Slot::from(3u64);
+        let eras = single_era(test_config.clone());
+        let mut state = LedgerState::from_notes(genesis_notes, &test_config, &genesis_parameters());
+        update_ledger_prices(&mut state, 1, 1);
+
+        let (signing_key, verifying_key) = create_test_keys_with_seed(9);
+        let channel_id = ChannelId::from([41u8; 32]);
+        let state = create_channel(
+            state,
+            &eras,
+            channel_id,
+            &signing_key,
+            verifying_key.into_unverified(),
+        );
+        assert_set_commitments(state.aged_note_sets().ledger(), &ledger_commitments);
+        assert_eq!(
+            eligible_stake_value(pol_witness_for(
+                &deposit_input,
+                deposit_secret,
+                NoteSetIndex::Ledger,
+                &ledger_commitments,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )),
+            deposit_input.value,
+            "genesis ledger notes begin in the PoL eligible snapshot"
+        );
+        let channel_set = NoteSetIndex::Channel(channel_id);
+        let mut channel_parent = state
+            .mantle_ledger
+            .channels()
+            .channels
+            .get(&channel_id)
+            .unwrap()
+            .tip_message;
+        let mut channel_commitments = Vec::new();
+
+        let deposit_excess = fee_budget;
+        let alice_note = notes::Note::new(
+            deposit_input.value - deposit_excess,
+            Fr::from(105u64),
+            ZkKey::new(alice_secret).to_public_key(),
+        );
+        assert_eq!(deposit_input.value, alice_note.value + deposit_excess);
+        assert_ne!(deposit_input.public_key, alice_note.public_key);
+        assert_eq!(
+            alice_note.public_key,
+            ZkKey::new(alice_secret).to_public_key()
+        );
+        let deposit = DepositOp {
+            channel_id,
+            inputs: [note_nullifier(&deposit_input, deposit_secret)].into(),
+            outputs: [alice_note.commitment()].into(),
+            commitment_merkle_root: genesis_mmr.frontier_root(),
+            excess_value: deposit_excess,
+            metadata: Metadata::empty(),
+        };
+        let deposit_ops = Ops::new(FORK_DIGEST, [Op::ChannelDeposit(deposit)]);
+        let deposit_hash = deposit_ops.hash();
+        let deposit_proof = prove_note_transfer(
+            deposit_input,
+            deposit_secret,
+            0,
+            &[alice_note],
+            &ledger_commitments,
+            *TxHashView::from(deposit_hash).as_fr(),
+        );
+        let deposit_tx = SignedOps::from_parts(
+            deposit_ops,
+            OpProofs::from([OpProof::ZkTransfer(deposit_proof)]),
+        )
+        .unwrap()
+        .preverify()
+        .unwrap();
+
+        let (state, _) = state
+            .try_apply_header::<HeaderId>(
+                Slot::from(1u64),
+                &Fr::ZERO,
+                &UncleSlots::default(),
+                &eras,
+            )
+            .unwrap();
+        let (state, deposit_fees, _, deposit_deferred) = state
+            .try_apply_transaction::<_, HeaderId>(&eras, &deposit_tx)
+            .unwrap();
+        assert_deferred_transfers_are_valid(&deposit_deferred);
+        assert_eq!(deposit_deferred.zk_transfers().len(), 1);
+        assert_fee_budget(&deposit_fees, deposit_excess);
+        assert!(
+            state
+                .latest_note_sets()
+                .ledger()
+                .contains_nullifier(&note_nullifier(&deposit_input, deposit_secret))
+                .unwrap()
+        );
+        assert!(
+            !state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .contains_nullifier(&note_nullifier(&alice_note, alice_secret))
+                .unwrap()
+        );
+
+        let (mut state, reward_commitment) = finish_test_block(state, &eras, &deposit_fees, 10_001);
+        ledger_commitments.push(reward_commitment);
+        channel_commitments.push(alice_note.commitment());
+        assert_set_commitments(state.latest_note_sets().ledger(), &ledger_commitments);
+        assert_set_commitments(
+            state.latest_note_sets().channel(&channel_id).unwrap(),
+            &channel_commitments,
+        );
+
+        assert!(matches!(
+            pol_witness_for(
+                &deposit_input,
+                deposit_secret,
+                NoteSetIndex::Ledger,
+                &genesis_notes.map(|note| note.commitment()),
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::Spent)
+        ));
+        assert!(matches!(
+            pol_witness_for(
+                &alice_note,
+                alice_secret,
+                channel_set,
+                &channel_commitments,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::UnknownNoteSet(index)) if index == channel_set
+        ));
+
+        // Epoch 2's stake snapshot is the set state from the start of epoch 1.
+        // The deposit block is included, but its output is not eligible before
+        // that protocol snapshot has matured.
+        let deposit_snapshot_ledger = ledger_commitments.clone();
+        let deposit_snapshot_channel = channel_commitments.clone();
+        let mut reward_nonce = 10_002;
+        for epoch in [1, 2] {
+            let (next, reward) = apply_empty_test_block(
+                state,
+                &eras,
+                eras.starting_slot_for_epoch(Epoch::new(epoch)),
+                reward_nonce,
+            );
+            state = next;
+            ledger_commitments.push(reward);
+            reward_nonce += 1;
+        }
+        assert_set_commitments(state.aged_note_sets().ledger(), &deposit_snapshot_ledger);
+        assert_set_commitments(
+            state.aged_note_sets().channel(&channel_id).unwrap(),
+            &deposit_snapshot_channel,
+        );
+        assert!(matches!(
+            pol_witness_for(
+                &deposit_input,
+                deposit_secret,
+                NoteSetIndex::Ledger,
+                &deposit_snapshot_ledger,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::Spent)
+        ));
+        assert!(
+            pol_witness_for(
+                &alice_note,
+                alice_secret,
+                channel_set,
+                &deposit_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            eligible_stake_value(pol_witness_for(
+                &deposit_input,
+                deposit_secret,
+                NoteSetIndex::Ledger,
+                &deposit_snapshot_ledger,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )) + eligible_stake_value(pol_witness_for(
+                &alice_note,
+                alice_secret,
+                channel_set,
+                &deposit_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )),
+            alice_note.value,
+            "the spent ledger input and replacement channel note contribute stake only once"
+        );
+
+        // Transfer the channel note to Bob. The fee note is a separate ledger
+        // input, so the channel value remains unchanged while the transaction
+        // fees and tip are fully funded and accounted for.
+        let bob_secret = Fr::from(7u64);
+        let bob_note = notes::Note::new(
+            alice_note.value,
+            Fr::from(106u64),
+            ZkKey::new(bob_secret).to_public_key(),
+        );
+        assert_eq!(alice_note.value, bob_note.value);
+        assert_ne!(alice_note.public_key, bob_note.public_key);
+        assert_eq!(bob_note.public_key, ZkKey::new(bob_secret).to_public_key());
+        let fee_transfer_change = notes::Note::new(
+            fee_transfer_input.value - fee_budget,
+            Fr::from(107u64),
+            fee_transfer_input.public_key,
+        );
+        let (ledger_mmr, _) = note_commitments_with_paths(&ledger_commitments);
+        assert_eq!(
+            ledger_mmr.frontier_root(),
+            state.latest_note_sets().ledger().commitment_root()
+        );
+        let (channel_mmr, _) = note_commitments_with_paths(&channel_commitments);
+        assert_eq!(
+            channel_mmr.frontier_root(),
+            state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .commitment_root()
+        );
+        let user_step = UserStep {
+            inputs: [note_nullifier(&alice_note, alice_secret)].into(),
+            outputs: [bob_note.commitment()].into(),
+            commitment_merkle_root: channel_mmr.frontier_root(),
+            inscription: Inscription::default(),
+        };
+        let transfer_inscription = InscriptionOp {
+            channel_id,
+            inscription: Inscription::new_unchecked(b"alice to bob".to_vec()),
+            parent: channel_parent,
+            signer: verifying_key.into_unverified(),
+            mini_blocks: [MiniBlock::from([Step::User(user_step.clone())])].into(),
+        };
+        let fee_transfer = TransferOp::new(
+            [note_nullifier(&fee_transfer_input, fee_transfer_secret)].into(),
+            [fee_transfer_change.commitment()].into(),
+            ledger_mmr.frontier_root(),
+            fee_budget,
+        );
+        let transfer_ops = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::Transfer(fee_transfer),
+                Op::ChannelInscribe(transfer_inscription.clone()),
+            ]),
+        );
+        let transfer_hash = transfer_ops.hash();
+        let transfer_hash_fr = *TxHashView::from(transfer_hash).as_fr();
+        let fee_transfer_proof = prove_note_transfer(
+            fee_transfer_input,
+            fee_transfer_secret,
+            1,
+            &[fee_transfer_change],
+            &ledger_commitments,
+            transfer_hash_fr,
+        );
+        let channel_transfer_proof = prove_note_transfer(
+            alice_note,
+            alice_secret,
+            0,
+            &[bob_note],
+            &channel_commitments,
+            user_step_id(&channel_id, &user_step),
+        );
+        let transfer_tx = SignedOps::from_parts(
+            transfer_ops,
+            OpProofs::from([
+                OpProof::ZkTransfer(fee_transfer_proof),
+                OpProof::ChannelInscribe(ChannelInscribeProof::new(
+                    signing_key.sign_payload(transfer_hash.as_signing_bytes()),
+                    vec![StepProof::ZkTransfer(channel_transfer_proof)],
+                )),
+            ]),
+        )
+        .unwrap()
+        .preverify()
+        .unwrap();
+        let transfer_slot = eras
+            .starting_slot_for_epoch(Epoch::new(2))
+            .strict_add(1u64.into());
+        let (state, _) = state
+            .try_apply_header::<HeaderId>(transfer_slot, &Fr::ZERO, &UncleSlots::default(), &eras)
+            .unwrap();
+        let (state, transfer_fees, _, transfer_deferred) = state
+            .try_apply_transaction::<_, HeaderId>(&eras, &transfer_tx)
+            .unwrap();
+        assert_deferred_transfers_are_valid(&transfer_deferred);
+        assert_eq!(transfer_deferred.zk_transfers().len(), 2);
+        assert_fee_budget(&transfer_fees, fee_budget);
+        assert_eq!(alice_note.value, bob_note.value);
+        assert!(
+            state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .contains_nullifier(&note_nullifier(&alice_note, alice_secret))
+                .unwrap()
+        );
+        assert!(
+            state
+                .latest_note_sets()
+                .ledger()
+                .contains_nullifier(&note_nullifier(&fee_transfer_input, fee_transfer_secret))
+                .unwrap()
+        );
+        ledger_commitments.push(fee_transfer_change.commitment());
+        channel_commitments.push(bob_note.commitment());
+        channel_parent = transfer_inscription.id();
+        let (mut state, reward_commitment) =
+            finish_test_block(state, &eras, &transfer_fees, reward_nonce);
+        reward_nonce += 1;
+        ledger_commitments.push(reward_commitment);
+        assert_set_commitments(state.latest_note_sets().ledger(), &ledger_commitments);
+        assert_set_commitments(
+            state.latest_note_sets().channel(&channel_id).unwrap(),
+            &channel_commitments,
+        );
+
+        // Epoch 4 snapshots the Alice-to-Bob replacement. Alice's old note
+        // remains in the aged commitment MMR but is unusable because the
+        // latest channel nullifier set records its spend.
+        let transfer_snapshot_ledger = ledger_commitments.clone();
+        let transfer_snapshot_channel = channel_commitments.clone();
+        for epoch in [3, 4] {
+            let (next, reward) = apply_empty_test_block(
+                state,
+                &eras,
+                eras.starting_slot_for_epoch(Epoch::new(epoch)),
+                reward_nonce,
+            );
+            state = next;
+            ledger_commitments.push(reward);
+            reward_nonce += 1;
+        }
+        assert_set_commitments(state.aged_note_sets().ledger(), &transfer_snapshot_ledger);
+        assert_set_commitments(
+            state.aged_note_sets().channel(&channel_id).unwrap(),
+            &transfer_snapshot_channel,
+        );
+        assert!(matches!(
+            pol_witness_for(
+                &alice_note,
+                alice_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::Spent)
+        ));
+        assert!(
+            pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            eligible_stake_value(pol_witness_for(
+                &alice_note,
+                alice_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )) + eligible_stake_value(pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )),
+            bob_note.value,
+            "a channel transfer moves eligible stake from Alice's spent note to Bob's replacement"
+        );
+
+        let withdrawal_output =
+            notes::Note::new(bob_note.value, Fr::from(108u64), bob_note.public_key);
+        assert_eq!(bob_note.value, withdrawal_output.value);
+        let fee_withdraw_change = notes::Note::new(
+            fee_withdraw_input.value - fee_budget,
+            Fr::from(109u64),
+            fee_withdraw_input.public_key,
+        );
+        let (ledger_mmr, _) = note_commitments_with_paths(&ledger_commitments);
+        let (channel_mmr, _) = note_commitments_with_paths(&channel_commitments);
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            inputs: [note_nullifier(&bob_note, bob_secret)].into(),
+            outputs: [withdrawal_output.commitment()].into(),
+            commitment_merkle_root: channel_mmr.frontier_root(),
+        };
+        let fee_withdraw_op = TransferOp::new(
+            [note_nullifier(&fee_withdraw_input, fee_withdraw_secret)].into(),
+            [fee_withdraw_change.commitment()].into(),
+            ledger_mmr.frontier_root(),
+            fee_budget,
+        );
+        let withdraw_ops = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::Transfer(fee_withdraw_op),
+                Op::ChannelWithdraw(withdraw_op),
+            ]),
+        );
+        let withdraw_hash = withdraw_ops.hash();
+        let withdraw_hash_fr = *TxHashView::from(withdraw_hash).as_fr();
+        let fee_withdraw_proof = prove_note_transfer(
+            fee_withdraw_input,
+            fee_withdraw_secret,
+            2,
+            &[fee_withdraw_change],
+            &ledger_commitments,
+            withdraw_hash_fr,
+        );
+        let channel_withdraw_proof = prove_note_transfer(
+            bob_note,
+            bob_secret,
+            1,
+            &[withdrawal_output],
+            &channel_commitments,
+            withdraw_hash_fr,
+        );
+        let withdraw_tx = SignedOps::from_parts(
+            withdraw_ops,
+            OpProofs::from([
+                OpProof::ZkTransfer(fee_withdraw_proof),
+                OpProof::ZkTransfer(channel_withdraw_proof),
+            ]),
+        )
+        .unwrap()
+        .preverify()
+        .unwrap();
+        let withdraw_slot = eras
+            .starting_slot_for_epoch(Epoch::new(4))
+            .strict_add(1u64.into());
+        let (state, _) = state
+            .try_apply_header::<HeaderId>(withdraw_slot, &Fr::ZERO, &UncleSlots::default(), &eras)
+            .unwrap();
+        let (state, withdraw_fees, _, withdraw_deferred) = state
+            .try_apply_transaction::<_, HeaderId>(&eras, &withdraw_tx)
+            .unwrap();
+        assert_deferred_transfers_are_valid(&withdraw_deferred);
+        assert_eq!(withdraw_deferred.zk_transfers().len(), 2);
+        assert_fee_budget(&withdraw_fees, fee_budget);
+        assert!(
+            !state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .contains_nullifier(&note_nullifier(&bob_note, bob_secret))
+                .unwrap()
+        );
+        let withdrawal_due = withdraw_slot.strict_add(test_config.channel_withdraw_delay);
+        assert_eq!(
+            state
+                .cryptarchia_ledger
+                .pending_withdrawals
+                .iter()
+                .map(|withdrawal| withdrawal.due)
+                .collect::<Vec<_>>(),
+            vec![withdrawal_due]
+        );
+        ledger_commitments.push(fee_withdraw_change.commitment());
+        let (state, reward_commitment) =
+            finish_test_block(state, &eras, &withdraw_fees, reward_nonce);
+        reward_nonce += 1;
+        ledger_commitments.push(reward_commitment);
+        assert!(
+            pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            eligible_stake_value(pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )) + eligible_stake_value(pol_witness_for(
+                &withdrawal_output,
+                bob_secret,
+                NoteSetIndex::Ledger,
+                &transfer_snapshot_ledger,
+                state.aged_note_sets(),
+                state.latest_note_sets(),
+            )),
+            bob_note.value,
+            "a pending withdrawal does not duplicate Bob's stake into the ledger"
+        );
+        let pending_state = state.clone();
+        let pending_ledger_commitments = ledger_commitments.clone();
+        let pending_channel_commitments = channel_commitments.clone();
+
+        // Successful release spends the channel note and adds exactly one
+        // value-equivalent note to the ledger set at its due slot.
+        let ledger_root_before_release = state.latest_note_sets().ledger().commitment_root();
+        let (released_state, release_events) = state
+            .try_apply_header::<HeaderId>(withdrawal_due, &Fr::ZERO, &UncleSlots::default(), &eras)
+            .unwrap();
+        assert_eq!(
+            released_state
+                .cryptarchia_ledger
+                .pending_withdrawals
+                .iter()
+                .count(),
+            0
+        );
+        assert!(release_events.iter().any(|event| matches!(
+            event,
+            HeaderEvent::WithdrawalReleased { note_set, outputs, .. }
+                if *note_set == channel_set && outputs.as_slice() == [withdrawal_output.commitment()]
+        )));
+        assert!(
+            released_state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .contains_nullifier(&note_nullifier(&bob_note, bob_secret))
+                .unwrap()
+        );
+        assert_eq!(bob_note.value, withdrawal_output.value);
+        let mut released_ledger_commitments = pending_ledger_commitments.clone();
+        released_ledger_commitments.push(withdrawal_output.commitment());
+        assert_ne!(
+            released_state.latest_note_sets().ledger().commitment_root(),
+            ledger_root_before_release
+        );
+        assert_set_commitments(
+            released_state.latest_note_sets().ledger(),
+            &released_ledger_commitments,
+        );
+        assert!(matches!(
+            pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::Spent)
+        ));
+        assert!(matches!(
+            pol_witness_for(
+                &withdrawal_output,
+                bob_secret,
+                NoteSetIndex::Ledger,
+                &transfer_snapshot_ledger,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::AgedPathMismatch(NoteSetIndex::Ledger))
+        ));
+        assert_eq!(
+            eligible_stake_value(pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            )) + eligible_stake_value(pol_witness_for(
+                &withdrawal_output,
+                bob_secret,
+                NoteSetIndex::Ledger,
+                &transfer_snapshot_ledger,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            )),
+            0,
+            "released value is not eligible before the ledger snapshot matures"
+        );
+        let (mut released_state, reward_commitment) =
+            finish_test_block(released_state, &eras, &GasAndFees::default(), reward_nonce);
+        reward_nonce += 1;
+        released_ledger_commitments.push(reward_commitment);
+        let released_snapshot_ledger = released_ledger_commitments.clone();
+        let released_snapshot_channel = pending_channel_commitments.clone();
+        for epoch in [5, 6] {
+            let (next, reward) = apply_empty_test_block(
+                released_state,
+                &eras,
+                eras.starting_slot_for_epoch(Epoch::new(epoch)),
+                reward_nonce,
+            );
+            released_state = next;
+            released_ledger_commitments.push(reward);
+            reward_nonce += 1;
+        }
+        assert_set_commitments(
+            released_state.latest_note_sets().ledger(),
+            &released_ledger_commitments,
+        );
+        assert_set_commitments(
+            released_state.aged_note_sets().ledger(),
+            &released_snapshot_ledger,
+        );
+        assert!(
+            pol_witness_for(
+                &withdrawal_output,
+                bob_secret,
+                NoteSetIndex::Ledger,
+                &released_snapshot_ledger,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &released_snapshot_channel,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::Spent)
+        ));
+        assert_eq!(
+            eligible_stake_value(pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &released_snapshot_channel,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            )) + eligible_stake_value(pol_witness_for(
+                &withdrawal_output,
+                bob_secret,
+                NoteSetIndex::Ledger,
+                &released_snapshot_ledger,
+                released_state.aged_note_sets(),
+                released_state.latest_note_sets(),
+            )),
+            withdrawal_output.value,
+            "released value becomes eligible once, after the ledger snapshot matures"
+        );
+
+        // On the cancellation branch, spend Bob's channel note before the
+        // release slot. The pending withdrawal must then disappear without
+        // appending its ledger output.
+        let mut cancel_ledger_commitments = pending_ledger_commitments;
+        let mut cancel_channel_commitments = pending_channel_commitments;
+        let carol_note = notes::Note::new(
+            bob_note.value,
+            Fr::from(110u64),
+            ZkKey::new(carol_secret).to_public_key(),
+        );
+        assert_eq!(bob_note.value, carol_note.value);
+        let fee_cancel_change = notes::Note::new(
+            fee_cancel_input.value - fee_budget,
+            Fr::from(111u64),
+            fee_cancel_input.public_key,
+        );
+        let cancel_slot = withdraw_slot.strict_add(1u64.into());
+        let (cancel_state, _) = pending_state
+            .try_apply_header::<HeaderId>(cancel_slot, &Fr::ZERO, &UncleSlots::default(), &eras)
+            .unwrap();
+        let (ledger_mmr, _) = note_commitments_with_paths(&cancel_ledger_commitments);
+        let (channel_mmr, _) = note_commitments_with_paths(&cancel_channel_commitments);
+        let cancel_step = UserStep {
+            inputs: [note_nullifier(&bob_note, bob_secret)].into(),
+            outputs: [carol_note.commitment()].into(),
+            commitment_merkle_root: channel_mmr.frontier_root(),
+            inscription: Inscription::default(),
+        };
+        let cancel_inscription = InscriptionOp {
+            channel_id,
+            inscription: Inscription::new_unchecked(b"bob to carol".to_vec()),
+            parent: channel_parent,
+            signer: verifying_key.into_unverified(),
+            mini_blocks: [MiniBlock::from([Step::User(cancel_step.clone())])].into(),
+        };
+        let fee_cancel_op = TransferOp::new(
+            [note_nullifier(&fee_cancel_input, fee_cancel_secret)].into(),
+            [fee_cancel_change.commitment()].into(),
+            ledger_mmr.frontier_root(),
+            fee_budget,
+        );
+        let cancel_ops = Ops::new(
+            FORK_DIGEST,
+            TxList::new_unchecked(vec![
+                Op::Transfer(fee_cancel_op),
+                Op::ChannelInscribe(cancel_inscription),
+            ]),
+        );
+        let cancel_hash = cancel_ops.hash();
+        let cancel_hash_fr = *TxHashView::from(cancel_hash).as_fr();
+        let fee_cancel_proof = prove_note_transfer(
+            fee_cancel_input,
+            fee_cancel_secret,
+            3,
+            &[fee_cancel_change],
+            &cancel_ledger_commitments,
+            cancel_hash_fr,
+        );
+        let channel_cancel_proof = prove_note_transfer(
+            bob_note,
+            bob_secret,
+            1,
+            &[carol_note],
+            &cancel_channel_commitments,
+            user_step_id(&channel_id, &cancel_step),
+        );
+        let cancel_tx = SignedOps::from_parts(
+            cancel_ops,
+            OpProofs::from([
+                OpProof::ZkTransfer(fee_cancel_proof),
+                OpProof::ChannelInscribe(ChannelInscribeProof::new(
+                    signing_key.sign_payload(cancel_hash.as_signing_bytes()),
+                    vec![StepProof::ZkTransfer(channel_cancel_proof)],
+                )),
+            ]),
+        )
+        .unwrap()
+        .preverify()
+        .unwrap();
+        let (cancel_state, cancel_fees, _, cancel_deferred) = cancel_state
+            .try_apply_transaction::<_, HeaderId>(&eras, &cancel_tx)
+            .unwrap();
+        assert_deferred_transfers_are_valid(&cancel_deferred);
+        assert_eq!(cancel_deferred.zk_transfers().len(), 2);
+        assert_fee_budget(&cancel_fees, fee_budget);
+        assert!(
+            cancel_state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .contains_nullifier(&note_nullifier(&bob_note, bob_secret))
+                .unwrap()
+        );
+        assert_eq!(
+            cancel_state
+                .cryptarchia_ledger
+                .pending_withdrawals
+                .iter()
+                .count(),
+            1
+        );
+        cancel_ledger_commitments.push(fee_cancel_change.commitment());
+        cancel_channel_commitments.push(carol_note.commitment());
+        let (cancel_state, reward_commitment) =
+            finish_test_block(cancel_state, &eras, &cancel_fees, reward_nonce);
+        reward_nonce += 1;
+        cancel_ledger_commitments.push(reward_commitment);
+
+        let ledger_root_before_cancel_release =
+            cancel_state.latest_note_sets().ledger().commitment_root();
+        let (cancel_state, cancel_release_events) = cancel_state
+            .try_apply_header::<HeaderId>(withdrawal_due, &Fr::ZERO, &UncleSlots::default(), &eras)
+            .unwrap();
+        assert_eq!(
+            cancel_state
+                .cryptarchia_ledger
+                .pending_withdrawals
+                .iter()
+                .count(),
+            0
+        );
+        assert!(cancel_release_events.iter().all(|event| !matches!(
+            event,
+            HeaderEvent::WithdrawalReleased { note_set, outputs, .. }
+                if *note_set == channel_set && outputs.as_slice() == [withdrawal_output.commitment()]
+        )));
+        assert_eq!(
+            cancel_state.latest_note_sets().ledger().commitment_root(),
+            ledger_root_before_cancel_release,
+            "a cancelled withdrawal does not append its pending ledger output"
+        );
+        assert!(
+            cancel_state
+                .latest_note_sets()
+                .channel(&channel_id)
+                .unwrap()
+                .contains_nullifier(&note_nullifier(&bob_note, bob_secret))
+                .unwrap()
+        );
+        assert_set_commitments(
+            cancel_state.latest_note_sets().ledger(),
+            &cancel_ledger_commitments,
+        );
+        assert!(matches!(
+            pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                cancel_state.aged_note_sets(),
+                cancel_state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::Spent)
+        ));
+        assert!(matches!(
+            pol_witness_for(
+                &carol_note,
+                carol_secret,
+                channel_set,
+                &transfer_snapshot_channel,
+                cancel_state.aged_note_sets(),
+                cancel_state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::AgedPathMismatch(channel)) if channel == channel_set
+        ));
+        let (mut cancel_state, reward_commitment) =
+            finish_test_block(cancel_state, &eras, &GasAndFees::default(), reward_nonce);
+        reward_nonce += 1;
+        cancel_ledger_commitments.push(reward_commitment);
+        let cancel_snapshot_ledger = cancel_ledger_commitments.clone();
+        let cancel_snapshot_channel = cancel_channel_commitments.clone();
+        for epoch in [5, 6] {
+            let (next, reward) = apply_empty_test_block(
+                cancel_state,
+                &eras,
+                eras.starting_slot_for_epoch(Epoch::new(epoch)),
+                reward_nonce,
+            );
+            cancel_state = next;
+            cancel_ledger_commitments.push(reward);
+            reward_nonce += 1;
+        }
+        assert_set_commitments(
+            cancel_state.latest_note_sets().ledger(),
+            &cancel_ledger_commitments,
+        );
+        assert_set_commitments(
+            cancel_state.aged_note_sets().ledger(),
+            &cancel_snapshot_ledger,
+        );
+        assert_set_commitments(
+            cancel_state.aged_note_sets().channel(&channel_id).unwrap(),
+            &cancel_snapshot_channel,
+        );
+        assert!(
+            pol_witness_for(
+                &carol_note,
+                carol_secret,
+                channel_set,
+                &cancel_snapshot_channel,
+                cancel_state.aged_note_sets(),
+                cancel_state.latest_note_sets(),
+            )
+            .is_ok()
+        );
+        assert_eq!(
+            eligible_stake_value(pol_witness_for(
+                &bob_note,
+                bob_secret,
+                channel_set,
+                &cancel_snapshot_channel,
+                cancel_state.aged_note_sets(),
+                cancel_state.latest_note_sets(),
+            )) + eligible_stake_value(pol_witness_for(
+                &carol_note,
+                carol_secret,
+                channel_set,
+                &cancel_snapshot_channel,
+                cancel_state.aged_note_sets(),
+                cancel_state.latest_note_sets(),
+            )) + eligible_stake_value(pol_witness_for(
+                &withdrawal_output,
+                bob_secret,
+                NoteSetIndex::Ledger,
+                &cancel_snapshot_ledger,
+                cancel_state.aged_note_sets(),
+                cancel_state.latest_note_sets(),
+            )),
+            carol_note.value,
+            "cancellation leaves Carol's replacement as the sole eligible channel value"
+        );
+        assert!(matches!(
+            pol_witness_for(
+                &withdrawal_output,
+                bob_secret,
+                NoteSetIndex::Ledger,
+                &cancel_snapshot_ledger,
+                cancel_state.aged_note_sets(),
+                cancel_state.latest_note_sets(),
+            ),
+            Err(LeaderWitnessError::AgedPathMismatch(NoteSetIndex::Ledger))
         ));
     }
 
