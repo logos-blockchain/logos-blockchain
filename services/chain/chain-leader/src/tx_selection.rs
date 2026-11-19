@@ -209,7 +209,6 @@ pub fn select_transactions(
 
 #[cfg(test)]
 mod tests {
-    use futures::stream;
     use lb_core::{
         era::ForkDigest,
         mantle::{
@@ -352,8 +351,8 @@ mod tests {
         assert_eq!(oversized.invalid_tx_hashes, [transaction.hash()]);
     }
 
-    #[tokio::test]
-    async fn gas_limited_selection_returns_canonically_applicable_prefix() {
+    #[test]
+    fn gas_limited_selection_returns_canonically_applicable_prefix() {
         const CANDIDATE_COUNT: usize = 7;
 
         let config = leadership::test_config();
@@ -409,11 +408,10 @@ mod tests {
 
         let config = config_for_slot(&eras, ledger_state.slot());
         let block_txs = txs_for_block(
-            stream::iter(selection.selected_txs),
+            selection.selected_txs,
             config.max_transactions,
             config.max_transactions_size,
-        )
-        .await;
+        );
         assert_eq!(block_txs.len(), CANDIDATE_COUNT - 1);
         // A block holding a prefix of the selection, cut by hand here, pays the
         // reward of what it holds.
