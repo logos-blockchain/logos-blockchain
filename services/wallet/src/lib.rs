@@ -2147,7 +2147,8 @@ mod tests {
         .await;
         assert!(!state.wallet().has_processed_block(block_id));
 
-        // The next notification backfills the missing parent, including its events.
+        // The next notification backfills the missing parent, including its
+        // events.
         TestWallet::handle_new_block(
             child_id,
             &mut state,

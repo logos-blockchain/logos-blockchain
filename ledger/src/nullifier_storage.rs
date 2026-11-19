@@ -1278,7 +1278,8 @@ mod tests {
         assert!(!pruned.is_empty());
         let lib = chain.engine.lib();
 
-        // Fail the first rebase read, after finalization and its LIB state commit.
+        // Fail the first rebase read, after finalization and its LIB state
+        // commit.
         failing.fail_read_after_next_write();
         assert!(
             chain
