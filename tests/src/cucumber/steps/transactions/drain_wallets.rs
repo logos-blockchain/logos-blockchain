@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use lb_config::{consensus::GENESIS_GAS_PRICE, deployment::GAS_PROFILE};
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     Note,
     gas::GasCost,
@@ -18,7 +18,7 @@ use lb_core::mantle::{
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_mmr::MerklePath;
-use lb_wallet::OwnedNote;
+use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, OwnedNote};
 use lb_zktransfer::MAX_INPUTS;
 use tracing::{info, warn};
 
@@ -29,7 +29,6 @@ use crate::{
     },
     cucumber::{
         error::{StepError, StepResult},
-        fee_reserve::DEFAULT_STORAGE_GAS_PRICE,
         steps::TARGET,
         utils::{pk_to_hex, tx_hash_to_hex},
         wallet::{
@@ -50,10 +49,13 @@ const DRAIN_TRANSACTION_TIMEOUT: Duration = Duration::from_mins(3);
 
 // Select the smallest low-value-first tranche that can pay its own fee,
 // otherwise best effort.
-fn select_tranche_utxos(utxos: &[OwnedNote]) -> Result<(Vec<OwnedNote>, u64, u64), StepError> {
+fn select_tranche_utxos(
+    utxos: &[OwnedNote],
+    gas_prices: &GasPrices,
+) -> Result<(Vec<OwnedNote>, u64, u64), StepError> {
     let mut fee_estimate;
     if utxos.len() <= DRAIN_MAX_INPUTS_PER_TRANSACTION {
-        fee_estimate = estimate_drain_fee_with_inputs(utxos)?;
+        fee_estimate = estimate_drain_fee_with_inputs(utxos, gas_prices)?;
         return Ok((
             utxos.to_vec(),
             utxos.iter().map(|utxo| utxo.note.value).sum::<u64>(),
@@ -73,7 +75,7 @@ fn select_tranche_utxos(utxos: &[OwnedNote]) -> Result<(Vec<OwnedNote>, u64, u64
         .iter()
         .fold(0u64, |total, utxo| total.saturating_add(utxo.note.value));
 
-    fee_estimate = estimate_drain_fee_with_inputs(&selected_set)?;
+    fee_estimate = estimate_drain_fee_with_inputs(&selected_set, gas_prices)?;
     if selected_value > fee_estimate {
         return Ok((selected_set, selected_value, fee_estimate));
     }
@@ -88,7 +90,7 @@ fn select_tranche_utxos(utxos: &[OwnedNote]) -> Result<(Vec<OwnedNote>, u64, u64
 
         selected_set[selected_index] = replacement.clone();
 
-        fee_estimate = estimate_drain_fee_with_inputs(&selected_set)?;
+        fee_estimate = estimate_drain_fee_with_inputs(&selected_set, gas_prices)?;
         if selected_value > fee_estimate {
             return Ok((selected_set, selected_value, fee_estimate));
         }
@@ -126,7 +128,9 @@ pub async fn drain_user_wallet(
 
         let mut fee_estimation_deficit = 0;
         'fee_retry: loop {
-            let (tranche_utxos, tranche_total, fee_estimate) = select_tranche_utxos(&sender_utxos)?;
+            let gas_prices = live_gas_prices(world, &sender.node_name, step).await?;
+            let (tranche_utxos, tranche_total, fee_estimate) =
+                select_tranche_utxos(&sender_utxos, &gas_prices)?;
 
             let fee = fee_estimate.saturating_add(fee_estimation_deficit);
             if fee >= tranche_total {
@@ -163,6 +167,7 @@ pub async fn drain_user_wallet(
                     intent,
                     Some(&tranche_available),
                     Some(receiver_pk),
+                    Some(gas_prices.clone()),
                     WalletInputSelectionStrategy::AllProvided,
                 )
                 .await;
@@ -299,10 +304,9 @@ pub async fn drain_node_wallet(
         if input_count == 0 {
             break;
         }
-        let mut fee = estimate_drain_fee_with_values(
-            NonZeroUsize::new(input_count).expect("may not be zero"),
-            balance.balance,
-        )?;
+        let input_count = NonZeroUsize::new(input_count).expect("may not be zero");
+        let gas_prices = live_gas_prices(world, &sender.node_name, "drain node wallet").await?;
+        let mut fee = estimate_drain_fee_with_values(input_count, balance.balance, &gas_prices)?;
         if fee >= balance.balance {
             info!(
                 target: TARGET,
@@ -333,14 +337,21 @@ pub async fn drain_node_wallet(
                 Ok(hash) => break (hash, amount),
                 Err(e) => {
                     if is_wallet_funds_deficit(&e) {
+                        let refreshed_gas_prices =
+                            live_gas_prices(world, &sender.node_name, "drain node wallet").await?;
+                        let refreshed_fee = estimate_drain_fee_with_values(
+                            input_count,
+                            balance.balance,
+                            &refreshed_gas_prices,
+                        )?;
+                        let next_fee = refreshed_fee.max(fee.saturating_add(1));
                         info!(
                             target: TARGET,
                             "Drain wallet: `{}` fee estimate {fee} was too low during transfer; \
-                             retrying with higher fee {}",
+                             retrying with fee {next_fee} at refreshed gas prices",
                             sender.wallet_name,
-                            fee + 1,
                         );
-                        fee += 1;
+                        fee = next_fee;
                     } else {
                         return Err(e);
                     }
@@ -432,7 +443,11 @@ fn drain_amount(total: u64, tranches: usize, fee: u64) -> Result<u64, StepError>
     Ok(amount)
 }
 
-fn estimate_drain_fee_with_values(input_count: NonZeroUsize, value: u64) -> Result<u64, StepError> {
+fn estimate_drain_fee_with_values(
+    input_count: NonZeroUsize,
+    value: u64,
+    gas_prices: &GasPrices,
+) -> Result<u64, StepError> {
     let input_value = value / input_count.get() as u64;
     let input_utxos = (0..input_count.get())
         .map(|index| OwnedNote {
@@ -443,17 +458,38 @@ fn estimate_drain_fee_with_values(input_count: NonZeroUsize, value: u64) -> Resu
         })
         .collect::<Vec<_>>();
 
-    estimate_drain_fee_with_inputs(&input_utxos)
+    let mandatory_fee = estimate_drain_fee_with_inputs(&input_utxos, gas_prices)?;
+    add_priority_fee_reserve(mandatory_fee, DEFAULT_FEE_MARGIN_PERCENT)
 }
 
-fn estimate_drain_fee_with_inputs(input_utxos: &[OwnedNote]) -> Result<u64, StepError> {
+fn add_priority_fee_reserve(
+    mandatory_fee: u64,
+    priority_fee_percent: u64,
+) -> Result<u64, StepError> {
+    let mandatory_fee = u128::from(mandatory_fee);
+    let priority_fee = mandatory_fee
+        .checked_mul(u128::from(priority_fee_percent))
+        .and_then(|fee| fee.checked_add(99))
+        .ok_or_else(|| StepError::LogicalError {
+            message: "Drain priority fee estimate overflowed".to_owned(),
+        })?
+        / 100;
+    u64::try_from(mandatory_fee + priority_fee).map_err(|_| StepError::LogicalError {
+        message: "Drain fee estimate overflowed".to_owned(),
+    })
+}
+
+fn estimate_drain_fee_with_inputs(
+    input_utxos: &[OwnedNote],
+    gas_prices: &GasPrices,
+) -> Result<u64, StepError> {
     let builder = fee_estimate_builder()?;
     let builder = extend_wallet_funding_inputs(&builder, input_utxos).map_err(|error| {
         StepError::LogicalError {
             message: error.to_string(),
         }
     })?;
-    finalize_fee(&builder)
+    finalize_fee(&builder, gas_prices)
 }
 
 fn fee_estimate_builder() -> Result<MantleTxBuilder, StepError> {
@@ -466,13 +502,9 @@ fn fee_estimate_builder() -> Result<MantleTxBuilder, StepError> {
         })
 }
 
-fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
+fn finalize_fee(builder: &MantleTxBuilder, gas_prices: &GasPrices) -> Result<u64, StepError> {
     let context = OpsContext {
-        gas_context: OpsGasContext::new(
-            HashMap::new(),
-            GasPrices::new(GENESIS_GAS_PRICE.get(), DEFAULT_STORAGE_GAS_PRICE),
-            GAS_PROFILE,
-        ),
+        gas_context: OpsGasContext::new(HashMap::new(), gas_prices.clone(), GAS_PROFILE),
     };
     builder
         .minimum_gas_cost(&context)
@@ -480,4 +512,69 @@ fn finalize_fee(builder: &MantleTxBuilder) -> Result<u64, StepError> {
         .map_err(|error| StepError::LogicalError {
             message: error.to_string(),
         })
+}
+
+async fn live_gas_prices(
+    world: &CucumberWorld,
+    node_name: &str,
+    step: &str,
+) -> Result<GasPrices, StepError> {
+    let client = world.resolve_node_http_client(node_name)?;
+    let prices = client
+        .gas_prices(None)
+        .await
+        .map_err(|source| StepError::StepFail {
+            message: format!(
+                "Step `{step}` error: gas prices request failed for node `{node_name}`: {source}"
+            ),
+        })?;
+
+    Ok(GasPrices {
+        execution_base_gas_price: prices.execution_base_gas_price,
+        storage_gas_price: prices.storage_gas_price,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_fee_estimate_uses_the_supplied_live_gas_prices() {
+        let input_count = NonZeroUsize::new(2).expect("two is nonzero");
+        let value = 10_000;
+        let genesis_prices = GasPrices::new(0, 0);
+        let increased_prices = GasPrices::new(2_000_000_000, 2_000_000_000);
+
+        let genesis_fee =
+            estimate_drain_fee_with_values(input_count, value, &genesis_prices).unwrap();
+        let increased_fee =
+            estimate_drain_fee_with_values(input_count, value, &increased_prices).unwrap();
+
+        assert!(increased_fee > genesis_fee);
+    }
+
+    #[test]
+    fn node_wallet_drain_estimate_includes_the_default_priority_fee_reserve() {
+        let input_count = NonZeroUsize::new(1).expect("one is nonzero");
+        let gas_prices = GasPrices::new(0, 0);
+
+        let mandatory_fee = estimate_drain_fee_with_inputs(
+            &[OwnedNote {
+                note: Note::new(10_000, Fr::from(0u64), ZkPublicKey::zero()),
+                note_set: NoteSetIndex::Ledger,
+                nullifier: NoteNullifier(Fr::from(0u64)),
+                path: MerklePath::try_new(0, Vec::new()).expect("an empty path is bounded"),
+            }],
+            &gas_prices,
+        )
+        .unwrap();
+        let node_wallet_fee =
+            estimate_drain_fee_with_values(input_count, 10_000, &gas_prices).unwrap();
+
+        assert_eq!(
+            node_wallet_fee,
+            add_priority_fee_reserve(mandatory_fee, DEFAULT_FEE_MARGIN_PERCENT).unwrap()
+        );
+    }
 }

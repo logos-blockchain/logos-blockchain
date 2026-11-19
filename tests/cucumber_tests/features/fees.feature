@@ -16,8 +16,9 @@ Feature: Fees
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 1           | 1000         |
-      | 2             | 1           | 10000        |
+      | 2             | 1           | 25000        |
     And I have a cluster with capacity of 1 nodes
+    And the cluster uses SDP funding of 20000 per provider split across 1 notes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name        | connected_to |
       | NODE_1    | 1             | WALLET_PAYMENT     |              |
@@ -29,6 +30,10 @@ Feature: Fees
     # The node funds from the change of the payment, which it spends 4 blocks deep
     When I record node "NODE_1" height as "PAYMENT_HEIGHT"
     Then node "NODE_1" reaches 4 blocks beyond recorded height "PAYMENT_HEIGHT" in 120 seconds
+    When I record node "NODE_1" height as "INSCRIPTION_TOPUP_HEIGHT"
+    And wallet "WALLET_INSCRIPTION" sends 1 notes of 10000 LGO to node "NODE_1" funding wallet as "INSCRIPTION_FEE_TOPUP"
+    Then transaction "INSCRIPTION_FEE_TOPUP" is included on node "NODE_1" in 120 seconds
+    And node "NODE_1" reaches 4 blocks beyond recorded height "INSCRIPTION_TOPUP_HEIGHT" in 120 seconds
     When I fund an inscription transaction from wallet "WALLET_INSCRIPTION" via node "NODE_1" as "FUNDED_INSCRIPTION"
     Then transaction "FUNDED_INSCRIPTION" is included on node "NODE_1" in 120 seconds
     Then I stop all nodes
