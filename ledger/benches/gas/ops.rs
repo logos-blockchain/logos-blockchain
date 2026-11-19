@@ -187,7 +187,11 @@ pub fn execute(
 }
 
 pub fn op_cases() -> Vec<Case> {
-    op_shapes().into_iter().map(OpShape::into_case).collect()
+    op_cases_from_shapes(op_shapes())
+}
+
+pub fn op_cases_from_shapes(shapes: Vec<OpShape>) -> Vec<Case> {
+    shapes.into_iter().map(OpShape::into_case).collect()
 }
 
 /// Every measured transaction.
@@ -335,7 +339,7 @@ pub fn io_dims(inputs: usize, outputs: usize) -> Vec<(&'static str, u64)> {
     vec![("inputs", inputs as u64), ("outputs", outputs as u64)]
 }
 
-fn transfers() -> Vec<OpShape> {
+pub fn transfers() -> Vec<OpShape> {
     zk_transfer_series()
         .map(|(inputs, outputs)| {
             OpShape::on_fixture(
@@ -452,23 +456,10 @@ fn user_inscription_shape(
 // them; the payload of one step of one output. The outputs of all the steps are
 // a dimension, the buffered series being the only one where they differ from
 // the steps.
-fn inscriptions() -> Vec<OpShape> {
+pub fn inscriptions() -> Vec<OpShape> {
     let mut shapes = Vec::new();
     for user_steps in USER_STEPS {
-        shapes.push(user_inscription_shape(
-            |salt| {
-                let steps: Vec<Step> = (0..user_steps as u64)
-                    .map(|index| user_step(1, 1, salt + 100 + index))
-                    .collect();
-                if steps.is_empty() {
-                    vec![]
-                } else {
-                    vec![steps]
-                }
-            },
-            0,
-            0,
-        ));
+        shapes.push(user_steps_shape(user_steps));
     }
     shapes.push(user_inscription_shape(
         |salt| {
@@ -500,6 +491,23 @@ fn inscriptions() -> Vec<OpShape> {
         ));
     }
     shapes
+}
+
+pub fn user_steps_shape(user_steps: usize) -> OpShape {
+    user_inscription_shape(
+        |salt| {
+            let steps: Vec<Step> = (0..user_steps as u64)
+                .map(|index| user_step(1, 1, salt + 100 + index))
+                .collect();
+            if steps.is_empty() {
+                vec![]
+            } else {
+                vec![steps]
+            }
+        },
+        0,
+        0,
+    )
 }
 
 /// The shape of a program step of the fixture program and of the program
@@ -589,7 +597,7 @@ pub const PROGRAM_DEPOSITS: [usize; 11] =
 // Four series, one dimension varying at a time from no program deposit, one
 // program input, one output and no opening; the openings vary at eight
 // outputs, the most a step can create.
-fn program_inscriptions() -> Vec<OpShape> {
+pub fn program_inscriptions() -> Vec<OpShape> {
     let base = ProgramShape {
         deposits: 0,
         inputs: 1,
@@ -611,28 +619,30 @@ fn program_inscriptions() -> Vec<OpShape> {
             openings,
             ..base
         }))
-        .map(|shape| {
-            OpShape::on_fixture(
-                "op/inscribe_program",
-                vec![
-                    ("program_deposits", shape.deposits as u64),
-                    ("program_inputs", shape.inputs as u64),
-                    ("program_outputs", shape.outputs as u64),
-                    ("openings", shape.openings as u64),
-                ],
-                each_round(|salt| {
-                    let (steps, proofs): (Vec<_>, Vec<_>) =
-                        program_steps(shape, 1 + salt).into_iter().unzip();
-                    encode_inscription(inscription(tip, steps, 0), &proofs)
-                }),
-                Deferred {
-                    zk_transfers: shape.deposits,
-                    program_spends: 1,
-                    program_proofs: 1,
-                },
-            )
-        })
+        .map(|shape| program_inscription_shape(shape, tip))
         .collect()
+}
+
+pub fn program_inscription_shape(shape: ProgramShape, tip: MsgId) -> OpShape {
+    OpShape::on_fixture(
+        "op/inscribe_program",
+        vec![
+            ("program_deposits", shape.deposits as u64),
+            ("program_inputs", shape.inputs as u64),
+            ("program_outputs", shape.outputs as u64),
+            ("openings", shape.openings as u64),
+        ],
+        each_round(|salt| {
+            let (steps, proofs): (Vec<_>, Vec<_>) =
+                program_steps(shape, 1 + salt).into_iter().unzip();
+            encode_inscription(inscription(tip, steps, 0), &proofs)
+        }),
+        Deferred {
+            zk_transfers: shape.deposits,
+            program_spends: 1,
+            program_proofs: 1,
+        },
+    )
 }
 
 // A channel of `keys`, the first `threshold` of them needed to configure it:
@@ -738,7 +748,7 @@ pub fn deposit_op(inputs: usize, outputs: usize, salt: u64) -> DepositOp {
     }
 }
 
-fn deposits() -> Vec<OpShape> {
+pub fn deposits() -> Vec<OpShape> {
     zk_transfer_series()
         .map(|(inputs, outputs)| {
             OpShape::on_fixture(
@@ -756,7 +766,7 @@ fn deposits() -> Vec<OpShape> {
         .collect()
 }
 
-fn withdrawals() -> Vec<OpShape> {
+pub fn withdrawals() -> Vec<OpShape> {
     let root = channel_root();
     zk_transfer_series()
         .map(|(inputs, outputs)| {
@@ -886,7 +896,7 @@ static DECLARED: LazyLock<Vec<LedgerState>> = LazyLock::new(|| {
 
 // A declaration among those of `DECLARATIONS` other providers of the service,
 // every one of which it is checked to differ from.
-fn sdp_declares() -> Vec<OpShape> {
+pub fn sdp_declares() -> Vec<OpShape> {
     let fixture = filled_state();
     DECLARATIONS
         .iter()
@@ -913,7 +923,7 @@ fn sdp_declares() -> Vec<OpShape> {
 }
 
 // The withdrawal of a declaration the setup makes.
-fn sdp_withdraw() -> OpShape {
+pub fn sdp_withdraw() -> OpShape {
     let fixture = filled_state();
     let declare = declaration(ZkPublicKey::new(Fr::from(0x62u64)), ledger_root());
     let (state, ..) = execute(

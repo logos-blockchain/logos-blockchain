@@ -53,6 +53,24 @@ fn series(names: impl Iterator<Item = &'static str>) -> BTreeMap<&'static str, u
     counts
 }
 
+fn assert_cases_are_unique(cases: &[Case], prefix: &str) {
+    let mut seen = BTreeSet::new();
+    for case in cases {
+        assert!(
+            case.name.starts_with(prefix),
+            "{} {:?}: expected a {prefix} case",
+            case.name,
+            case.dims
+        );
+        assert!(
+            seen.insert((case.name, case.dims.clone())),
+            "{} {:?}",
+            case.name,
+            case.dims
+        );
+    }
+}
+
 #[test]
 #[ignore = "applies every gas benchmark operation; run explicitly in release"]
 fn every_op_case_applies() {
@@ -76,9 +94,8 @@ fn every_op_case_applies() {
 // A case spending notes spends fresh ones in each round, so that none is
 // measured with the path of its nullifier in the caches: its transaction
 // differs from one round to the next.
-#[test]
-fn each_round_of_a_spending_case_has_its_own_transaction() {
-    for shape in ops::op_shapes() {
+fn assert_each_round_of_a_spending_case_has_its_own_transaction(shapes: &[ops::OpShape]) {
+    for shape in shapes {
         let spends = match shape.name {
             "op/transfer"
             | "op/deposit"
@@ -101,8 +118,25 @@ fn each_round_of_a_spending_case_has_its_own_transaction() {
 }
 
 #[test]
+fn each_round_of_a_spending_case_has_its_own_transaction() {
+    let mut shapes = ops::transfers();
+    shapes.extend(ops::inscriptions());
+    shapes.extend(ops::program_inscriptions());
+    shapes.extend(ops::deposits());
+    shapes.extend(ops::withdrawals());
+    shapes.extend(ops::sdp_declares());
+    shapes.push(ops::sdp_withdraw());
+    assert_each_round_of_a_spending_case_has_its_own_transaction(&shapes);
+}
+
+#[test]
 fn the_op_cases_cover_every_series() {
-    let counts = series(ops::op_cases().into_iter().map(|case| case.name));
+    let shapes = ops::op_shapes();
+    assert_each_round_of_a_spending_case_has_its_own_transaction(&shapes);
+    assert_each_sdp_declare_case_holds_its_declarations(&shapes);
+    let cases = ops::op_cases_from_shapes(shapes);
+    assert_cases_are_unique(&cases, "op/");
+    let counts = series(cases.iter().map(|case| case.name));
     let expected = BTreeMap::from([
         ("op/claim_pow", 1),
         ("op/config", 4),
@@ -227,7 +261,18 @@ fn longer_inscriptions_cost_more_cycles() {
 // block takes, within its Execution Gas limit.
 #[test]
 fn the_longest_inscriptions_fit_the_execution_gas_limit() {
-    let shapes = ops::op_shapes();
+    let shapes = [
+        ops::user_steps_shape(ops::MOST_USER_STEPS),
+        ops::program_inscription_shape(
+            ops::ProgramShape {
+                deposits: ops::MOST_PROGRAM_DEPOSITS,
+                inputs: 1,
+                outputs: 1,
+                openings: 0,
+            },
+            ops::channel_tip(),
+        ),
+    ];
     for (name, dimension, count) in [
         ("op/inscribe", "user_steps", ops::MOST_USER_STEPS),
         (
@@ -270,7 +315,9 @@ fn every_block_case_applies() {
 
 #[test]
 fn the_block_cases_cover_every_series() {
-    let counts = series(block::block_cases().into_iter().map(|case| case.name));
+    let cases = block::block_cases();
+    assert_cases_are_unique(&cases, "block/");
+    let counts = series(cases.iter().map(|case| case.name));
     let expected = BTreeMap::from([
         ("block/fixed", 1),
         ("block/header", 5),
@@ -405,10 +452,9 @@ fn the_mixed_block_measures_the_verification_of_its_proofs() {
     );
 }
 
-#[test]
-fn each_sdp_declare_case_holds_its_declarations() {
-    let shapes: Vec<ops::OpShape> = ops::op_shapes()
-        .into_iter()
+fn assert_each_sdp_declare_case_holds_its_declarations(shapes: &[ops::OpShape]) {
+    let shapes: Vec<&ops::OpShape> = shapes
+        .iter()
         .filter(|shape| shape.name == "op/sdp_declare")
         .collect();
     assert_eq!(shapes.len(), 4);
@@ -468,17 +514,4 @@ fn the_mixed_block_holds_64_transactions_of_its_counted_shape() {
         deferred.zk_transfers as u64,
         dim("transfers") + dim("user_steps") + dim("program_deposits") + dim("deposits")
     );
-}
-
-#[test]
-fn no_two_cases_share_a_name_and_dimensions() {
-    let mut seen = BTreeSet::new();
-    for case in ops::op_cases().into_iter().chain(block::block_cases()) {
-        assert!(
-            seen.insert((case.name, case.dims.clone())),
-            "{} {:?}",
-            case.name,
-            case.dims
-        );
-    }
 }
