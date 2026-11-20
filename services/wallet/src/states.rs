@@ -126,26 +126,37 @@ pub const PENDING_DELIVERY_EXPIRY_BLOCKS: u64 = 16_384;
 /// set. The service writes them to storage, so that they outlive a restart.
 #[derive(Default)]
 struct PendingDeliveries {
-    // each message with the immutable blocks since it was received
-    messages: HashMap<NoteCommitment, (DeliveryMessage, u64)>,
+    // the messages of each commitment, each with the immutable blocks since
+    // it was received
+    messages: HashMap<NoteCommitment, Vec<(DeliveryMessage, u64)>>,
+    // the number of messages
+    count: usize,
     // set when the messages differ from the ones last written to storage
     changed: bool,
 }
 
 impl PendingDeliveries {
-    // Keeps `messages` and tells how many: a message whose commitment is not
-    // a field element is dropped, a second message for a commitment replaces
-    // the first, and a message for a new commitment is refused once
-    // `MAX_PENDING_DELIVERIES` are kept.
+    // Keeps `messages` and tells how many are kept: a message whose
+    // commitment is not a field element is dropped, and a new message is
+    // refused once `MAX_PENDING_DELIVERIES` are kept. The commitment of a
+    // transaction is public before its block, so anyone can send a message
+    // for it: the messages of a commitment are kept side by side, and none
+    // replaces another.
     fn add(&mut self, messages: impl IntoIterator<Item = DeliveryMessage>) -> usize {
         let mut kept = 0;
         for message in messages {
             let Some(commitment) = delivered_commitment(&message) else {
                 continue;
             };
-            if self.messages.len() >= MAX_PENDING_DELIVERIES
-                && !self.messages.contains_key(&commitment)
-            {
+            let held = self
+                .messages
+                .get(&commitment)
+                .is_some_and(|held| held.iter().any(|(held, _)| *held == message));
+            if held {
+                kept += 1;
+                continue;
+            }
+            if self.count >= MAX_PENDING_DELIVERIES {
                 debug!(
                     target: wallet::SERVICE,
                     ?commitment,
@@ -153,10 +164,14 @@ impl PendingDeliveries {
                 );
                 continue;
             }
-            self.messages.insert(commitment, (message, 0));
+            self.messages
+                .entry(commitment)
+                .or_default()
+                .push((message, 0));
+            self.count += 1;
+            self.changed = true;
             kept += 1;
         }
-        self.changed |= kept > 0;
         kept
     }
 
@@ -165,13 +180,17 @@ impl PendingDeliveries {
         commitments
             .iter()
             .filter_map(|commitment| self.messages.get(commitment))
+            .flatten()
             .map(|(message, _)| message.clone())
             .collect()
     }
 
     fn forget(&mut self, commitments: &[NoteCommitment]) {
         for commitment in commitments {
-            self.changed |= self.messages.remove(commitment).is_some();
+            if let Some(messages) = self.messages.remove(commitment) {
+                self.count -= messages.len();
+                self.changed = true;
+            }
         }
     }
 
@@ -181,12 +200,16 @@ impl PendingDeliveries {
         if new_immutable_blocks_count == 0 {
             return;
         }
-        let held = self.messages.len();
-        self.messages.retain(|_, (_, immutable_blocks)| {
-            *immutable_blocks = immutable_blocks.saturating_add(new_immutable_blocks_count);
-            *immutable_blocks < PENDING_DELIVERY_EXPIRY_BLOCKS
+        let held = self.count;
+        self.messages.retain(|_, messages| {
+            messages.retain_mut(|(_, immutable_blocks)| {
+                *immutable_blocks = immutable_blocks.saturating_add(new_immutable_blocks_count);
+                *immutable_blocks < PENDING_DELIVERY_EXPIRY_BLOCKS
+            });
+            !messages.is_empty()
         });
-        self.changed |= self.messages.len() != held;
+        self.count = self.messages.values().map(Vec::len).sum();
+        self.changed |= self.count != held;
     }
 
     // The messages to write to storage, as their bytes, when they differ from
@@ -195,6 +218,7 @@ impl PendingDeliveries {
         core::mem::take(&mut self.changed).then(|| {
             self.messages
                 .values()
+                .flatten()
                 .map(|(message, _)| message.to_bytes().to_vec())
                 .collect()
         })
@@ -676,10 +700,45 @@ mod tests {
         let full = (0..MAX_PENDING_DELIVERIES as u64).map(delivery_message);
         assert_eq!(pending.add(full), MAX_PENDING_DELIVERIES);
 
-        // A new commitment is refused, a kept one is replaced.
+        // A new message is refused, for a new commitment or for a kept one.
+        // A kept message is still kept.
         assert_eq!(pending.add([delivery_message(u64::MAX)]), 0);
+        assert_eq!(pending.add([other_delivery_message(0)]), 0);
         assert_eq!(pending.add([delivery_message(0)]), 1);
-        assert_eq!(pending.messages.len(), MAX_PENDING_DELIVERIES);
+        assert_eq!(pending.count, MAX_PENDING_DELIVERIES);
+        assert_eq!(
+            pending.take_changed().unwrap().len(),
+            MAX_PENDING_DELIVERIES
+        );
+    }
+
+    // The commitment of a transaction is public before its block: a message
+    // anyone sends for it must not replace the one of the sender.
+    #[test]
+    fn a_second_message_for_a_commitment_is_kept_beside_the_first() {
+        let commitment = NoteCommitment(Fr::ONE);
+        let mut pending = PendingDeliveries::default();
+
+        assert_eq!(pending.add([delivery_message(1)]), 1);
+        assert_eq!(pending.add([other_delivery_message(1)]), 1);
+        // The same message again is not kept twice.
+        assert_eq!(pending.add([delivery_message(1)]), 1);
+        assert_eq!(
+            pending.of(&[commitment]),
+            vec![delivery_message(1), other_delivery_message(1)]
+        );
+
+        pending.forget(&[commitment]);
+        assert_eq!(pending.of(&[commitment]), vec![]);
+        assert_eq!(pending.count, 0);
+    }
+
+    // Another ciphertext for the commitment of `delivery_message`.
+    fn other_delivery_message(commitment: u64) -> DeliveryMessage {
+        DeliveryMessage {
+            ciphertext: [1; lb_note_encryption::NOTE_CIPHERTEXT_SIZE],
+            ..delivery_message(commitment)
+        }
     }
 
     #[test]

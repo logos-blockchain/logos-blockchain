@@ -229,6 +229,11 @@ async fn a_delivered_note_reaches_the_wallet_of_its_recipient_and_is_spent() {
     let note = in_the_clear
         .recipient_note
         .expect("a key-only address gets its note in the clear");
+    // The note is handed over after its block: the wallet applies the block
+    // again and finds the note.
+    wait_for_balance(sender, recipient_pk, |held| held == balance(3)).await;
+    wait_for_nodes_height(&[receiver], height(sender).await, TIMEOUT).await;
+    assert_eq!(get_wallet_balance(receiver, recipient_pk).await, balance(2));
     import_note(receiver, note).await;
     wait_for_balance(receiver, recipient_pk, |held| held == balance(3)).await;
     assert_eq!(
