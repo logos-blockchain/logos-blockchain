@@ -27,7 +27,11 @@ pub trait MempoolStorageAdapter<RuntimeServiceId>: Send + Sync {
     async fn rotate_era(&mut self, era: Era);
     async fn complete_era_transition(&mut self, ended_era: Era);
 
-    async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error>;
+    /// Stores `items` in one write.
+    async fn store_items<Items>(&mut self, items: Items) -> Result<(), Self::Error>
+    where
+        Items: IntoIterator<Item = (Self::Key, Self::Item)> + Send,
+        Items::IntoIter: Send;
 
     async fn get_items(
         &self,
