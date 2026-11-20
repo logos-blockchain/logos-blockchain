@@ -33,7 +33,7 @@ use lb_core::{
         notes::{NoteCommitment, NoteNullifier},
         ops::{
             ChannelInscribeProof, NoOpProof, OpRef, ZkAndEd25519Proof, ZkTransferProof,
-            channel::ChannelId,
+            channel::{ChannelId, inscribe::Step},
         },
         traits::{GenesisTx as _, Hashable as _, MantleTx as _, SignedMantleTx, StorageSize},
         transactions::{
@@ -253,11 +253,18 @@ pub enum WalletMsg {
     GenerateRewardKey {
         resp_tx: Sender<Result<ZkPublicKey, WalletServiceError>>,
     },
-    // A leader reward note under a private random nonce, returned once persisted.
+    // A leader reward note under a private random nonce, for a block about to
+    // be built. The wallet keeps it only once told to with `TrackLeaderReward`.
     NewLeaderReward {
         value: Value,
         public_key: ZkPublicKey,
         resp_tx: Sender<Result<Note, WalletServiceError>>,
+    },
+    // Keeps a leader reward note, of a block about to be published, answering
+    // once it is persisted.
+    TrackLeaderReward {
+        note: Note,
+        resp_tx: Sender<Result<(), WalletServiceError>>,
     },
     ImportNote {
         note: Note,
@@ -483,6 +490,7 @@ impl WalletMsg {
             | Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
             | Self::NewLeaderReward { .. }
+            | Self::TrackLeaderReward { .. }
             | Self::ImportNote { .. }
             | Self::GetKnownAddresses { .. }
             | Self::GetAddress { .. }
@@ -990,26 +998,20 @@ where
                     }
                 };
 
-                let resp = Self::prove_funding(
+                match Self::funding_job(
                     tx_builder,
                     era_settings.fork_digest,
                     tip,
                     &ledger,
-                    kms,
                     state.wallet(),
-                )
-                .await
-                .map(|response| TipResponse { tip, response });
-
-                let proving_failed = resp.is_err();
-                let response_delivered = resp_tx.send(resp).is_ok();
-
-                if proving_failed || !response_delivered {
-                    state.release_pending_notes(funded_notes);
-                }
-
-                if !response_delivered {
-                    debug!(target: LOG_TARGET, "Failed to respond to ProveFunding");
+                ) {
+                    Ok(job) => {
+                        signings.push(Self::funding_proof(job, tip, funded_notes, signer, resp_tx));
+                    }
+                    Err(err) => {
+                        state.release_pending_notes(funded_notes);
+                        Self::send_err(resp_tx, err);
+                    }
                 }
             }
             WalletMsg::PrepareExactNote {
@@ -1128,9 +1130,15 @@ where
                 public_key,
                 resp_tx,
             } => {
-                let result = Self::new_leader_reward(value, public_key, state, storage, kms).await;
-                if resp_tx.send(result).is_err() {
+                let note = Note::new(value, random_nonce(), public_key);
+                if resp_tx.send(Ok(note)).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to NewLeaderReward");
+                }
+            }
+            WalletMsg::TrackLeaderReward { note, resp_tx } => {
+                let result = Self::track_leader_reward(note, state, storage, kms).await;
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to TrackLeaderReward");
                 }
             }
             WalletMsg::ImportNote {
@@ -1157,19 +1165,21 @@ where
                         return;
                     }
                 };
-                let response = Self::prove_channel_step(tip, request, state, storage, kms)
-                    .await
-                    .map(|response| TipResponse { tip, response });
-                let spent = response.as_ref().ok().map(|proven| {
-                    let inputs = proven.response.step.inputs();
-                    inputs.iter().copied().collect::<Vec<_>>()
-                });
-                if let Some(spent) = &spent {
-                    state.reserve_pending_notes(spent.iter().copied());
-                }
-                if resp_tx.send(response).is_err() {
-                    state.release_pending_notes(spent.unwrap_or_default());
-                    debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
+                match Self::channel_step_job(tip, request, state, storage, kms).await {
+                    Ok((step, outputs, witness)) => {
+                        // The proof runs off the loop: the notes are held from
+                        // now, so that no other request spends them meanwhile.
+                        let spent: Vec<NoteNullifier> = step.inputs().iter().copied().collect();
+                        state.reserve_pending_notes(spent.iter().copied());
+                        signings.push(Self::channel_step_proof(
+                            (step, outputs, witness),
+                            tip,
+                            spent,
+                            signer,
+                            resp_tx,
+                        ));
+                    }
+                    Err(err) => Self::send_err(resp_tx, err),
                 }
             }
             WalletMsg::ChannelWithdrawal {
@@ -1425,16 +1435,15 @@ where
         Ok(signed_mantle_tx)
     }
 
-    // The built Operations and the proof of their funding Transfer, the last
-    // Operation, when the builder funds them.
-    async fn prove_funding(
+    // The built Operations and, when the builder funds them, the witness of
+    // their funding Transfer, the last Operation, read from the wallet.
+    fn funding_job(
         tx_builder: MantleTxBuilder,
         fork_digest: ForkDigest,
         tip: HeaderId,
         tip_ledger: &LedgerState,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         wallet: &Wallet,
-    ) -> Result<(Ops, Option<OpProof>), WalletServiceError> {
+    ) -> Result<(Ops, Option<OpWitness>), WalletServiceError> {
         let funds = !tx_builder.funding_inputs().is_empty();
         let openings = tx_builder.openings();
         let ops = tx_builder.build(fork_digest)?;
@@ -1452,8 +1461,48 @@ where
             ops.hash().to_fr(),
             funding_index,
         )?;
-        let proof = Self::prove_witness(witness, kms).await?;
-        Ok((ops, Some(OpProof::ZkTransfer(proof))))
+        Ok((ops, Some(witness)))
+    }
+
+    /// Proves the funding of `ops` from its `witness` and answers the request,
+    /// as [`Self::signing`] does a signing: coming to `funded_notes` if the
+    /// requester doesn't end up with the proof.
+    fn funding_proof(
+        (ops, witness): (Ops, Option<OpWitness>),
+        tip: HeaderId,
+        funded_notes: Vec<NoteNullifier>,
+        signer: &TxSigner<Kms, RuntimeServiceId>,
+        resp_tx: Sender<Result<TipResponse<ProvenFunding>, WalletServiceError>>,
+    ) -> PendingSigning {
+        let signer = signer.clone();
+        Box::pin(async move {
+            let proof = match witness {
+                Some(witness) => {
+                    let permit = signing_permit(&signer.permits).await;
+                    let proof = Self::prove_witness(witness, &signer.kms).await;
+                    drop(permit);
+                    proof.map(|proof| Some(OpProof::ZkTransfer(proof)))
+                }
+                None => Ok(None),
+            };
+            let resp = proof.map(|proof| TipResponse {
+                tip,
+                response: (ops, proof),
+            });
+
+            let proving_failed = resp.is_err();
+            let response_delivered = resp_tx.send(resp).is_ok();
+
+            if !response_delivered {
+                debug!(target: LOG_TARGET, "Failed to respond to ProveFunding");
+            }
+
+            if proving_failed || !response_delivered {
+                funded_notes
+            } else {
+                Vec::new()
+            }
+        })
     }
 
     // The ZkTransfer witnesses of `ops`, from the wallet's spend state at
@@ -1781,17 +1830,16 @@ where
     }
 
     // A user step, or a program deposit, spending the channel notes of the
-    // wallet, with its ZkTransfer. The wallet follows the notes the step pays
-    // to its own keys.
-    async fn prove_channel_step(
+    // wallet, with the notes it creates and the witness of its ZkTransfer. The
+    // wallet follows the notes the step pays to its own keys.
+    async fn channel_step_job(
         tip: HeaderId,
         request: ChannelStepRequest,
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<ChannelStep, WalletServiceError> {
+    ) -> Result<(Step, Vec<Note>, OpWitness), WalletServiceError> {
         let (step, opening, witness, note_set) = channel::build_step(tip, request, state)?;
-        let proof = Self::prove_witness(witness, kms).await?;
 
         let mut known_notes = Vec::new();
         for note in &opening.outputs {
@@ -1801,10 +1849,45 @@ where
         }
         state.store_known_notes(storage, &known_notes).await?;
 
-        Ok(ChannelStep {
-            step,
-            proof,
-            outputs: opening.outputs,
+        Ok((step, opening.outputs, witness))
+    }
+
+    /// Proves `step` from its `witness` and answers the request, as
+    /// [`Self::signing`] does a signing: coming to the `spent` notes if the
+    /// requester doesn't end up with the proof.
+    fn channel_step_proof(
+        (step, outputs, witness): (Step, Vec<Note>, OpWitness),
+        tip: HeaderId,
+        spent: Vec<NoteNullifier>,
+        signer: &TxSigner<Kms, RuntimeServiceId>,
+        resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
+    ) -> PendingSigning {
+        let signer = signer.clone();
+        Box::pin(async move {
+            let permit = signing_permit(&signer.permits).await;
+            let proof = Self::prove_witness(witness, &signer.kms).await;
+            drop(permit);
+            let resp = proof.map(|proof| TipResponse {
+                tip,
+                response: ChannelStep {
+                    step,
+                    proof,
+                    outputs,
+                },
+            });
+
+            let proving_failed = resp.is_err();
+            let response_delivered = resp_tx.send(resp).is_ok();
+
+            if !response_delivered {
+                debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
+            }
+
+            if proving_failed || !response_delivered {
+                spent
+            } else {
+                Vec::new()
+            }
         })
     }
 
@@ -1830,25 +1913,22 @@ where
         Ok(withdrawal)
     }
 
-    // A new leader reward note under `public_key`, with a private random nonce.
-    // Nothing on chain opens the note, so it is returned only once it is
-    // written to storage: a process crash after publication cannot lose the
-    // reward. A note of value 0 holds nothing to lose, so the wallet does
-    // not track it.
-    async fn new_leader_reward(
-        value: Value,
-        public_key: ZkPublicKey,
+    // Keeps `note`, the leader reward note of a block about to be published.
+    // Nothing on chain opens the note, so it is kept only once it is written
+    // to storage: a crash after its block is published cannot lose the
+    // reward. A note of value 0 holds nothing to lose, so the wallet does not
+    // track it.
+    async fn track_leader_reward(
+        note: Note,
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<Note, WalletServiceError> {
-        let note = Note::new(value, random_nonce(), public_key);
-        if value == 0 {
-            return Ok(note);
+    ) -> Result<(), WalletServiceError> {
+        if note.value == 0 {
+            return Ok(());
         }
         let known_note = Self::held_note(note, NoteSetIndex::Ledger, state, kms).await?;
-        state.store_known_notes(storage, &[known_note]).await?;
-        Ok(note)
+        state.store_known_notes(storage, &[known_note]).await
     }
 
     // Writes the pending delivery messages to storage when they changed. A

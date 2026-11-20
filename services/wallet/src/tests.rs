@@ -315,13 +315,14 @@ async fn leader_reward_waits_for_storage_before_becoming_known() {
     let (storage, mut writes) = storage_api();
     let kms = kms_api(key);
 
-    let (reward, records) = complete_opening_write(
-        TestWallet::new_leader_reward(20, input.note.public_key, &mut state, &storage, &kms),
+    let reward = Note::new(20, Fr::from(9u64), input.note.public_key);
+    let (tracked, records) = complete_opening_write(
+        TestWallet::track_leader_reward(reward, &mut state, &storage, &kms),
         &mut writes,
         Ok(()),
     )
     .await;
-    let reward = reward.unwrap();
+    tracked.unwrap();
     let stored = storage_with_records(records)
         .load_wallet_known_notes()
         .await

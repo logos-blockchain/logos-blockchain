@@ -24,11 +24,15 @@ use lb_ledger::{
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_pol::PolWalletInputsData;
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
+use lb_utils::tokio::task::spawn_blocking;
 use lb_wallet_service::{
     AgedNote,
     api::{WalletApi, WalletServiceData},
 };
-use overwatch::services::{AsServiceId, relay::OutboundRelay};
+use overwatch::{
+    DynError,
+    services::{AsServiceId, relay::OutboundRelay},
+};
 #[cfg(test)]
 pub use pol_tests::{genesis_parameters, single_era, test_config};
 use tokio::sync::{mpsc, oneshot};
@@ -52,6 +56,10 @@ pub struct WinningNote {
 
 // The first aged note winning `slot` whose witness can be built, checked
 // against C_LEAD and the latest eligible root.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "The lottery check and the witness of each note, with a log for each outcome"
+)]
 pub async fn find_winning_note<RuntimeServiceId>(
     aged: &[AgedNote],
     epoch_state: &EpochState,
@@ -76,7 +84,8 @@ pub async fn find_winning_note<RuntimeServiceId>(
                 );
                 // A winning note whose witness fails, such as one spent since
                 // the epoch snapshot, leaves the slot to the next winning note.
-                let Some(wallet_inputs) = leader_wallet_inputs(note, epoch_state, latest, slot)
+                let Some(wallet_inputs) =
+                    leader_wallet_inputs(note, epoch_state, latest, slot).await
                 else {
                     continue;
                 };
@@ -116,30 +125,49 @@ pub async fn find_winning_note<RuntimeServiceId>(
 
 // The wallet half of the PoL witness of an aged note, proven against the aged
 // note sets of the epoch and the `latest` note sets, or `None` if it fails.
-fn leader_wallet_inputs(
+async fn leader_wallet_inputs(
     aged: &AgedNote,
     epoch_state: &EpochState,
     latest: &NoteSets,
     slot: Slot,
 ) -> Option<PolWalletInputsData> {
-    let note = &aged.note;
-    pol_wallet_inputs(
-        &note.note,
-        note.note_set,
-        &note.nullifier,
-        &aged.aged_path,
-        &epoch_state.note_sets,
-        latest,
-    )
-    .inspect_err(|e| {
-        metrics::consensus_proposals_create_failed("private_inputs");
-        tracing::error!(
-            target: LOG_TARGET,
-            "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
-            note.note.commitment(),
-        );
+    pol_wallet_inputs_off_loop(aged, &epoch_state.note_sets, latest)
+        .await
+        .inspect_err(|e| {
+            metrics::consensus_proposals_create_failed("private_inputs");
+            tracing::error!(
+                target: LOG_TARGET,
+                "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
+                aged.note.note.commitment(),
+            );
+        })
+        .ok()
+}
+
+// The wallet half of the PoL witness of `aged`, proven against the `aged_sets`
+// and the `latest` note sets. Its paths are read from the nullifier store, so
+// it's built on the blocking pool.
+async fn pol_wallet_inputs_off_loop(
+    aged: &AgedNote,
+    aged_sets: &NoteSets,
+    latest: &NoteSets,
+) -> Result<PolWalletInputsData, DynError> {
+    let note = aged.note.clone();
+    let aged_path = aged.aged_path.clone();
+    let (aged_sets, latest) = (aged_sets.clone(), latest.clone());
+    spawn_blocking("logos/chain/leader-witness-blocking", move || {
+        pol_wallet_inputs(
+            &note.note,
+            note.note_set,
+            &note.nullifier,
+            &aged_path,
+            &aged_sets,
+            &latest,
+        )
     })
-    .ok()
+    .await
+    .map_err(DynError::from)?
+    .map_err(DynError::from)
 }
 
 // C_LEAD and eligible_LATEST.
@@ -163,7 +191,7 @@ pub enum PrivateInputsError {
     #[error("Leader witness error: {0}")]
     Witness(#[from] LeaderWitnessError),
     #[error("KMS API error: {0}")]
-    KmsApi(#[from] overwatch::DynError),
+    KmsApi(#[from] DynError),
     #[error("KMS API did not respond")]
     KmsResponse,
 }
@@ -175,8 +203,8 @@ pub enum PrivateInputsError {
 /// aged UTXO tree) and the wallet's leader-eligible notes (aged at the end of
 /// the previous epoch). The block-proposal path additionally needs the *latest*
 /// ledger state (to prove a note is still unspent), which it fetches separately
-/// per slot; the Blend winning-slot scan does not, since the leadership quota
-/// proof only attests that a note was aged, not that it is unspent.
+/// per won slot; the Blend winning-slot scan does not, since the leadership
+/// quota proof only attests that a note was aged, not that it is unspent.
 pub struct SlotContext {
     /// Tip explicitly passed to `get_leader_aged_notes` for the wallet query.
     pub wallet_tip: HeaderId,
@@ -462,14 +490,9 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
                     continue;
                 }
                 tracing::trace!(target: LOG_TARGET, "Found winning note {:?} for slot {slot}", note.note.note.commitment());
-                let wallet = match pol_wallet_inputs(
-                    &note.note.note,
-                    note.note.note_set,
-                    &note.note.nullifier,
-                    &note.aged_path,
-                    &epoch_state.note_sets,
-                    latest,
-                ) {
+                let wallet = match pol_wallet_inputs_off_loop(note, &epoch_state.note_sets, latest)
+                    .await
+                {
                     Ok(wallet) => wallet,
                     Err(e) => {
                         tracing::error!(
@@ -879,7 +902,7 @@ mod pol_tests {
             _: Self::KeyId,
             note: &Note,
             leader_public: &LeaderPublic,
-        ) -> Result<bool, overwatch::DynError> {
+        ) -> Result<bool, DynError> {
             let nullifier_key = ZkKey::new(Fr::from(0u64)).nullifier_key();
             Ok(check_winning(
                 note,
