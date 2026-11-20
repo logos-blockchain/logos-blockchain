@@ -84,7 +84,7 @@ mod tests {
         worker.await.unwrap();
 
         let (restored, worker) = connect(RocksBackend::new(settings).unwrap());
-        let expected = notes
+        let expected: KnownNotes = notes
             .into_iter()
             .map(|note| (note.note.commitment(), note))
             .collect();
@@ -107,7 +107,7 @@ mod tests {
         let notes = [known_note(1), known_note(2)];
 
         assert!(storage.store_wallet_known_notes(&notes).await.is_err());
-        assert_eq!(storage.load_wallet_known_notes().await.unwrap().len(), 0);
+        assert_eq!(storage.load_wallet_known_notes().await.unwrap().size(), 0);
         drop(storage);
         worker.await.unwrap();
     }

@@ -2,14 +2,19 @@ pub mod api;
 mod channel;
 mod states;
 
+#[cfg(test)]
+mod tests;
+
 use std::{
     collections::{BTreeMap, HashMap},
     num::NonZero,
+    pin::Pin,
+    sync::Arc,
 };
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::{StreamExt as _, TryStreamExt as _, stream::FuturesUnordered};
 use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_service::{
     ChainServiceInfo, LibUpdate,
@@ -38,6 +43,7 @@ use lb_core::{
             tx_list::ops::OpsContext,
         },
     },
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::DeclarationId,
 };
 use lb_cryptarchia_engine::Epoch;
@@ -61,7 +67,7 @@ use lb_services_utils::{
 use lb_storage_service::{api::StorageApi, recovery::StorageRecoveryBackend};
 use lb_time::era::{EpochLength, EraSchedule};
 use lb_time_service::{EraEvent, TimeService, api::TimeServiceApi};
-use lb_utils::bounded::BoundedError;
+use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 pub use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, SPEND_ROOT_DEPTH};
 use lb_wallet::{
     KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
@@ -75,7 +81,7 @@ use rand::{RngCore as _, rngs::OsRng};
 use serde::{Serialize, de::DeserializeOwned};
 use strum_macros::AsRefStr;
 use tokio::{
-    sync::{oneshot, oneshot::Sender},
+    sync::{Semaphore, SemaphorePermit, oneshot, oneshot::Sender},
     task::JoinError,
 };
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
@@ -88,6 +94,10 @@ type KmsBackend = PreloadKMSBackend;
 type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
+
+/// How many signings run at once. Each one proves, so this keeps a burst of
+/// requests from crowding out the proofs consensus depends on.
+const MAX_CONCURRENT_SIGNINGS: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WalletServiceError {
@@ -290,6 +300,62 @@ pub struct AgedNote {
     pub key_id: KeyId,
 }
 
+/// A transaction to sign, with what signing it takes from the wallet already
+/// read, so that it can run off the service loop.
+struct TxSigningRequest {
+    ops: Ops,
+    channel_multi_sig_proofs: HashMap<usize, ChannelMultiSigProof>,
+    /// The witnesses of the transaction's `ZkTransfer` proofs.
+    witnesses: Vec<OpWitness>,
+    ledger: LedgerState,
+}
+
+/// What a signing takes: the KMS that signs, and the permits that cap how many
+/// sign at once.
+struct TxSigner<Kms, RuntimeServiceId>
+where
+    Kms: KmsServiceData,
+{
+    kms: KmsServiceApi<Kms, RuntimeServiceId>,
+    permits: Arc<Semaphore>,
+}
+
+impl<Kms, RuntimeServiceId> Clone for TxSigner<Kms, RuntimeServiceId>
+where
+    Kms: KmsServiceData,
+{
+    fn clone(&self) -> Self {
+        Self {
+            kms: self.kms.clone(),
+            permits: Arc::clone(&self.permits),
+        }
+    }
+}
+
+impl<Kms, RuntimeServiceId> TxSigner<Kms, RuntimeServiceId>
+where
+    Kms: KmsServiceData,
+{
+    fn new(kms: KmsServiceApi<Kms, RuntimeServiceId>) -> Self {
+        Self {
+            kms,
+            permits: Arc::new(Semaphore::new(MAX_CONCURRENT_SIGNINGS)),
+        }
+    }
+}
+
+/// A signing under way, which the service loop polls along with its other
+/// inputs. It comes to the notes funding the transaction, for the loop to
+/// release, if the requester doesn't end up with the transaction.
+type PendingSigning = Pin<Box<dyn Future<Output = Vec<NoteNullifier>> + Send + Sync>>;
+
+async fn signing_permit(permits: &Semaphore) -> SemaphorePermit<'_> {
+    permits
+        .acquire()
+        .await
+        .expect("The semaphore is never closed.")
+}
+
 /// One wallet-owned UTXO old enough to take part in the leadership lottery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaderAgedNoteInfo {
@@ -348,10 +414,11 @@ impl<'a> FromIterator<&'a OwnedNote> for LeaderAgedNotesInfo {
 }
 
 impl WalletMsg {
-    /// Returns [`HeaderId`] of the tip if the message is associated
-    /// with a specific tip.
+    /// The tip at which the message reads the wallet's state, if it reads it at
+    /// all: `Some(None)` for the chain's latest, which the wallet then pins the
+    /// message to.
     #[must_use]
-    pub const fn tip(&self) -> Option<HeaderId> {
+    pub const fn wallet_state_tip(&mut self) -> Option<&mut Option<HeaderId>> {
         match self {
             Self::GetBalance { tip, .. }
             | Self::FundTx { tip, .. }
@@ -363,9 +430,10 @@ impl WalletMsg {
             | Self::GetLeaderAgedNotesInfo { tip, .. }
             | Self::SpendRoot { tip, .. }
             | Self::ProveChannelStep { tip, .. }
-            | Self::ChannelWithdrawal { tip, .. }
-            | Self::GetTxContext { block_id: tip, .. } => *tip,
-            Self::SignTxWithEd25519 { .. }
+            | Self::ChannelWithdrawal { tip, .. } => Some(tip),
+            // It reads the chain's ledger, not the wallet's state.
+            Self::GetTxContext { .. }
+            | Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
             | Self::NewLeaderReward { .. }
             | Self::ImportNote { .. }
@@ -447,7 +515,7 @@ impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> ServiceData
 impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 where
-    Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync,
+    Kms: KmsServiceData<Backend = KmsBackend> + Send + Sync + 'static,
     Tx: SignedMantleTx<Preverified, StandardMode>
         + Send
         + Sync
@@ -577,14 +645,17 @@ where
             .await?;
         let mut era_in_force = settings.era_schedule.get(current_era).unwrap();
 
+        let (signer, mut signings) = (TxSigner::new(kms), FuturesUnordered::new());
+
         service_resources_handle.status_updater.notify_ready();
         info!(target: LOG_TARGET, "Wallet service is ready and subscribed to blocks");
 
         loop {
             tokio::select! {
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
-                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &kms, &settings.era_schedule, era_in_force.parameters)).await;
+                    Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &signer, &signings, &settings.era_schedule, era_in_force.parameters)).await;
                 }
+                Some(unused) = signings.next() => state.release_pending_notes(unused),
                 Some(EraEvent::NewEra { era: new_era, .. }) = era_ticks.next() => {
                     if new_era > era_in_force.era {
                         era_in_force = settings.era_schedule.get(new_era).unwrap();
@@ -594,11 +665,11 @@ where
                 // one and is backfilled from there; the log line is what tells
                 // an operator why the wallet fell behind.
                 Some(event) = new_blocks.next() => match event {
-                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &kms, &settings.era_schedule).await,
+                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &signer.kms, &settings.era_schedule).await,
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("new-block", skipped),
                 },
                 Some(lib_update) = lib_updates.next() => match lib_update {
-                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &kms, &settings.era_schedule).await,
+                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &signer.kms, &settings.era_schedule).await,
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("LIB", skipped),
                 },
             }
@@ -616,7 +687,7 @@ fn warn_lagged(stream: &str, skipped: u64) {
 impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
     WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 where
-    Kms: KmsServiceData<Backend = KmsBackend>,
+    Kms: KmsServiceData<Backend = KmsBackend> + 'static,
     Tx: SignedMantleTx<Preverified, StandardMode>
         + Send
         + Sync
@@ -628,8 +699,14 @@ where
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
-    RuntimeServiceId:
-        AsServiceId<Cryptarchia> + AsServiceId<Kms> + std::fmt::Debug + std::fmt::Display + Sync,
+    TimeBackend: 'static,
+    RuntimeServiceId: AsServiceId<Cryptarchia>
+        + AsServiceId<Kms>
+        + std::fmt::Debug
+        + std::fmt::Display
+        + Send
+        + Sync
+        + 'static,
 {
     async fn msg_tip_or_latest(
         msg_tip: Option<HeaderId>,
@@ -665,26 +742,45 @@ where
         reason = "A message reads the wallet's state, its services and the era in force"
     )]
     async fn handle_wallet_message(
-        msg: WalletMsg,
+        mut msg: WalletMsg,
         state: &mut ServiceState<'_>,
         voucher_master_key_id: &KeyId,
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        signer: &TxSigner<Kms, RuntimeServiceId>,
+        signings: &FuturesUnordered<PendingSigning>,
         era_schedule: &ServiceEraSchedule,
         era_settings: &WalletEraSettings,
     ) {
-        if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, kms, era_schedule)
-                .await
-        {
-            warn!(
-                target: LOG_TARGET,
-                message_kind = msg.as_ref(),
-                requested_tip = ?msg.tip(),
-                err = ?err,
-                "Failed backfilling wallet to message tip; continuing to process the message"
-            );
+        let kms = &signer.kms;
+        // The chain's latest tip is resolved once, so that the backfill and the
+        // handler read the state at the same one.
+        if let Some(tip) = msg.wallet_state_tip() {
+            let requested_tip = *tip;
+            let synced = match Self::msg_tip_or_latest(requested_tip, cryptarchia).await {
+                Ok(resolved) => {
+                    *tip = Some(resolved);
+                    Self::backfill_if_not_in_sync(
+                        Some(resolved),
+                        state,
+                        storage,
+                        cryptarchia,
+                        kms,
+                        era_schedule,
+                    )
+                    .await
+                }
+                Err(err) => Err(err),
+            };
+            if let Err(err) = synced {
+                warn!(
+                    target: LOG_TARGET,
+                    message_kind = msg.as_ref(),
+                    requested_tip = ?requested_tip,
+                    err = ?err,
+                    "Failed backfilling wallet to message tip; continuing to process the message"
+                );
+            }
         }
 
         match msg {
@@ -793,29 +889,20 @@ where
                     }
                 };
 
-                let resp = Self::sign_tx(
+                match Self::signing_job(
                     tx_builder,
                     era_settings.fork_digest,
                     tip,
-                    &ledger,
-                    kms,
+                    ledger,
                     state.wallet(),
-                )
-                .await
-                .map(|signed_tx| TipResponse {
-                    tip,
-                    response: signed_tx,
-                });
-
-                let signing_failed = resp.is_err();
-                let response_delivered = resp_tx.send(resp).is_ok();
-
-                if signing_failed || !response_delivered {
-                    state.release_pending_notes(funded_notes);
-                }
-
-                if !response_delivered {
-                    debug!(target: LOG_TARGET, "Failed to respond to SignTx");
+                ) {
+                    Ok(job) => {
+                        signings.push(Self::signing(job, tip, funded_notes, signer, resp_tx));
+                    }
+                    Err(err) => {
+                        state.release_pending_notes(funded_notes);
+                        Self::send_err(resp_tx, err);
+                    }
                 }
             }
             WalletMsg::ProveFunding {
@@ -1102,21 +1189,78 @@ where
         }
     }
 
-    async fn sign_tx(
+    /// Reads what signing `tx_builder` takes from the wallet.
+    fn signing_job(
         tx_builder: MantleTxBuilder,
         fork_digest: ForkDigest,
         tip: HeaderId,
-        tip_ledger: &LedgerState,
-        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        ledger: LedgerState,
         wallet: &Wallet,
-    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
-        let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
+    ) -> Result<TxSigningRequest, WalletServiceError> {
+        let channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
         let openings = tx_builder.openings();
         let ops = tx_builder.build(fork_digest)?;
+        let witnesses = Self::witnesses_at(&ops, &openings, tip, &ledger, wallet)?;
+
+        Ok(TxSigningRequest {
+            ops,
+            channel_multi_sig_proofs,
+            witnesses,
+            ledger,
+        })
+    }
+
+    /// Signs `job` and answers the request, coming to `funded_notes` if the
+    /// requester doesn't end up with the transaction.
+    fn signing(
+        job: TxSigningRequest,
+        tip: HeaderId,
+        funded_notes: Vec<NoteNullifier>,
+        signer: &TxSigner<Kms, RuntimeServiceId>,
+        resp_tx: Sender<
+            Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>,
+        >,
+    ) -> PendingSigning {
+        let signer = signer.clone();
+        Box::pin(async move {
+            let permit = signing_permit(&signer.permits).await;
+            let resp = Box::pin(Self::sign_tx(job, &signer.kms))
+                .await
+                .map(|signed_tx| TipResponse {
+                    tip,
+                    response: signed_tx,
+                });
+            drop(permit);
+
+            let signing_failed = resp.is_err();
+            let response_delivered = resp_tx.send(resp).is_ok();
+
+            if !response_delivered {
+                debug!(target: LOG_TARGET, "Failed to respond to a signing request");
+            }
+
+            if signing_failed || !response_delivered {
+                funded_notes
+            } else {
+                Vec::new()
+            }
+        })
+    }
+
+    async fn sign_tx(
+        job: TxSigningRequest,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
+        let TxSigningRequest {
+            ops,
+            mut channel_multi_sig_proofs,
+            witnesses,
+            ledger: tip_ledger,
+        } = job;
         let tx_hash = ops.hash();
 
         let mut zk_proofs = HashMap::new();
-        for witness in Self::witnesses_at(&ops, &openings, tip, tip_ledger, wallet)? {
+        for witness in witnesses {
             zk_proofs.insert(witness.op_index, Self::prove_witness(witness, kms).await?);
         }
 
@@ -1128,15 +1272,18 @@ where
                     .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;
                 OpProof::ChannelMultiSigProof(proof)
             } else {
-                let signature = Self::op_signature(tx_hash, &op, tip_ledger, kms).await?;
+                let signature = Self::op_signature(tx_hash, &op, &tip_ledger, kms).await?;
                 op_proof(&op, zk_proofs.remove(&i), signature)?
             };
             op_proofs.try_push(op_proof)?;
         }
 
-        let signed_mantle_tx = SignedOps::from_parts(ops, op_proofs)
-            .expect("SignedOps should be valid with the provided proofs.")
-            .preverify()?;
+        let signed_mantle_tx = spawn_blocking("logos/wallet/tx-preverify-blocking", move || {
+            SignedOps::from_parts(ops, op_proofs)
+                .expect("SignedOps should be valid with the provided proofs.")
+                .preverify()
+        })
+        .await??;
 
         Ok(signed_mantle_tx)
     }
@@ -1726,11 +1873,9 @@ where
             .store_wallet_known_notes(&genesis_known_notes)
             .await
             .map_err(WalletServiceError::PersistedState)?;
-        known_notes.extend(
-            genesis_known_notes
-                .into_iter()
-                .map(|note| (note.note.commitment(), note)),
-        );
+        for note in genesis_known_notes {
+            known_notes.insert_mut(note.note.commitment(), note);
+        }
         Ok(ServiceState::from_genesis(
             known_notes,
             reward_key_count,
@@ -1809,6 +1954,12 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         era_schedule: &ServiceEraSchedule,
     ) {
+        // A backfill that a message started may have applied it already.
+        if state.wallet().has_processed_block(header_id) {
+            trace!(target: LOG_TARGET, block_id = ?header_id, "Block already applied to wallet");
+            return;
+        }
+
         let Ok(block) = Self::load_block(header_id, storage).await.inspect_err(|e| {
             error!(
                 target: LOG_TARGET,
@@ -2134,6 +2285,3 @@ const fn op_proof(
         _ => Err(WalletServiceError::OpProofParts),
     }
 }
-
-#[cfg(test)]
-mod tests;
