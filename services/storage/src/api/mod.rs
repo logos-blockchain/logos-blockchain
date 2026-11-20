@@ -1,7 +1,8 @@
 pub mod requests;
+mod wallet;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fmt::{Debug, Display},
     marker::PhantomData,
     num::NonZeroUsize,
@@ -49,6 +50,10 @@ impl<Tx> Clone for StorageApi<Tx> {
     }
 }
 
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "Wallet storage operations are grouped in the wallet API module"
+)]
 impl<Tx> StorageApi<Tx> {
     #[must_use]
     pub const fn new(relay: OutboundRelay<StorageMsg>) -> Self {
@@ -95,6 +100,17 @@ impl<Tx> StorageApi<Tx> {
         .map_err(Into::into)
     }
 
+    /// Writes every entry atomically, replying once the database write
+    /// finishes.
+    pub async fn bulk_store_confirmed(&self, items: HashMap<Bytes, Bytes>) -> Result<(), DynError> {
+        self.request(|reply_channel| StorageMsg::BulkStoreConfirmed {
+            items,
+            reply_channel,
+        })
+        .await?
+        .map_err(Into::into)
+    }
+
     pub async fn load<Value: DeserializeOwned>(
         &self,
         key: Bytes,
@@ -102,7 +118,30 @@ impl<Tx> StorageApi<Tx> {
         let bytes = self
             .request(|reply_channel| StorageMsg::Load { key, reply_channel })
             .await?;
-        Ok(bytes.map(|bytes| Value::from_bytes(&bytes).expect("Failed to decode stored value")))
+        bytes
+            .map(|bytes| Value::from_bytes(&bytes))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    /// Loads and decodes the values stored under `prefix`.
+    pub async fn load_prefix<Value: DeserializeOwned>(
+        &self,
+        prefix: Bytes,
+    ) -> Result<Vec<Value>, DynError> {
+        let values = self
+            .request(|reply_channel| StorageMsg::LoadPrefix {
+                prefix,
+                start_key: None,
+                end_key: None,
+                limit: None,
+                reply_channel,
+            })
+            .await?;
+        values
+            .into_iter()
+            .map(|bytes| Value::from_bytes(&bytes).map_err(Into::into))
+            .collect()
     }
 
     async fn request<Reply>(

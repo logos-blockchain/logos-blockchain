@@ -44,6 +44,12 @@ pub fn handle_request(msg: StorageMsg, backend: &RocksBackend) -> Result<(), Sto
             value,
             reply_channel,
         } => return handle_store_confirmed(backend, key, value, reply_channel),
+        StorageMsg::BulkStoreConfirmed {
+            items,
+            reply_channel,
+        } => {
+            return handle_bulk_store_confirmed(backend, items, reply_channel);
+        }
         StorageMsg::Remove { key, reply_channel } => {
             return handle_remove(backend, &key, reply_channel);
         }
@@ -199,6 +205,22 @@ fn handle_store_confirmed(
         .send(result.as_ref().map_err(ToString::to_string).copied())
         .map_err(|_| StorageServiceError::ReplyError {
             message: "Store confirmed".to_owned(),
+        })?;
+    result
+}
+
+fn handle_bulk_store_confirmed(
+    backend: &RocksBackend,
+    items: HashMap<Bytes, Bytes>,
+    reply_channel: Sender<Result<(), String>>,
+) -> Result<(), StorageServiceError> {
+    let result = backend
+        .bulk_store(items)
+        .map_err(|error| StorageServiceError::BackendError(error.into()));
+    reply_channel
+        .send(result.as_ref().map_err(ToString::to_string).copied())
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: "Bulk store confirmed".to_owned(),
         })?;
     result
 }
