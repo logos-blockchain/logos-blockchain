@@ -99,6 +99,15 @@ impl AdmissionLimits {
                     });
                 }
             }
+            if let OpRef::Inscribe(inscribe) = op {
+                let size = inscribe.inscription.len();
+                if size > self.max_op_data_size {
+                    return Err(MempoolError::InscriptionTooLarge {
+                        size,
+                        max: self.max_op_data_size,
+                    });
+                }
+            }
             if let OpRef::ChannelDeposit(deposit) = op {
                 let size = deposit.metadata.len();
                 if size > self.max_op_data_size {
