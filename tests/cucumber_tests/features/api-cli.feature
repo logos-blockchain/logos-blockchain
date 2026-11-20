@@ -4,7 +4,7 @@ Feature: CLI
   Scenario: Join Blend via CLI declaration
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 1           | 2000         |
+      | 1             | 1           | 20000        |
     And I have a cluster with capacity of 1 nodes
     And no nodes are declared as blend providers
     And I start nodes with wallet resources:

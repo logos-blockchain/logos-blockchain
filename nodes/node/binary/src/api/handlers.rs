@@ -44,7 +44,10 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
-        channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        channel::{
+            ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
+            ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
+        },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
@@ -69,7 +72,10 @@ use lb_tx_service::{
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_version::BuildVersionInfo;
-use lb_wallet_service::api::{WalletApi, WalletServiceData, added_nullifiers};
+use lb_wallet_service::{
+    ChannelStepRequest, ProgramPayment,
+    api::{WalletApi, WalletServiceData, added_nullifiers},
+};
 use overwatch::{
     overwatch::handle::OverwatchHandle,
     services::{AsServiceId, ServiceData},
@@ -1084,6 +1090,67 @@ fn channel_response(result: Result<Option<ChannelState>, DynError>) -> Response 
 
 #[utoipa::path(
     post,
+    path = paths::CHANNEL_STEP,
+    responses(
+        (status = 200, description = "A channel step with its proof"),
+        (status = 400, description = "The step moves no value", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn channel_step<WalletService, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ChannelStepRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+{
+    // A step spends at least one note, so it has to move some value.
+    if req.payments.iter().all(|payment| payment.value == 0)
+        && req
+            .program_deposit
+            .as_ref()
+            .is_none_or(|deposit| deposit.value == 0)
+    {
+        return ApiError::BadRequest(
+            "A channel step must pay a note or deposit to a program".into(),
+        )
+        .into_response();
+    }
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+        let request = ChannelStepRequest {
+            channel_id: req.channel_id,
+            appended: req.appended,
+            payments: req
+                .payments
+                .into_iter()
+                .map(|payment| (payment.public_key, payment.value))
+                .collect(),
+            program_deposit: req.program_deposit.map(|deposit| ProgramPayment {
+                program_id: deposit.program_id,
+                value: deposit.value,
+                intent: deposit.intent,
+            }),
+            inscription: req.inscription,
+            change_pk: req.change_public_key,
+            holder_pks: req.holder_public_keys,
+        };
+        let lb_wallet_service::TipResponse { tip, response } =
+            wallet.prove_channel_step(req.tip, request).await?;
+        Ok::<_, DynError>(ChannelStepResponseBody {
+            tip,
+            step: response.step,
+            proof: response.proof,
+            outputs: response.outputs,
+        })
+    })
+}
+
+#[utoipa::path(
+    post,
     path = paths::CHANNEL_DEPOSIT,
     responses(
         (status = 200, description = "Submit a channel deposit"),
@@ -1235,6 +1302,105 @@ where
         Ok::<_, overwatch::DynError>(ChannelDepositResponseBody {
             hash: tx_hash,
             holder_note,
+        })
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = paths::CHANNEL_WITHDRAW,
+    responses(
+        (status = 200, description = "Submit a channel withdrawal"),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+)]
+pub async fn channel_withdraw<WalletService, StorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<ChannelWithdrawRequestBody>,
+) -> Response
+where
+    WalletService: WalletServiceData,
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = ValidatedTx,
+            Key = <ValidatedTx as Hashable>::Hash,
+            BlockId = HeaderId,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Clone
+        + Display
+        + Send
+        + Sync
+        + 'static
+        + AsServiceId<StorageService<RuntimeServiceId>>
+        + AsServiceId<WalletService>
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    ValidatedTx,
+                    <ValidatedTx as Hashable>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
+                StorageAdapter,
+                NtpTimeBackend,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(async {
+        let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+            handle.relay::<WalletService>().await?,
+        );
+
+        let lb_wallet_service::TipResponse {
+            tip: spend_tip,
+            response: withdrawal,
+        } = wallet
+            .channel_withdrawal(req.tip, req.channel_id, req.notes)
+            .await?;
+        let outputs = withdrawal.opening.outputs.clone();
+        let tx_builder = MantleTxBuilder::new()
+            .push_op_with_opening(Op::ChannelWithdraw(withdrawal.op), withdrawal.opening)?;
+        // The withdrawal names the channel root of this tip. A funding that
+        // fails releases the notes of `tx_builder` in the wallet.
+        let lb_wallet_service::TipResponse {
+            tip,
+            response: funded_tx_builder,
+        } = wallet
+            .fund_tx(
+                Some(spend_tip),
+                tx_builder.clone(),
+                req.change_public_key,
+                req.funding_public_keys,
+                None,
+                Some(req.max_tx_fee),
+            )
+            .await?;
+        let reserved = added_nullifiers(&tx_builder, &funded_tx_builder);
+        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
+
+        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        let tx_hash = signed_tx.hash();
+
+        mempool::add_tx::<
+            Libp2pNetworkBackend,
+            MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
+            StorageAdapter,
+            ValidatedTx,
+            NtpTimeBackend,
+            RuntimeServiceId,
+        >(&handle, signed_tx, Hashable::hash)
+        .await?;
+
+        Ok::<_, overwatch::DynError>(ChannelWithdrawResponseBody {
+            hash: tx_hash,
+            outputs,
         })
     })
 }

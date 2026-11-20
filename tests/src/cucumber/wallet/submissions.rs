@@ -1343,6 +1343,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission_with_change(
         transaction_intent,
         in_memory_available_utxos,
         change_public_key,
+        None,
         WalletInputSelectionStrategy::LargestFirst,
     )
     .await
@@ -1350,6 +1351,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission_with_change(
 
 /// Prepare a user-wallet transaction with an explicit change recipient and
 /// input-selection strategy.
+#[expect(clippy::too_many_arguments, reason = "Transaction preparation inputs")]
 pub(crate) async fn prepare_user_wallet_transaction_submission_with_change_and_strategy(
     world: &mut CucumberWorld,
     step: &str,
@@ -1357,6 +1359,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission_with_change_and_s
     transaction_intent: WalletTransactionIntent,
     in_memory_available_utxos: Option<&WalletUtxos>,
     change_public_key: Option<ZkPublicKey>,
+    gas_prices: Option<GasPrices>,
     input_selection_strategy: WalletInputSelectionStrategy,
 ) -> Result<PreparedUserWalletSubmission, StepError> {
     let reserved = reserve_user_wallet_transaction_submission(
@@ -1368,7 +1371,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission_with_change_and_s
         None,
         change_public_key,
         input_selection_strategy,
-        None,
+        gas_prices,
         0,
     )
     .await?;
@@ -1440,11 +1443,26 @@ async fn reserve_user_wallet_transaction_submission(
         input_selection_strategy,
     );
 
-    let transaction_intent = if let Some(gas_prices) = gas_prices {
-        transaction_intent.with_gas_prices(gas_prices)
+    let gas_prices = if let Some(gas_prices) = gas_prices {
+        gas_prices
     } else {
-        transaction_intent
+        let client = world.resolve_node_http_client(&wallet.node_name)?;
+        let prices = client
+            .gas_prices(None)
+            .await
+            .map_err(|source| StepError::StepFail {
+                message: format!(
+                    "Step `{step}` error: gas prices request failed for wallet \
+                     `{sender_wallet_name}` on node `{}`: {source}",
+                    wallet.node_name
+                ),
+            })?;
+        GasPrices {
+            execution_base_gas_price: prices.execution_base_gas_price,
+            storage_gas_price: prices.storage_gas_price,
+        }
     };
+    let transaction_intent = transaction_intent.with_gas_prices(gas_prices);
 
     let fork_digest = world.fork_digest_in_force().await?;
     let submission = prepare_wallet_transaction_work_item(

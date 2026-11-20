@@ -40,8 +40,9 @@ Feature: Blend
   Scenario: Join Blend via API declaration
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 1           | 2000         |
+      | 1             | 1           | 10000        |
     And I have a cluster with capacity of 1 nodes
+    And the cluster uses SDP funding of 20000 per provider split across 1 notes
     And no nodes are declared as blend providers
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
@@ -62,8 +63,9 @@ Feature: Blend
   Scenario: Join Blend via API declaration without a service note
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 1           | 2000         |
+      | 1             | 1           | 10000        |
     And I have a cluster with capacity of 1 nodes
+    And the cluster uses SDP funding of 20000 per provider split across 1 notes
     And no nodes are declared as blend providers
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
@@ -82,8 +84,8 @@ Feature: Blend
   Scenario: Transactions submitted through Blend come back through the mempool
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
-      | 2             | 2           | 1000         |
+      | 1             | 2           | 10000        |
+      | 2             | 2           | 10000        |
       | 3             | 0           | 0            |
     And I have deployment config override "eras.0.cryptarchia.pow_config.blend.base_difficulty" as "1"
     And I have a cluster with capacity of 4 nodes

@@ -7,7 +7,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Value,
-        notes::NoteNullifier,
+        notes::{InputNullifiers, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{
             MantleTxBuilder,
@@ -19,7 +19,7 @@ use lb_core::{
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
-use lb_wallet::{KnownNote, KnownNotes, WalletBlock, WalletError, WalletState};
+use lb_wallet::{KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -392,6 +392,22 @@ impl<'u> ServiceState<'u> {
             funding_pks,
             &excluded,
         )
+    }
+
+    pub fn note_set_spend(
+        &self,
+        tip: HeaderId,
+        spend: NoteSetSpend,
+    ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
+        self.wallet.spend_state(tip)?.note_set_spend(
+            spend,
+            self.wallet.known_notes(),
+            &self.pending_notes.nullifiers(),
+        )
+    }
+
+    pub fn is_pending_note(&self, nullifier: &NoteNullifier) -> bool {
+        self.pending_notes.notes.contains_key(nullifier)
     }
 
     pub fn reserve_pending_notes(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {

@@ -27,6 +27,29 @@ async fn step_wallet_has_at_least_coins(
     .await
 }
 
+#[when(expr = "wallet {string} has {int} or more spendable outputs in {int} seconds")]
+#[then(expr = "wallet {string} has {int} or more spendable outputs in {int} seconds")]
+async fn step_wallet_has_at_least_spendable_coins(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: String,
+    min_coin_count: usize,
+    time_out_seconds: u64,
+) -> StepResult {
+    wait_for_wallet_output_state(
+        world,
+        &step.value,
+        wallet_name,
+        Some(&min_coin_count),
+        None,
+        None,
+        None,
+        time_out_seconds,
+        WalletOutputState::Available,
+    )
+    .await
+}
+
 #[when(expr = "wallet {string} has {int} or less outputs in {int} seconds")]
 #[then(expr = "wallet {string} has {int} or less outputs in {int} seconds")]
 async fn step_wallet_has_at_most_coins(
@@ -115,6 +138,29 @@ async fn step_wallet_has_at_least_value(
         None,
         time_out_seconds,
         WalletOutputState::OnChain,
+    )
+    .await
+}
+
+#[when(expr = "wallet {string} has {int} or more spendable LGO in {int} seconds")]
+#[then(expr = "wallet {string} has {int} or more spendable LGO in {int} seconds")]
+async fn step_wallet_has_at_least_spendable_value(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: String,
+    min_token_value: u64,
+    time_out_seconds: u64,
+) -> StepResult {
+    wait_for_wallet_output_state(
+        world,
+        &step.value,
+        wallet_name,
+        None,
+        None,
+        Some(&lgo_to_units(min_token_value)),
+        None,
+        time_out_seconds,
+        WalletOutputState::Available,
     )
     .await
 }
