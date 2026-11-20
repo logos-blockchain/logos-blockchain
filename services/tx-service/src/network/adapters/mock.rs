@@ -93,7 +93,10 @@ impl<RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for MockAdapter<RuntimeS
         let (sender, receiver) = tokio::sync::oneshot::channel();
         if let Err(error) = self
             .network_relay
-            .send(NetworkMsg::SubscribeToPubSub { sender })
+            .send(NetworkMsg::SubscribeToPubSub {
+                topics: [MOCK_PUB_SUB_TOPIC.into()].into(),
+                sender,
+            })
             .await
         {
             tracing::error!(target: LOG_TARGET, err = ?error);

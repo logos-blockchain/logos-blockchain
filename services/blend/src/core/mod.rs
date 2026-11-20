@@ -348,6 +348,11 @@ where
         )
         .await?;
 
+        // Chain-network takes requests once it's ready, which it is after the
+        // initial block download, however long that takes.
+        wait_until_services_are_ready!(&overwatch_handle, None, Dispatcher::ChainNetworkService)
+            .await?;
+
         let kms_api = async {
             let kms_outbound_relay = overwatch_handle
                 .relay::<PreloadKmsService<_>>()
@@ -599,6 +604,8 @@ where
                 BlendEpochState {
                     aged,
                     epoch,
+                    first_slot,
+                    last_slot,
                     lottery_0,
                     lottery_1,
                     nonce,
@@ -642,6 +649,8 @@ where
                             message_quota: config.epoch_leadership_quota(),
                             lottery_0,
                             lottery_1,
+                            pol_window_first_slot: first_slot.into_inner(),
+                            pol_window_last_slot: last_slot.into_inner(),
                         },
                         poq_pow_public_inputs: PowInputs {
                             pow_blend_difficulty: pow_difficulty,

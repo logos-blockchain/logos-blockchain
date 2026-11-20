@@ -163,6 +163,8 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
             pol_eligible_aged: ZkHash::ZERO,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
+            pol_window_first_slot: 0,
+            pol_window_last_slot: 0,
         };
         let signing_key = Ed25519PublicKey::from_bytes(&[10; ED25519_PUBLIC_KEY_SIZE]).unwrap();
         PublicInputs {

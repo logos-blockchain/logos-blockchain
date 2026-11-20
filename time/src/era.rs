@@ -321,6 +321,21 @@ where
         )
     }
 
+    /// The last slot of `epoch`, counted in the epoch length of its era.
+    ///
+    /// # Panics
+    ///
+    /// If the slot does not fit a [`Slot`].
+    #[must_use]
+    pub fn last_slot_for_epoch(&self, epoch: Epoch) -> Slot {
+        let epoch_length = self.at_epoch(epoch).parameters.epoch_length().get();
+        Slot::new(
+            self.starting_slot_for_epoch(epoch)
+                .into_inner()
+                .strict_add(epoch_length - 1),
+        )
+    }
+
     /// The epoch `slot` belongs to, counted in the epoch length of its era.
     ///
     /// # Panics
@@ -571,6 +586,20 @@ mod tests {
             let start = eras.starting_slot_for_epoch(epoch);
             assert_eq!(eras.epoch_for_slot(start), epoch);
             assert_eq!(eras.at_epoch(epoch).era, eras.at_slot(start).era);
+        }
+    }
+
+    #[test]
+    fn every_epoch_ends_where_the_next_one_starts() {
+        let eras = four_eras();
+        for epoch in (0..=7).map(Epoch::new) {
+            let last_slot = eras.last_slot_for_epoch(epoch);
+            assert_eq!(eras.epoch_for_slot(last_slot), epoch);
+            let next_epoch = Epoch::new(epoch.into_inner() + 1);
+            assert_eq!(
+                last_slot.into_inner() + 1,
+                eras.starting_slot_for_epoch(next_epoch).into_inner()
+            );
         }
     }
 

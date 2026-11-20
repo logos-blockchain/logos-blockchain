@@ -41,6 +41,8 @@ pub fn leader_witness_data() -> (PoQChainInputsData, PoQCommonInputsData, PoQWal
         pol_epoch_nonce: fr(&json["pol_epoch_nonce"]),
         lottery_0: fr(&json["pol_t0"]),
         lottery_1: fr(&json["pol_t1"]),
+        pol_window_first_slot: u64_value(&json["pol_window_first_slot"]),
+        pol_window_last_slot: u64_value(&json["pol_window_last_slot"]),
     };
     let common = PoQCommonInputsData {
         core_quota: quota(&json["core_quota"]),

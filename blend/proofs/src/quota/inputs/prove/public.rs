@@ -71,6 +71,8 @@ pub struct LeaderInputs {
     pub lottery_0: Fr,
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_1: Fr,
+    pub pol_window_first_slot: u64,
+    pub pol_window_last_slot: u64,
 }
 
 impl Debug for LeaderInputs {
@@ -87,6 +89,8 @@ impl Debug for LeaderInputs {
             .field("message_quota", &self.message_quota)
             .field("lottery_0", &hex::encode(fr_to_bytes(&self.lottery_0)))
             .field("lottery_1", &hex::encode(fr_to_bytes(&self.lottery_1)))
+            .field("pol_window_first_slot", &self.pol_window_first_slot)
+            .field("pol_window_last_slot", &self.pol_window_last_slot)
             .finish()
     }
 }

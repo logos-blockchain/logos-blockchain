@@ -113,7 +113,9 @@ impl KnownNote {
     }
 }
 
-pub type KnownNotes = HashMap<NoteCommitment, KnownNote>;
+/// The notes the wallet knows the openings of, by commitment. A persistent
+/// map, as the wallet's recovery state takes a copy of it at every update.
+pub type KnownNotes = rpds::HashTrieMapSync<NoteCommitment, KnownNote>;
 
 pub type NotePaths = rpds::HashTrieMapSync<NoteCommitment, MerklePath>;
 
@@ -765,6 +767,10 @@ fn apply_update(
     let note_set = update.note_set;
     let mut mmr = commitments.get(&note_set).cloned().unwrap_or_default();
 
+    let push_error = |error: PushWithPathsError| match error {
+        PushWithPathsError::MmrFull(_) => WalletError::MmrFull(note_set),
+        PushWithPathsError::InvalidTrackedPath(error) => error.into(),
+    };
     for commitment in &update.commitments {
         let leaf = mmr.len();
         let (mut settled, mut paths): (Vec<OwnedNote>, Vec<MerklePath>) = notes
@@ -772,28 +778,33 @@ fn apply_update(
             .filter(|owned| owned.note_set == note_set && owned.path.is_settled_by(leaf))
             .map(|owned| (owned.clone(), owned.path.clone()))
             .unzip();
-        let (next, path) = mmr
-            .push_with_settled_paths(*commitment, &mut paths)
-            .map_err(|error| match error {
-                PushWithPathsError::MmrFull(_) => WalletError::MmrFull(note_set),
-                PushWithPathsError::InvalidTrackedPath(error) => error.into(),
-            })?;
-        mmr = next;
-        for (owned, path) in settled.iter_mut().zip(paths) {
-            owned.path = path;
-        }
-        if let Some(known_note) = known
+        // Only a note the wallet adopts needs a path of its own, which takes a
+        // hash for every level of the set. The others take only the hashes of
+        // a plain push: a settled path changes at the merge heights alone.
+        let adopted = if let Some(known_note) = known
             .get(commitment)
             .filter(|known| known.is_adoptable_in(note_set, spent))
         {
-            settled.push(OwnedNote {
+            let (next, path) = mmr
+                .push_with_settled_paths(*commitment, &mut paths)
+                .map_err(push_error)?;
+            mmr = next;
+            Some(OwnedNote {
                 note: known_note.note,
                 note_set,
                 nullifier: known_note.nullifier,
                 path,
-            });
+            })
+        } else {
+            mmr = mmr
+                .push_updating_paths(*commitment, &mut paths)
+                .map_err(push_error)?;
+            None
+        };
+        for (owned, path) in settled.iter_mut().zip(paths) {
+            owned.path = path;
         }
-        for owned in settled {
+        for owned in settled.into_iter().chain(adopted) {
             notes.insert_mut(owned.note.commitment(), owned);
         }
     }
@@ -847,7 +858,7 @@ impl<KeyId> Wallet<KeyId> {
             target: LOG_TARGET,
             ?genesis,
             n_known_keys = known_keys.len(),
-            n_known_notes = known_notes.len(),
+            n_known_notes = known_notes.size(),
             n_owned_notes = wallet_state.notes.size(),
             "initializing wallet with genesis note sets"
         );
@@ -879,7 +890,7 @@ impl<KeyId> Wallet<KeyId> {
             target: LOG_TARGET,
             ?lib,
             n_known_keys = known_keys.len(),
-            n_known_notes = known_notes.len(),
+            n_known_notes = known_notes.size(),
             n_owned_notes = wallet_state.notes.size(),
             n_aged_paths = wallet_state.aged_paths.size(),
             "initializing wallet with LIB wallet state"
@@ -903,11 +914,10 @@ impl<KeyId> Wallet<KeyId> {
     }
 
     pub fn add_known_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
-        self.known_notes.extend(
-            notes
-                .into_iter()
-                .map(|known_note| (known_note.note.commitment(), known_note)),
-        );
+        for known_note in notes {
+            self.known_notes
+                .insert_mut(known_note.note.commitment(), known_note);
+        }
     }
 
     #[must_use]
@@ -1089,6 +1099,28 @@ impl<KeyId> Wallet<KeyId> {
                 "Pruned wallet states for pruned blocks"
             );
         }
+    }
+
+    /// Forgets the known notes the wallet state at `lib` holds or has spent:
+    /// no block above the LIB appends them again.
+    pub fn forget_final_known_notes(&mut self, lib: HeaderId) -> Result<(), WalletError> {
+        let lib_state = self.wallet_state_at(lib)?;
+        let final_notes: Vec<NoteCommitment> = self
+            .known_notes
+            .iter()
+            .filter(|&(commitment, known)| {
+                lib_state.notes.contains_key(commitment)
+                    || lib_state.spent.contains(&SpentNullifier {
+                        note_set: known.note_set,
+                        nullifier: known.nullifier,
+                    })
+            })
+            .map(|(commitment, _)| *commitment)
+            .collect();
+        for commitment in &final_notes {
+            self.known_notes.remove_mut(commitment);
+        }
+        Ok(())
     }
 }
 
@@ -1859,7 +1891,9 @@ mod tests {
             },
         ];
         wallet.add_known_notes(split_notes);
-        known.extend(split_notes.map(|known| (known.note.commitment(), known)));
+        for split_note in split_notes {
+            known.insert_mut(split_note.note.commitment(), split_note);
+        }
         // The exact note is spent on, as a deposit or a declaration spends it.
         let paid = Note::new(100, Fr::from(4u64), bob);
         let builder = MantleTxBuilder::new()

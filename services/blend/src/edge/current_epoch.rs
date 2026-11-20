@@ -224,6 +224,8 @@ where
                 pol_epoch_nonce: awaiting.info.nonce,
                 pol_eligible_aged: awaiting.info.aged,
                 message_quota: settings.epoch_leadership_quota(),
+                pol_window_first_slot: awaiting.info.first_slot.into_inner(),
+                pol_window_last_slot: awaiting.info.last_slot.into_inner(),
             },
             pow: PowInputs {
                 pow_blend_difficulty: awaiting.info.pow_difficulty,

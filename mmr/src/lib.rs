@@ -205,14 +205,7 @@ where
         paths: &mut [MerklePath],
         update_above_merge: bool,
     ) -> Result<(Self, MerklePath), PushWithPathsError> {
-        if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
-            return Err(PushWithPathsError::MmrFull(MmrFull));
-        }
-
-        for path in paths.iter() {
-            path.validate_for_height(MAX_HEIGHT)?;
-            path.validate_leaf_index(self.len())?;
-        }
+        self.check_push(paths)?;
 
         // The iterator creates exactly MAX_HEIGHT - 1 siblings. Supported MMR
         // heights therefore create between 0 and 32 siblings, so this cannot
@@ -225,6 +218,54 @@ where
         )
         .expect("supported MMR height must produce a globally bounded internal path");
 
+        Ok((
+            self.push_updating(elem, paths, update_above_merge, Some(&mut new_path)),
+            new_path,
+        ))
+    }
+
+    /// Push an element, updating any tracked [`MerklePath`]s as
+    /// [`push_with_paths`](Self::push_with_paths) does, but with no path for
+    /// the pushed element.
+    ///
+    /// Only the hashes the tracked paths need are computed: a push that no
+    /// tracked path is a sibling of hashes no more than [`push`](Self::push)
+    /// does, where building the pushed element's path takes a hash for every
+    /// level up to `MAX_HEIGHT`.
+    pub fn push_updating_paths(
+        &self,
+        elem: T,
+        paths: &mut [MerklePath],
+    ) -> Result<Self, PushWithPathsError> {
+        self.check_push(paths)?;
+        Ok(self.push_updating(elem, paths, true, None))
+    }
+
+    /// Whether there's room for a push that updates `paths`, and they are
+    /// paths of this MMR.
+    fn check_push(&self, paths: &[MerklePath]) -> Result<(), PushWithPathsError> {
+        if self.roots.peek().is_some_and(|r| r.height == MAX_HEIGHT) {
+            return Err(PushWithPathsError::MmrFull(MmrFull));
+        }
+
+        for path in paths {
+            path.validate_for_height(MAX_HEIGHT)?;
+            path.validate_leaf_index(self.len())?;
+        }
+        Ok(())
+    }
+
+    /// Push `elem`, which [`check_push`](Self::check_push) cleared with
+    /// `paths`, updating `paths`, above the merge only if
+    /// `update_above_merge`, and, if given, the pushed element's `new_path`.
+    fn push_updating(
+        &self,
+        elem: T,
+        paths: &mut [MerklePath],
+        update_above_merge: bool,
+        mut new_path: Option<&mut MerklePath>,
+    ) -> Self {
+        let new_leaf = self.len();
         let mut last_root = Root {
             root: *elem.as_ref(),
             height: 1,
@@ -236,7 +277,7 @@ where
         while let Some(root) = roots.peek().copied() {
             if last_root.height == root.height {
                 roots.pop_mut();
-                update_paths_at_merge(last_root, root, paths, &mut new_path);
+                update_paths_at_merge(last_root, root, paths, new_leaf, new_path.as_deref_mut());
                 last_root = Root {
                     root: Hash::compress(&[root.root, last_root.root]),
                     height: last_root.height + 1,
@@ -255,18 +296,16 @@ where
             last_root,
             roots.iter().copied(),
             if update_above_merge { paths } else { &mut [] },
-            &mut new_path,
+            new_leaf,
+            new_path,
         );
 
         roots = roots.push(last_root);
 
-        Ok((
-            Self {
-                roots,
-                _hash: std::marker::PhantomData,
-            },
-            new_path,
-        ))
+        Self {
+            roots,
+            _hash: std::marker::PhantomData,
+        }
     }
 
     #[must_use]
@@ -803,6 +842,48 @@ mod test {
                 .unwrap();
             mmr_b = new_b;
             assert_eq!(mmr_a.frontier_root(), mmr_b.frontier_root());
+        }
+    }
+
+    /// Pushing without a path of the pushed element's own keeps the tracked
+    /// paths as building it does, and the MMR as it is.
+    #[test]
+    fn test_push_updating_paths_matches_push_with_paths() {
+        const HEIGHT: u8 = 8;
+        let mut mmr = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let mut with_paths = <MerkleMountainRange<TestFr, ZkHasher, HEIGHT>>::new();
+        let (mut paths, mut expected_paths, mut leaves) = (Vec::new(), Vec::new(), Vec::new());
+
+        for i in 0u64..100 {
+            let bytes = i.to_le_bytes();
+            let (next, new_path) = with_paths
+                .push_with_paths(TestFr::from(bytes.as_ref()), &mut expected_paths)
+                .unwrap();
+            with_paths = next;
+            // Every third element is tracked, the rest are pushed without a
+            // path of their own.
+            if i % 3 == 0 {
+                let (next, path) = mmr
+                    .push_with_paths(TestFr::from(bytes.as_ref()), &mut paths)
+                    .unwrap();
+                mmr = next;
+                paths.push(path);
+                expected_paths.push(new_path);
+                leaves.push(leaf(bytes.as_ref()));
+            } else {
+                mmr = mmr
+                    .push_updating_paths(TestFr::from(bytes.as_ref()), &mut paths)
+                    .unwrap();
+            }
+
+            assert_eq!(mmr.frontier_root(), with_paths.frontier_root());
+            assert_eq!(
+                paths, expected_paths,
+                "paths differ after pushing element {i}"
+            );
+            for (path, leaf_hash) in paths.iter().zip(&leaves) {
+                assert!(path.verify::<ZkHasher>(*leaf_hash, mmr.frontier_root()));
+            }
         }
     }
 

@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 
 use super::MempoolAdapter as MempoolAdapterTrait;
 
+#[derive(Clone)]
 pub struct MempoolAdapter<Tx> {
     mempool_relay: OutboundRelay<MempoolMsg<HeaderId, Tx, Tx, TxHash>>,
 }

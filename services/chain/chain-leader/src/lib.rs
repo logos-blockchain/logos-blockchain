@@ -10,9 +10,13 @@ mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, pin::Pin, sync::Arc};
+use std::{
+    fmt::Display,
+    pin::{Pin, pin},
+    sync::Arc,
+};
 
-use futures::{Stream, StreamExt as _, stream};
+use futures::{FutureExt as _, Stream, StreamExt as _};
 use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
@@ -23,7 +27,7 @@ use lb_core::{
     block::{Block, BlockTransactions, Error as BlockError, UncleHeaders},
     header::HeaderId,
     mantle::{
-        OpRef, SignedOps,
+        Note, OpRef, SignedOps,
         ledger::verification_mode::StandardMode,
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
@@ -56,10 +60,11 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::{
-    sync::{mpsc, oneshot},
+    runtime::Handle,
+    sync::{mpsc, oneshot, watch},
     task::JoinError,
 };
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 use tx_selection::{TransactionSelection, block_leader_reward, select_transactions};
@@ -72,10 +77,51 @@ use crate::{
         PrivateInputsError, SlotContext, WinningNote, fetch_slot_context, find_winning_note,
         search_for_winning_slots,
     },
-    mempool::MempoolAdapter as _,
+    mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     proposal::{assemble_block, block_msg},
     relays::CryptarchiaConsensusRelays,
 };
+
+/// How many slots wait for the one underway before the next ones are skipped. A
+/// slot that doesn't win takes a fraction of a slot, so they only pile up
+/// behind a proof, or if the wallet or the KMS stalls, and one this far behind
+/// leaves its block little time anyway.
+const MAX_QUEUED_SLOTS: usize = 16;
+
+/// Checks each slot for a win and builds and publishes its block, in turn, so
+/// that a win builds on the block of the win before it rather than forking off
+/// it.
+///
+/// A build is given up on once `tip_slot` has moved past its slot, as its block
+/// would only come in behind the chain. A block of the same slot doesn't stop
+/// it: fork choice settles between the two. Publishing isn't given up on, as a
+/// block should not be left applied but unpublished.
+async fn propose_in_turn<Block, Build, Built, Publish, Published>(
+    mut slots: mpsc::Receiver<Slot>,
+    mut tip_slot: watch::Receiver<Slot>,
+    mut build: Build,
+    mut publish: Publish,
+) where
+    Build: FnMut(Slot) -> Built,
+    Built: Future<Output = Option<Block>>,
+    Publish: FnMut(Block) -> Published,
+    Published: Future<Output = ()>,
+{
+    while let Some(slot) = slots.recv().await {
+        tokio::select! {
+            built = build(slot) => {
+                if let Some(block) = built {
+                    publish(block).await;
+                }
+            }
+            // False, and so never taken, if the tip stops being followed first.
+            true = async { tip_slot.wait_for(|tip| *tip > slot).await.is_ok() } => {
+                metrics::consensus_proposals_create_failed("tip_passed");
+                error!(target: LOG_TARGET, "Giving up on the proposal for {slot:?}: the tip has moved past it");
+            }
+        }
+    }
+}
 
 fn log_sdp_activity_selected_for_proposal<Tx>(block: &Block<Tx>, ledger_state: &LedgerState)
 where
@@ -168,6 +214,8 @@ pub enum Error {
     Proof(#[from] LeaderProofError),
     #[error("Proof generation task failed: {0}")]
     ProofTask(#[from] JoinError),
+    #[error("Transaction selection task failed: {0}")]
+    SelectionTask(#[source] JoinError),
 }
 
 impl From<WalletApiError> for Error {
@@ -401,7 +449,12 @@ where
 
         // Only the chain service is needed before the chain is online: the
         // rest is set up once the leader starts proposing.
-        let mut relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
+        let mut relays: CryptarchiaConsensusRelays<
+            BlendService,
+            Mempool,
+            MempoolNetAdapter,
+            RuntimeServiceId,
+        > = CryptarchiaConsensusRelays::from_service_resources_handle::<
             Self,
             TimeBackend,
             CryptarchiaService,
@@ -440,8 +493,6 @@ where
                 .expect("Relay with KMS service should be available."),
         );
 
-        let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
-
         let (mut current_era, mut slot_timer, mut era_transition_ends) = {
             let time_service_api =
                 TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(
@@ -453,6 +504,45 @@ where
             let era_transition_ends = time_service_api.subscribe_to_era_transition_ends().await?;
             (current_slot_tick.era, slot_timer, era_transition_ends)
         };
+
+        // Proposals take seconds of proving, so the loop polls the one underway
+        // along with its other inputs, to see every slot.
+        let (slots, slots_rx) = mpsc::channel(MAX_QUEUED_SLOTS);
+        // The slot of the tip, for a build to stop once the tip has moved past
+        // its slot. A build checks the tip as it starts, so genesis will do
+        // until a block comes in.
+        let mut new_blocks = BroadcastStream::new(cryptarchia_api.subscribe_new_blocks().await?);
+        let (tip_slot, tip_slot_rx) = watch::channel(Slot::genesis());
+        // A copy, as the loop needs the relays' adapter mutably at era changes.
+        let mempool = relays.mempool_adapter().clone();
+        let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
+        let mut proposing = pin!(
+            propose_in_turn(
+                slots_rx,
+                tip_slot_rx,
+                |slot| {
+                    Self::build_block_for(
+                        slot,
+                        &cryptarchia_api,
+                        &wallet_api,
+                        &kms_api,
+                        &mempool,
+                        &era_schedule,
+                        wallet_config.funding_pk,
+                    )
+                },
+                |(block, reward)| {
+                    Self::apply_and_publish_block_proposal(
+                        block,
+                        reward,
+                        &wallet_api,
+                        &chain_network_api,
+                        &blend_adapter,
+                    )
+                },
+            )
+            .fuse()
+        );
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -470,92 +560,19 @@ where
                             relays.mempool_adapter_mut().rotate_era(era).await;
                             current_era = era;
                         }
-                        let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
-                            fetch_slot_context(&cryptarchia_api, &wallet_api, slot).await
-                        else {
-                            error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
-                            continue;
-                        };
-                        tracing::debug!(
-                            target: LOG_TARGET,
-                            event = "leader_eligible_notes",
-                            path = "block_production",
-                            slot = ?slot,
-                            epoch = ?epoch,
-                            note_count = eligible_aged.len(),
-                            total_value = eligible_aged.iter().map(|note| note.note.note.value).sum::<u64>(),
-                            "Eligible notes for block production"
-                        );
-
-                        // The block-proposal proof must prove the winning note is still
-                        // unspent, so it needs the latest tip ledger state (fetched per slot).
-                        let tip_state = match cryptarchia_api.get_ledger_state(wallet_tip).await {
-                            Ok(Some(state)) => state,
-                            Ok(None) => {
-                                error!(target: LOG_TARGET, "Ledger state not found for tip {wallet_tip:?}");
-                                continue;
-                            }
-                            Err(e) => {
-                                error!(target: LOG_TARGET, "Failed to get ledger state for tip: {e}");
-                                continue;
-                            }
-                        };
-
-                        // The proof is produced once the body is fixed, in `propose_block`.
-                        let winning = find_winning_note(
-                            &eligible_aged,
-                            &epoch_state,
-                            tip_state.latest_note_sets(),
-                            slot,
-                            &kms_api,
-                        )
-                        .await;
-
-                        if let Some(winning) = winning {
-                            // TODO: spawn as a separate task?
-                            match Box::pin(Self::propose_block(
-                                wallet_tip,
-                                slot,
-                                winning,
-                                &cryptarchia_api,
-                                &wallet_api,
-                                &kms_api,
-                                &relays,
-                                tip_state,
-                                &era_schedule,
-                                wallet_config.funding_pk,
-                            ))
-                            .await
-                            {
-                                Ok(block) => {
-                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
-                                }
-                                Err(e) => {
-                                    let proof_stage = match e {
-                                        Error::PrivateInputs(_) => Some("private_inputs"),
-                                        Error::Proof(_) => Some("proof_generation"),
-                                        Error::ProofTask(_) => Some("proof_task"),
-                                        _ => None,
-                                    };
-                                    if let Some(stage) = proof_stage {
-                                        metrics::consensus_proposals_create_failed(stage);
-                                        error!(
-                                            target: LOG_TARGET,
-                                            diagnostic = BLEND_REACHABILITY,
-                                            event = "leadership_proof_failure",
-                                            epoch = u32::from(era_schedule.epoch_for_slot(slot)),
-                                            slot = u64::from(slot),
-                                            error = %e,
-                                            "Failed to build leadership proof"
-                                        );
-                                    } else {
-                                        metrics::consensus_proposals_create_failed("propose_block");
-                                        error!(target: LOG_TARGET, "{e}");
-                                    }
-                                }
-                            }
+                        if slots.try_send(slot).is_err() {
+                            metrics::consensus_proposals_create_failed("slots_queue_full");
+                            error!(target: LOG_TARGET, "Too many slots waiting for the one underway: skipping {slot:?}");
                         }
                     }
+
+                    Some(event) = new_blocks.next() => match event {
+                        Ok(event) => {
+                            tip_slot.send_replace(event.tip_slot);
+                        }
+                        // The next block brings the tip's slot up to date.
+                        Err(lagged) => debug!(target: LOG_TARGET, "Missed new blocks: {lagged}"),
+                    },
 
                     Some(transition_end) = era_transition_ends.next() => {
                         relays.mempool_adapter_mut().complete_era_transition(transition_end.era()).await;
@@ -564,6 +581,8 @@ where
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
                         Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule);
                     }
+
+                    () = &mut proposing => {}
                 }
             }
         };
@@ -648,11 +667,133 @@ where
         + AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
+    /// Builds the block of `slot` on the current tip, if a note of the node's
+    /// wins it, with its reward note.
+    async fn build_block_for(
+        slot: Slot,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
+        wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
+        kms_api: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+        mempool: &MempoolAdapter<Mempool::Item>,
+        era_schedule: &EraScheduledConfig,
+        reward_public_key: ZkPublicKey,
+    ) -> Option<(Block<Mempool::Item>, Note)> {
+        if Self::tip_has_passed(slot, cryptarchia_api).await {
+            return None;
+        }
+
+        let Some(SlotContext {
+            wallet_tip,
+            epoch_state,
+            eligible_aged,
+            ..
+        }) = fetch_slot_context(cryptarchia_api, wallet_api, slot).await
+        else {
+            error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
+            return None;
+        };
+        tracing::debug!(
+            target: LOG_TARGET,
+            event = "leader_eligible_notes",
+            path = "block_production",
+            slot = ?slot,
+            epoch = ?epoch_state.epoch,
+            note_count = eligible_aged.len(),
+            total_value = eligible_aged.iter().map(|note| note.note.note.value).sum::<u64>(),
+            "Eligible notes for block production"
+        );
+        let tip_state = Self::tip_state(wallet_tip, cryptarchia_api).await?;
+
+        // The witness of a win shows the note unspent at the tip, so the slot
+        // is checked here, on the tip the block is built on. A winning note
+        // whose witness fails, such as one spent since the epoch snapshot,
+        // leaves the slot to the next winning note. The proof is produced once
+        // the body is fixed, in `propose_block`.
+        let latest = tip_state.latest_note_sets();
+        let winning =
+            find_winning_note(&eligible_aged, &epoch_state, latest, slot, kms_api).await?;
+
+        Box::pin(Self::propose_block(
+            wallet_tip,
+            slot,
+            winning,
+            cryptarchia_api,
+            wallet_api,
+            kms_api,
+            mempool,
+            tip_state,
+            era_schedule,
+            reward_public_key,
+        ))
+        .await
+        .map_err(|e| {
+            let proof_stage = match e {
+                Error::PrivateInputs(_) => Some("private_inputs"),
+                Error::Proof(_) => Some("proof_generation"),
+                Error::ProofTask(_) => Some("proof_task"),
+                _ => None,
+            };
+            if let Some(stage) = proof_stage {
+                metrics::consensus_proposals_create_failed(stage);
+                error!(
+                    target: LOG_TARGET,
+                    diagnostic = BLEND_REACHABILITY,
+                    event = "leadership_proof_failure",
+                    epoch = u32::from(era_schedule.epoch_for_slot(slot)),
+                    slot = u64::from(slot),
+                    error = %e,
+                    "Failed to build leadership proof"
+                );
+            } else {
+                metrics::consensus_proposals_create_failed("propose_block");
+                error!(target: LOG_TARGET, "{e}");
+            }
+        })
+        .ok()
+    }
+
+    /// Whether the tip is at or past `slot`, as it can get while the slot waits
+    /// its turn. A block has to come after its parent, and the epoch state of a
+    /// slot behind the tip can't be fetched, so this is to be asked first.
+    async fn tip_has_passed(
+        slot: Slot,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
+    ) -> bool {
+        let Ok(info) = cryptarchia_api.info().await else {
+            return false;
+        };
+        let tip_slot = info.cryptarchia_info.slot;
+        if tip_slot < slot {
+            return false;
+        }
+        debug!(target: LOG_TARGET, ?slot, ?tip_slot, "Skipping a slot the tip has passed");
+        true
+    }
+
+    /// The ledger state at `tip`, which the proof of a win needs to show that
+    /// the winning note is still unspent.
+    async fn tip_state(
+        tip: HeaderId,
+        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
+    ) -> Option<LedgerState> {
+        match cryptarchia_api.get_ledger_state(tip).await {
+            Ok(Some(state)) => Some(state),
+            Ok(None) => {
+                error!(target: LOG_TARGET, "Ledger state not found for tip {tip:?}");
+                None
+            }
+            Err(e) => {
+                error!(target: LOG_TARGET, "Failed to get ledger state for tip: {e}");
+                None
+            }
+        }
+    }
+
     #[instrument(
         target = LOG_TARGET,
         level = "debug",
         skip(
-            relays,
+            mempool,
             ledger_state,
             era_schedule,
             cryptarchia_api,
@@ -674,23 +815,15 @@ where
         cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
-        relays: &CryptarchiaConsensusRelays<
-            BlendService,
-            Mempool,
-            MempoolNetAdapter,
-            RuntimeServiceId,
-        >,
-        mut ledger_state: LedgerState,
+        mempool: &MempoolAdapter<Mempool::Item>,
+        ledger_state: LedgerState,
         era_schedule: &EraScheduledConfig,
         reward_public_key: ZkPublicKey,
-    ) -> Result<Block<Mempool::Item>, Error> {
-        let txs_stream = relays
-            .mempool_adapter()
+    ) -> Result<(Block<Mempool::Item>, Note), Error> {
+        let view = mempool
             .get_mempool_view([0; 32].into())
             .await
             .map_err(Error::FetchBlockTransactions)?;
-
-        let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
         let uncle_headers = cryptarchia_api
             .select_uncles(parent, slot)
@@ -704,44 +837,51 @@ where
         // The witness proves the note unspent in the note sets of the parent.
         let wallet_inputs = winning.wallet_inputs;
 
-        // The proof is produced once the body is fixed, so the transactions are
-        // selected against the header without it; the block is applied with its
-        // proof by the chain network.
-        (ledger_state, _) = ledger_state.try_apply_proposal_header::<HeaderId>(
-            slot,
-            &uncle_headers.slots(),
-            era_schedule,
-        )?;
-        let header_state = ledger_state.clone();
-        // Collect all candidate transactions up front so the ones that fail can
-        // be retried across multiple rounds.
-        let TransactionSelection {
-            ledger_state,
-            selected_txs,
-            invalid_tx_hashes,
-        } = select_transactions(ledger_state, tx_stream.collect().await, era_schedule);
+        // Selection decodes, applies and verifies every candidate, reading the
+        // nullifier store as it goes, so it runs on the blocking pool.
+        let uncle_slots = uncle_headers.slots();
+        let schedule = era_schedule.clone();
+        let selection = spawn_blocking("logos/chain/leader-selection-blocking", move || {
+            // The proof is produced once the body is fixed, so the transactions
+            // are selected against the header without it; the block is applied
+            // with its proof by the chain network.
+            let (ledger_state, _) = ledger_state.try_apply_proposal_header::<HeaderId>(
+                slot,
+                &uncle_slots,
+                &schedule,
+            )?;
+            let header_state = ledger_state.clone();
+            // The view decodes each transaction as it's read, so it's read
+            // here. All candidates are collected up front, so the ones that
+            // fail can be retried across multiple rounds.
+            let candidates = Handle::current().block_on(view.collect());
+            let TransactionSelection {
+                ledger_state,
+                selected_txs,
+                invalid_tx_hashes,
+            } = select_transactions(ledger_state, candidates, &schedule);
+            let config = config_for_slot(&schedule, slot);
+            let txs = txs_for_block(
+                selected_txs,
+                config.max_transactions,
+                config.max_transactions_size,
+            );
+            // The PoL proves the reward note of the block, whose value is the
+            // reward of the transactions the block ends up holding.
+            let reward_value = block_leader_reward(header_state, txs.as_slice(), &schedule)?;
+            Ok::<_, Error>((ledger_state, txs, invalid_tx_hashes, reward_value))
+        });
+        let (ledger_state, txs, invalid_tx_hashes, reward_value) =
+            selection.await.map_err(Error::SelectionTask)??;
 
         if !invalid_tx_hashes.is_empty()
-            && let Err(e) = relays
-                .mempool_adapter()
-                .remove_transactions(&invalid_tx_hashes)
-                .await
+            && let Err(e) = mempool.remove_transactions(&invalid_tx_hashes).await
         {
             error!(target: LOG_TARGET, "Failed to remove invalid transactions from mempool: {e:?}");
         }
 
-        let valid_tx_stream = stream::iter(selected_txs);
-        let config = config_for_slot(era_schedule, slot);
-        let txs = txs_for_block(
-            valid_tx_stream,
-            config.max_transactions,
-            config.max_transactions_size,
-        )
-        .await;
-
-        // The PoL proves the reward note of the block, whose value is the
-        // reward of the transactions the block ends up holding.
-        let reward_value = block_leader_reward(header_state, txs.as_slice(), era_schedule)?;
+        // The wallet keeps the note only once the block is about to be
+        // published, so a build given up on leaves nothing behind.
         let reward = wallet_api
             .new_leader_reward(reward_value, reward_public_key)
             .await?;
@@ -759,27 +899,26 @@ where
                 reward.value,
             )
             .await?;
-        // The PoL is bound to the block ID, blocks carry no signature. The
-        // block ID covers the entropy contribution, set before proving.
-        let msg = block_msg(
-            &parent,
-            slot,
-            &uncle_headers,
-            txs.as_slice(),
-            &reward.commitment(),
-            reward.value,
-            &private.entropy_contribution(),
-        );
-        let private = private.with_msg(msg);
-        let max_transactions_size = config.max_transactions_size;
+        let max_transactions_size = config_for_slot(era_schedule, slot).max_transactions_size;
         let block = spawn_blocking("logos/chain/leader-proof-blocking", move || {
+            // The PoL is bound to the block ID, blocks carry no signature. The
+            // block ID covers the entropy contribution, set before proving.
+            let msg = block_msg(
+                &parent,
+                slot,
+                &uncle_headers,
+                txs.as_slice(),
+                &reward.commitment(),
+                reward.value,
+                &private.entropy_contribution(),
+            );
             assemble_block(
                 parent,
                 slot,
                 uncle_headers,
                 txs,
                 max_transactions_size,
-                private,
+                private.with_msg(msg),
             )
         })
         .await??;
@@ -803,16 +942,25 @@ where
             invalid_tx_hashes.len()
         );
 
-        Ok(block)
+        Ok((block, reward))
     }
 
     /// Apply our own proposed block to the chain and publish it to the blend
-    /// network.
+    /// network, once the wallet keeps its `reward` note: the reward then
+    /// can't be lost once the block is out.
     async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
+        reward: Note,
+        wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
         chain_network_api: &ChainNetworkServiceApi<ChainNetwork>,
         blend_adapter: &BlendAdapter<BlendService>,
     ) {
+        if let Err(e) = wallet_api.track_leader_reward(reward).await {
+            metrics::consensus_proposals_create_failed("reward_note");
+            error!(target: LOG_TARGET, "Failed to keep the reward note of our own proposed block {:?}: {e:?}", block.header().id());
+            return;
+        }
+
         if let Err(e) = chain_network_api
             .apply_block_and_reconcile_mempool(block.clone())
             .await
@@ -869,23 +1017,24 @@ where
     }
 }
 
-/// Select transactions for a block, truncating the stream at the first
-/// transaction that trips the era's limits: `max_transactions` transactions,
-/// taking at most `max_transactions_size` bytes.
-async fn txs_for_block<Tx, S>(
-    mut txs: S,
+/// Select transactions for a block, truncating `txs` at the first transaction
+/// that trips the era's limits: `max_transactions` transactions, taking at most
+/// `max_transactions_size` bytes.
+fn txs_for_block<Tx, Txs>(
+    txs: Txs,
     max_transactions: u16,
     max_transactions_size: u32,
 ) -> BlockTransactions<Tx>
 where
     Tx: StorageSize,
-    S: Stream<Item = Tx> + Unpin,
+    Txs: IntoIterator<Item = Tx>,
 {
+    let mut txs = txs.into_iter();
     let mut block_transactions_size: usize = 0;
     let mut selected_txs = Vec::new();
 
     while selected_txs.len() < usize::from(max_transactions) {
-        let Some(tx) = txs.next().await else {
+        let Some(tx) = txs.next() else {
             break;
         };
 
@@ -909,7 +1058,130 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        future::pending,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use tokio::{
+        task::yield_now,
+        time::{sleep, timeout},
+    };
+
     use super::*;
+
+    /// The slots, one after the other, with no more to come.
+    fn slots(slots: impl IntoIterator<Item = u64>) -> mpsc::Receiver<Slot> {
+        let (sender, receiver) = mpsc::channel(MAX_QUEUED_SLOTS);
+        for slot in slots {
+            assert!(sender.try_send(Slot::new(slot)).is_ok());
+        }
+        receiver
+    }
+
+    #[tokio::test]
+    async fn slots_are_proposed_one_at_a_time_and_in_order() {
+        let building = &AtomicUsize::new(0);
+        let published = &Mutex::new(Vec::new());
+        let (_tip, tip_slot) = watch::channel(Slot::genesis());
+
+        propose_in_turn(
+            slots([1, 2, 3]),
+            tip_slot,
+            async move |slot| {
+                assert_eq!(building.fetch_add(1, Ordering::SeqCst), 0);
+                sleep(Duration::from_millis(1)).await;
+                building.fetch_sub(1, Ordering::SeqCst);
+                Some(slot)
+            },
+            async move |slot| published.lock().unwrap().push(slot),
+        )
+        .await;
+
+        assert_eq!(
+            *published.lock().unwrap(),
+            [Slot::new(1), Slot::new(2), Slot::new(3)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_build_the_tip_moves_past_gives_way_to_the_next_slot() {
+        let published = &Mutex::new(Vec::new());
+        let (stuck, next) = (Slot::new(1), Slot::new(3));
+        let (tip, tip_slot) = watch::channel(Slot::genesis());
+
+        let proposing = propose_in_turn(
+            slots([1, 3]),
+            tip_slot,
+            move |slot| {
+                let build_is_stuck = slot == stuck;
+                async move {
+                    if build_is_stuck {
+                        pending::<()>().await;
+                    }
+                    Some(slot)
+                }
+            },
+            async move |slot| published.lock().unwrap().push(slot),
+        );
+        let a_later_block_comes_in = async {
+            yield_now().await;
+            tip.send_replace(Slot::new(2));
+        };
+        timeout(Duration::from_secs(10), async {
+            tokio::join!(proposing, a_later_block_comes_in)
+        })
+        .await
+        .expect("The stuck build should give way once the tip has moved past its slot.");
+
+        assert_eq!(*published.lock().unwrap(), [next]);
+    }
+
+    #[tokio::test]
+    async fn a_block_of_the_same_slot_leaves_the_build_alone() {
+        let published = &Mutex::new(Vec::new());
+        let (tip, tip_slot) = watch::channel(Slot::genesis());
+        let tip = &tip;
+
+        propose_in_turn(
+            slots([1]),
+            tip_slot,
+            async move |slot| {
+                tip.send_replace(slot);
+                sleep(Duration::from_millis(10)).await;
+                Some(slot)
+            },
+            async move |slot| published.lock().unwrap().push(slot),
+        )
+        .await;
+
+        assert_eq!(*published.lock().unwrap(), [Slot::new(1)]);
+    }
+
+    #[tokio::test]
+    async fn the_tip_leaves_publishing_alone() {
+        let published = &Mutex::new(Vec::new());
+        let (tip, tip_slot) = watch::channel(Slot::genesis());
+        let tip = &tip;
+
+        propose_in_turn(
+            slots([1]),
+            tip_slot,
+            async |slot| Some(slot),
+            async move |slot| {
+                tip.send_replace(Slot::new(2));
+                sleep(Duration::from_millis(10)).await;
+                published.lock().unwrap().push(slot);
+            },
+        )
+        .await;
+
+        assert_eq!(*published.lock().unwrap(), [Slot::new(1)]);
+    }
 
     #[derive(Clone)]
     struct TestTx {
@@ -929,57 +1201,57 @@ mod tests {
     /// [`MAX_TRANSACTIONS_SIZE`], as transaction sizes are counted.
     const MAX_SIZE: usize = MAX_TRANSACTIONS_SIZE as usize;
 
-    #[tokio::test]
-    async fn block_tx_selection_respects_transaction_count_limit() {
-        let txs = stream::iter(vec![TestTx { size: 1 }; usize::from(MAX_TRANSACTIONS) + 1]);
+    #[test]
+    fn block_tx_selection_respects_transaction_count_limit() {
+        let txs = vec![TestTx { size: 1 }; usize::from(MAX_TRANSACTIONS) + 1];
 
-        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE);
 
         assert_eq!(selected.len(), usize::from(MAX_TRANSACTIONS));
     }
 
-    #[tokio::test]
-    async fn block_tx_selection_respects_block_size_limit() {
-        let txs = stream::iter(vec![
+    #[test]
+    fn block_tx_selection_respects_block_size_limit() {
+        let txs = vec![
             TestTx { size: MAX_SIZE / 2 },
             TestTx { size: MAX_SIZE / 2 },
             TestTx { size: 1 },
-        ]);
+        ];
 
-        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE);
         let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected_size, MAX_SIZE);
     }
 
-    #[tokio::test]
-    async fn block_tx_selection_stops_at_first_transaction_that_does_not_fit() {
+    #[test]
+    fn block_tx_selection_stops_at_first_transaction_that_does_not_fit() {
         // The middle transaction does not fit alongside the first, so selection
         // must stop there and must not pull the third (which would fit on its
         // own) ahead of it — doing so could drop a dependency of the third.
-        let txs = stream::iter(vec![
+        let txs = vec![
             TestTx { size: 10 },
             TestTx { size: MAX_SIZE },
             TestTx { size: 10 },
-        ]);
+        ];
 
-        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE);
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected.as_slice()[0].storage_size(), 10);
     }
 
-    #[tokio::test]
-    async fn block_tx_selection_stops_at_leading_oversized_transaction() {
+    #[test]
+    fn block_tx_selection_stops_at_leading_oversized_transaction() {
         // A transaction larger than the whole block can never fit. Selection
         // stops at it rather than skipping past to later transactions, which
         // may depend on it. (In practice such transactions are filtered
         // out before reaching here, but the prefix invariant must hold
         // regardless.)
-        let txs = stream::iter(vec![TestTx { size: MAX_SIZE + 1 }, TestTx { size: 1 }]);
+        let txs = vec![TestTx { size: MAX_SIZE + 1 }, TestTx { size: 1 }];
 
-        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE);
 
         assert!(selected.is_empty());
     }

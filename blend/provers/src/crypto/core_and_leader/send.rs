@@ -330,6 +330,8 @@ mod test {
             pol_eligible_aged: ZkHash::ZERO,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
+            pol_window_first_slot: 0,
+            pol_window_last_slot: 0,
         };
         let mut processor =
             EpochCryptographicProcessor::<_, _, TestEpochChangeCoreAndLeaderProofsGenerator>::new(
@@ -403,6 +405,8 @@ mod test {
                     pol_eligible_aged: ZkHash::ZERO,
                     lottery_0: Fr::ZERO,
                     lottery_1: Fr::ZERO,
+                    pol_window_first_slot: 0,
+                    pol_window_last_slot: 0,
                 },
                 pow: PowInputs {
                     pow_quota: Quota::ONE,
