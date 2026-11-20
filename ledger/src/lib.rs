@@ -62,7 +62,7 @@ use lb_kv_store::{Bytes, DynKvStore};
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
 use nullifier_storage::{
-    LIB_STATE_KEY, NullifierStorage, PrunedVersions, attach_state, move_state, rebase_state,
+    LIB_STATE_KEY, NullifierStorage, PrunedVersions, attach_state, move_state,
 };
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
@@ -678,15 +678,9 @@ where
                 removed = removed.saturating_add(1);
             }
         }
+        // The kept states are left as they are: each dropped what the base
+        // held when its block was committed, and holds its blocks since.
         self.states.insert_mut(lib, lib_state);
-        // The overlays of the kept states shrink to what is above the new base.
-        let mut states = HashTrieMapSync::new_sync();
-        for (id, state) in &self.states {
-            let mut state = state.clone();
-            state.cryptarchia_ledger = rebase_state(state.cryptarchia_ledger)?;
-            states.insert_mut(*id, state);
-        }
-        self.states = states;
 
         let lib_ledger = &self
             .states
