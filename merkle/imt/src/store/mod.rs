@@ -502,35 +502,41 @@ where
     // Find the predecessor through the base index, skipping entries added
     // after this state, or search the state's leaves when growth favors a scan.
     fn base_predecessor(&self, key: NullifierKey) -> Result<Option<IndexedNullifier>, ImtError> {
-        let mut bound = key;
-        let mut considered_snapshot_scan = false;
-        loop {
-            let Some(found) = self
-                .store
-                .get_prev(&NullifierKey::prefix(), &bound.encode())
-                .map_err(ImtError::storage)?
-            else {
-                return Ok(None);
-            };
-            let found = IndexedNullifier {
-                key: NullifierKey::decode(&found.key)
-                    .map_err(|error| ImtError::corrupted("nullifier key", &error))?,
-                entry: IndexEntry::decode(&found.value)
-                    .map_err(|error| ImtError::corrupted("index entry", &error))?,
-            };
-            if found.entry.leaf_index.as_u64() < self.len {
-                return Ok(Some(found));
-            }
-            // Consider scanning once, after the first newer entry. A valid
-            // first result can return without reading the base metadata.
-            if !considered_snapshot_scan {
-                considered_snapshot_scan = true;
-                if self.should_scan_snapshot()? {
-                    return self.scanned_predecessor(key).map(Some);
-                }
-            }
-            bound = found.key;
+        let Some(first) = self.find_bound(key)? else {
+            return Ok(None);
+        };
+        // A usable first entry needs no base metadata read.
+        if first.entry.leaf_index.as_u64() < self.len {
+            return Ok(Some(first));
         }
+        if self.should_scan_snapshot()? {
+            return self.scanned_predecessor(key).map(Some);
+        }
+
+        let mut bound = first.key;
+        loop {
+            match self.find_bound(bound)? {
+                Some(newer) if newer.entry.leaf_index.as_u64() >= self.len => bound = newer.key,
+                found => return Ok(found),
+            }
+        }
+    }
+
+    fn find_bound(&self, bound: NullifierKey) -> Result<Option<IndexedNullifier>, ImtError> {
+        let Some(found) = self
+            .store
+            .get_prev(&NullifierKey::prefix(), &bound.encode())
+            .map_err(ImtError::storage)?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(IndexedNullifier {
+            key: NullifierKey::decode(&found.key)
+                .map_err(|error| ImtError::corrupted("nullifier key", &error))?,
+            entry: IndexEntry::decode(&found.value)
+                .map_err(|error| ImtError::corrupted("index entry", &error))?,
+        }))
     }
 
     fn should_scan_snapshot(&self) -> Result<bool, ImtError> {
