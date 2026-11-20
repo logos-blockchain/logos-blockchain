@@ -383,7 +383,7 @@ mod tests {
     use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
     use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
     use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
-    use tokio_stream::wrappers::BroadcastStream;
+    use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
     use super::*;
     use crate::network::BoxedStream;
@@ -941,11 +941,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn subscribe_to_pubsub(&mut self) -> BroadcastStream<Self::PubSubEvent> {
+        async fn subscribe_to_pubsub(
+            &mut self,
+            _topics: HashSet<String>,
+        ) -> BroadcastStream<Self::PubSubEvent> {
             unimplemented!()
         }
 
-        async fn subscribe_to_chainsync(&mut self) -> BroadcastStream<Self::ChainSyncEvent> {
+        async fn subscribe_to_chainsync(&mut self) -> ReceiverStream<Self::ChainSyncEvent> {
             unimplemented!()
         }
     }
