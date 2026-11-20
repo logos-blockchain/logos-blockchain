@@ -1,6 +1,6 @@
 use core::fmt::{self, Debug};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -115,6 +115,8 @@ where
             prolonged_bootstrap_period,
             epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
             genesis_block,
+            block_under_verification: None,
+            queued_blocks: VecDeque::new(),
         }
     }
 
