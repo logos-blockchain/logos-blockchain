@@ -1,5 +1,6 @@
-use std::ffi::{CString, c_char};
+use std::ffi::c_char;
 
+use lb_c_common::memory;
 use lb_c_macros::panic_to_error;
 
 use crate::{OperationStatus, return_error_if_null_pointer};
@@ -18,7 +19,7 @@ use crate::{OperationStatus, return_error_if_null_pointer};
 /// `Type` and must not have been freed already.
 pub unsafe fn free<Type>(pointer: *mut Type) -> OperationStatus {
     return_error_if_null_pointer!(pointer);
-    unsafe { drop(Box::from_raw(pointer)) };
+    unsafe { memory::free(pointer) };
     OperationStatus::OK
 }
 
@@ -37,13 +38,13 @@ pub unsafe fn free<Type>(pointer: *mut Type) -> OperationStatus {
 ///
 /// # Safety
 ///
-/// A non-null pointer must originate from a [`CString`] allocated by this
-/// library and must not have been freed already.
+/// A non-null pointer must originate from a [`CString`](std::ffi::CString)
+/// allocated by this library and must not have been freed already.
 /// Passing a pointer from any other source will cause undefined behavior.
 #[panic_to_error]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_cstring(pointer: *mut c_char) -> OperationStatus {
     return_error_if_null_pointer!(pointer);
-    drop(unsafe { CString::from_raw(pointer) });
+    unsafe { memory::free_cstring(pointer) };
     OperationStatus::OK
 }
