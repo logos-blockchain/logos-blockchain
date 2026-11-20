@@ -25,6 +25,8 @@ use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use regex::Regex;
 use serde_yaml::Value;
 
+use crate::config::keystore::Keystore;
+
 /// The top-level key holding a config's version.
 pub const VERSION_KEY: &str = "version";
 
@@ -102,7 +104,8 @@ pub struct Migration {
     /// The first release with the new format, or [`ConfigVersion::Master`]
     /// while unreleased.
     pub to: ConfigVersion,
-    pub migrate: fn(&mut Value) -> Result<()>,
+    /// Rewrites the config, with the keystore next to it when there is one.
+    pub migrate: fn(&mut Value, Option<&Keystore>) -> Result<()>,
 }
 
 /// Every migration, oldest first. Only the last may be unreleased.
@@ -113,7 +116,7 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
 
 /// Upgrades `config` to the format of this build and takes its `version` out.
 /// Returns the version it was in if a migration changed it.
-pub fn upgrade(config: &mut Value) -> Result<Option<ConfigVersion>> {
+pub fn upgrade(config: &mut Value, keystore: Option<&Keystore>) -> Result<Option<ConfigVersion>> {
     let current = ConfigVersion::current();
     let from = match config.as_mapping_mut().and_then(|c| c.remove(VERSION_KEY)) {
         None => UNVERSIONED,
@@ -129,7 +132,7 @@ pub fn upgrade(config: &mut Value) -> Result<Option<ConfigVersion>> {
     }
     let original = config.clone();
     for migration in pending(MIGRATIONS, from, current) {
-        (migration.migrate)(config)
+        (migration.migrate)(config, keystore)
             .wrap_err_with(|| format!("upgrading the config from {from} to {}", migration.to))?;
     }
     Ok((*config != original).then_some(from))
@@ -225,11 +228,11 @@ mod tests {
         let migrations = [
             Migration {
                 to: Release(0, 4, 0),
-                migrate: |_| Ok(()),
+                migrate: |_, _| Ok(()),
             },
             Migration {
                 to: Master,
-                migrate: |_| Ok(()),
+                migrate: |_, _| Ok(()),
             },
         ];
         let runs = |from, current| pending(&migrations, from, current).count();
