@@ -619,6 +619,155 @@ fn test_rebase_frees_the_finalized_overlay() {
 }
 
 #[test]
+fn test_snapshot_predecessor_reads_do_not_grow_with_the_base() {
+    let store = Arc::new(MemKv::new());
+    let mut sim = Sim::with_store(ErasedKv::into_dyn(Arc::clone(&store)));
+    let aged = sim.extend(GENESIS, &frs(&[10, 1000]));
+    sim.pin(aged);
+
+    let before = store.stats().reads;
+    sim.pins[&aged].imt.leaves().unwrap();
+    let scan_reads = store.stats().reads - before;
+    let mut tip = aged;
+    for range in [20..40, 40..160] {
+        let newer = range.map(fr).collect::<Vec<_>>();
+        tip = sim.extend(tip, &newer);
+        sim.advance_lib(tip);
+        let snapshot = &sim.pins[&aged];
+
+        let before = store.stats().reads;
+        let found = snapshot
+            .imt
+            .base_predecessor(NullifierKey { nullifier: fr(900) })
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.key.nullifier, fr(10));
+        assert_eq!(found.entry.leaf_index, LeafIndex::new(1));
+        let reads = store.stats().reads - before;
+        assert!(
+            reads <= 2 + scan_reads,
+            "lookup used {reads} reads, exceeding one seek, base metadata and {scan_reads} snapshot reads"
+        );
+        Sim::check_state(
+            "small snapshot",
+            &snapshot.imt,
+            &snapshot.oracle,
+            &frs(&[20, 50, 900]),
+        );
+    }
+}
+
+#[test]
+fn test_base_predecessor_scans_only_after_large_base_growth() {
+    for (newer_count, scans) in [(3, false), (668, true)] {
+        let store = Arc::new(MemKv::new());
+        let mut sim = Sim::with_store(ErasedKv::into_dyn(Arc::clone(&store)));
+        let old = (1..17).map(|value| fr(value * 10_000)).collect::<Vec<_>>();
+        let aged = sim.extend(GENESIS, &old);
+        sim.pin(aged);
+        let later = (1..=newer_count).map(fr).collect::<Vec<_>>();
+        let newer = sim.extend(aged, &later);
+        sim.advance_lib(newer);
+        let snapshot = &sim.pins[&aged].imt;
+        assert_eq!(snapshot.len(), 17);
+
+        // A valid first index entry needs neither metadata nor a leaf scan.
+        let before = store.stats().reads;
+        let found = snapshot
+            .base_predecessor(NullifierKey {
+                nullifier: fr(160_001),
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.key.nullifier, fr(160_000));
+        assert_eq!(store.stats().reads - before, 1);
+
+        // Moderate growth keeps all three skips on the index. Enough later
+        // entries make the same 17-leaf snapshot scan after the first miss.
+        let expected_reads = if scans {
+            let before = store.stats().reads;
+            snapshot.leaves().unwrap();
+            2 + store.stats().reads - before
+        } else {
+            5 // four predecessor seeks and one metadata read
+        };
+        let before = store.stats().reads;
+        let found = snapshot
+            .base_predecessor(NullifierKey {
+                nullifier: fr(1000),
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.key.nullifier, Fr::ZERO);
+        assert_eq!(found.entry.leaf_index, LeafIndex::new(0));
+        assert_eq!(store.stats().reads - before, expected_reads);
+    }
+}
+
+#[test]
+fn test_snapshot_scan_includes_pending_and_unrebased_notes() {
+    let mut sim = Sim::new();
+    let aged = sim.extend(GENESIS, &frs(&[10, 30]));
+    sim.pin(aged);
+    let pending = sim.blocks[&aged].imt.insert(fr(20)).unwrap();
+    let oracle = sim.blocks[&aged].oracle.insert(fr(20)).unwrap();
+
+    // Commit that exact pending prefix before growing the base enough to
+    // scan the four-leaf state: 121 later entries exceed its threshold of 120.
+    let committed = sim.extend(aged, &frs(&[20]));
+    let mut later = frs(&[25]);
+    later.extend((100..220).map(fr));
+    let newer = sim.extend(committed, &later);
+    sim.advance_lib(newer);
+    let found = pending
+        .base_predecessor(NullifierKey { nullifier: fr(28) })
+        .unwrap()
+        .unwrap();
+    assert_eq!(found.key.nullifier, fr(20));
+    assert_eq!(found.entry.leaf_index, LeafIndex::new(3));
+    Sim::check_state(
+        "pending canonical prefix",
+        &pending,
+        &oracle,
+        &frs(&[0, 19, 20, 21, 25, 28, 31]),
+    );
+}
+
+#[test]
+fn test_snapshot_scan_propagates_a_missing_leaf() {
+    let mut sim = Sim::new();
+    let aged = sim.extend(GENESIS, &frs(&[10, 30]));
+    let version = sim.blocks[&aged].version.unwrap();
+    sim.pin(aged);
+    // The three-leaf snapshot scans above 92 later entries.
+    let mut later = frs(&[20]);
+    later.extend((100..192).map(fr));
+    let newer = sim.extend(aged, &later);
+    sim.advance_lib(newer);
+
+    // The selected low leaf remains readable, but the full scan must report
+    // another missing leaf rather than choose from an incomplete snapshot.
+    let missing = NodeKey {
+        version,
+        position: NodePosition::leaf(LeafIndex::new(2)),
+    };
+    let mut writes = WriteBatch::new();
+    writes.delete(missing.encode());
+    sim.store.write_batch(writes).unwrap();
+    let snapshot = &sim.pins[&aged].imt;
+    assert_eq!(
+        snapshot.leaf(LeafIndex::new(1)).unwrap().unwrap().nullifier,
+        fr(10)
+    );
+    assert_eq!(
+        snapshot
+            .base_predecessor(NullifierKey { nullifier: fr(25) })
+            .unwrap_err(),
+        ImtError::MissingNode(missing)
+    );
+}
+
+#[test]
 fn test_pinned_snapshot_reads_below_the_lib() {
     let mut sim = Sim::new();
     let aged = sim.extend(GENESIS, &frs(&[10, 30]));
