@@ -669,10 +669,6 @@ where
 {
     /// Builds the block of `slot` on the current tip, if a note of the node's
     /// wins it, with its reward note.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Everything a block of the node's is built from"
-    )]
     async fn build_block_for(
         slot: Slot,
         cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
