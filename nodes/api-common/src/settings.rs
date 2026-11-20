@@ -144,8 +144,8 @@ pub const fn default_max_body_size() -> usize {
     // payload data size. Typical JSON overhead for binary data:
     // - Base64 encoding: ~1.33× (33% increase).
     // - JSON structure (quotes, braces, commas): adds 10-20% typically.
-    // - Combined realistic overhead: ~1.5-1.6× for Base64-encoded binary data in
-    //   JSON.
+    // - Combined realistic overhead: ~1.5-1.6× for Base64-encoded binary data
+    //   in JSON.
     10 * 1024 * 1024
 }
 

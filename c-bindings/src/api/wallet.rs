@@ -949,7 +949,8 @@ pub(crate) fn channel_deposit_sync(
         let handle = node.get_overwatch_handle();
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
 
-        // 1. The wallet splits a note of exactly `amount`, change to the funding key.
+        // 1. The wallet splits a note of exactly `amount`, change to the
+        //    funding key.
         let TipResponse {
             tip: split_tip,
             response: (split_builder, exact),
@@ -978,8 +979,8 @@ pub(crate) fn channel_deposit_sync(
                 )
             })?;
 
-            // 2. The funder spends a note to create a note of the same value in the
-            //    channel, owned by the holder.
+            // 2. The funder spends a note to create a note of the same value in
+            //    the channel, owned by the holder.
             let mut nonce = [0u8; 32];
             OsRng.fill_bytes(&mut nonce);
             let holder_note = Note::new(amount, fr_from_mod_bytes(&nonce), holder_public_key);

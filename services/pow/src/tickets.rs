@@ -395,8 +395,8 @@ impl Stream for TicketGenerator {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
-            // 1. Emit any winner an active search has already produced, tagged with the
-            //    cached tip.
+            // 1. Emit any winner an active search has already produced, tagged
+            //    with the cached tip.
             if let Poll::Ready(Some((block_id, (block_slot, claim)))) =
                 this.tickets_search.poll_next_unpin(cx)
             {
