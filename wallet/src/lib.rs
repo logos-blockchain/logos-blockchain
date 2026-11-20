@@ -1,3 +1,5 @@
+pub mod address;
+pub mod delivery;
 pub mod error;
 pub mod transaction;
 
@@ -942,6 +944,47 @@ impl<KeyId> Wallet<KeyId> {
         self.wallet_states.insert(block.id, block_wallet_state);
         self.parents.insert(block.id, block.parent);
         Ok(())
+    }
+
+    /// The applied blocks whose parent is applied too, each after its parent.
+    /// The oldest block the wallet holds is left out: nothing holds the state
+    /// it was applied to.
+    #[must_use]
+    pub fn applied_blocks(&self) -> Vec<HeaderId> {
+        let mut children: HashMap<HeaderId, Vec<HeaderId>> = HashMap::new();
+        for (block, parent) in &self.parents {
+            if block != parent && self.wallet_states.contains_key(block) {
+                children.entry(*parent).or_default().push(*block);
+            }
+        }
+        let mut blocks: Vec<HeaderId> = self
+            .wallet_states
+            .keys()
+            .filter(|block| {
+                self.parents
+                    .get(block)
+                    .is_none_or(|parent| !self.wallet_states.contains_key(parent))
+            })
+            .copied()
+            .collect();
+        let oldest = blocks.len();
+        let mut next = 0;
+        while let Some(block) = blocks.get(next).copied() {
+            blocks.extend(children.get(&block).into_iter().flatten());
+            next += 1;
+        }
+        blocks.split_off(oldest)
+    }
+
+    /// Applies `blocks` again, each after its parent, in place of the states
+    /// the wallet holds for them: they adopt the notes the wallet has learnt
+    /// since it first applied them. A block left out keeps its state, so
+    /// `blocks` should hold every descendant of its blocks.
+    pub fn reapply_blocks(&mut self, blocks: &[WalletBlock]) -> Result<(), WalletError> {
+        for block in blocks {
+            self.wallet_states.remove(&block.id);
+        }
+        blocks.iter().try_for_each(|block| self.apply_block(block))
     }
 
     pub fn balance(
@@ -2138,6 +2181,221 @@ mod tests {
                 .unwrap_err(),
             WalletError::InsufficientFunds { available: 0 }
         );
+    }
+
+    #[test]
+    fn applied_blocks_follow_their_parents_and_leave_the_oldest_out() {
+        let wallet = wallet_on_chain(KnownNotes::new_sync(), &[], &[], 3);
+        assert_eq!(
+            wallet.applied_blocks(),
+            vec![block_id(1), block_id(2), block_id(3)]
+        );
+
+        // A fork of block 2: both branches follow block 1.
+        let mut forked = wallet;
+        forked
+            .apply_block(&block(
+                9,
+                1,
+                0,
+                vec![appended(NoteSetIndex::Ledger, vec![commitment(9)])],
+            ))
+            .unwrap();
+        let blocks = forked.applied_blocks();
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0], block_id(1));
+        let position = |id: u8| {
+            blocks
+                .iter()
+                .position(|block| *block == block_id(id))
+                .unwrap()
+        };
+        assert!(position(2) < position(3));
+        assert!(position(1) < position(9));
+    }
+
+    // A note learnt after its block: applying the block and its descendants
+    // again gives the state of a wallet that knew the note from the start.
+    #[test]
+    fn reapplying_blocks_adopts_a_note_learnt_after_its_block() {
+        let alice = pk(1);
+        let note = Note::new(50_000, Fr::from(2u64), alice);
+        let known_notes = known(&[(note, NoteSetIndex::Ledger, nullifier(2))]);
+        let chain = |id: u8| {
+            let appended_note = if id == 2 {
+                note.commitment()
+            } else {
+                commitment(id.into())
+            };
+            block(
+                id,
+                id - 1,
+                0,
+                vec![appended(NoteSetIndex::Ledger, vec![appended_note])],
+            )
+        };
+        let informed = wallet_on_chain(known_notes.clone(), &[], &[(2, note)], 5);
+
+        let mut late = wallet_on_chain(KnownNotes::new_sync(), &[], &[(2, note)], 5);
+        assert_eq!(late.balance(block_id(5), alice).unwrap(), None);
+        late.add_known_notes(known_notes.values().copied());
+        // The wallet still holds the states it built without the note.
+        assert_eq!(late.balance(block_id(5), alice).unwrap(), None);
+
+        late.reapply_blocks(&(2..=5).map(chain).collect::<Vec<_>>())
+            .unwrap();
+
+        for tip in 2..=5 {
+            let state = |wallet: &Wallet<u8>| {
+                wallet
+                    .wallet_state_at(block_id(tip))
+                    .unwrap()
+                    .notes
+                    .get(&note.commitment())
+                    .cloned()
+            };
+            assert!(state(&informed).is_some());
+            assert_eq!(state(&late), state(&informed));
+        }
+        // The block before the note is untouched.
+        assert_eq!(late.balance(block_id(1), alice).unwrap(), None);
+    }
+
+    // Two branches after block 1: 2-3 and 12-13. A wallet that knew `note`
+    // from the start, and the blocks of both branches.
+    fn forked(
+        known: KnownNotes,
+        note: Note,
+        on_branches: [bool; 2],
+    ) -> (Wallet<u8>, Vec<WalletBlock>) {
+        let updates = |id: u8, delivers: bool| {
+            let appended_note = if delivers {
+                note.commitment()
+            } else {
+                commitment(id.into())
+            };
+            vec![appended(NoteSetIndex::Ledger, vec![appended_note])]
+        };
+        let blocks = vec![
+            block(2, 1, 0, updates(2, on_branches[0])),
+            block(12, 1, 0, updates(12, on_branches[1])),
+            block(3, 2, 0, updates(3, false)),
+            block(13, 12, 0, updates(13, false)),
+        ];
+        let mut wallet = wallet_on_chain(known, &[], &[], 1);
+        for block in &blocks {
+            wallet.apply_block(block).unwrap();
+        }
+        (wallet, blocks)
+    }
+
+    fn owned(wallet: &Wallet<u8>, tip: u8, note: &Note) -> Option<OwnedNote> {
+        wallet
+            .wallet_state_at(block_id(tip))
+            .unwrap()
+            .notes
+            .get(&note.commitment())
+            .cloned()
+    }
+
+    // A transaction is in a block of each branch of a fork, and its note is
+    // learnt after both: every branch tracks the note from its own block.
+    #[test]
+    fn reapplying_blocks_adopts_a_late_note_on_every_branch_of_a_fork() {
+        let note = Note::new(50_000, Fr::from(2u64), pk(1));
+        let known_notes = known(&[(note, NoteSetIndex::Ledger, nullifier(2))]);
+        let (informed, _) = forked(known_notes.clone(), note, [true, true]);
+
+        let (mut late, blocks) = forked(KnownNotes::new_sync(), note, [true, true]);
+        late.add_known_notes(known_notes.values().copied());
+        // The order the wallet gives its blocks in holds each after its parent.
+        let order = late.applied_blocks();
+        let again = order
+            .iter()
+            .filter_map(|id| blocks.iter().find(|block| block.id == *id))
+            .map(|block| WalletBlock {
+                id: block.id,
+                parent: block.parent,
+                epoch: block.epoch,
+                updates: block.updates.clone(),
+                revealed: block.revealed.clone(),
+                withdrawals: block.withdrawals.clone(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(again.len(), 4);
+        late.reapply_blocks(&again).unwrap();
+
+        for tip in [2, 3, 12, 13] {
+            assert!(owned(&informed, tip, &note).is_some());
+            assert_eq!(owned(&late, tip, &note), owned(&informed, tip, &note));
+        }
+    }
+
+    // The transaction is in one branch only: the other branch does not own
+    // the note, and applying its blocks again changes nothing.
+    #[test]
+    fn a_late_note_is_adopted_only_on_the_branch_that_holds_it() {
+        let note = Note::new(50_000, Fr::from(2u64), pk(1));
+        let known_notes = known(&[(note, NoteSetIndex::Ledger, nullifier(2))]);
+
+        let (mut late, blocks) = forked(KnownNotes::new_sync(), note, [true, false]);
+        late.add_known_notes(known_notes.values().copied());
+        // Only the branch holding the commitment is applied again.
+        let again = blocks
+            .iter()
+            .filter(|block| [block_id(2), block_id(3)].contains(&block.id))
+            .map(|block| WalletBlock {
+                id: block.id,
+                parent: block.parent,
+                epoch: block.epoch,
+                updates: block.updates.clone(),
+                revealed: block.revealed.clone(),
+                withdrawals: block.withdrawals.clone(),
+            })
+            .collect::<Vec<_>>();
+        late.reapply_blocks(&again).unwrap();
+
+        assert!(owned(&late, 2, &note).is_some());
+        assert!(owned(&late, 3, &note).is_some());
+        assert_eq!(owned(&late, 12, &note), None);
+        assert_eq!(owned(&late, 13, &note), None);
+    }
+
+    // A note delivered in time survives a fork of its block: the branch that
+    // replaces the block adopts the note when it appends the commitment.
+    #[test]
+    fn a_note_known_in_time_is_adopted_again_by_a_fork_of_its_block() {
+        let note = Note::new(50_000, Fr::from(2u64), pk(1));
+        let known_notes = known(&[(note, NoteSetIndex::Ledger, nullifier(2))]);
+        let (wallet, _) = forked(known_notes, note, [true, true]);
+
+        assert!(owned(&wallet, 3, &note).is_some());
+        assert!(owned(&wallet, 13, &note).is_some());
+        assert_eq!(owned(&wallet, 1, &note), None);
+    }
+
+    // A block applied again whose parent state is not held fails, and the
+    // caller keeps the wallet it had.
+    #[test]
+    fn reapplying_a_block_without_its_parent_state_fails() {
+        let note = Note::new(50_000, Fr::from(2u64), pk(1));
+        let (wallet, _) = forked(KnownNotes::new_sync(), note, [true, false]);
+        let orphan = block(
+            30,
+            29,
+            0,
+            vec![appended(NoteSetIndex::Ledger, vec![commitment(30)])],
+        );
+
+        let mut attempt = wallet.clone();
+        assert_eq!(
+            attempt.reapply_blocks(&[orphan]),
+            Err(WalletError::UnknownBlock(block_id(29)))
+        );
+        // The wallet the attempt was made on a copy of is as it was: block 1
+        // and the two blocks of each branch.
+        assert!(owned(&wallet, 3, &note).is_none());
+        assert_eq!(wallet.applied_blocks().len(), 5);
     }
 
     #[test]

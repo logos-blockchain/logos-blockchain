@@ -6,6 +6,12 @@ use lb_http_api_common::{
         NoopBody,
         wallet::{
             balance::WalletBalanceResponseBody,
+            delivery::{
+                WalletAddressResponseBody, WalletImportDeliveryMessagesRequestBody,
+                WalletImportDeliveryMessagesResponseBody, WalletNameStakingKeyRequestBody,
+                WalletRedeliverRequestBody, WalletRedeliverResponseBody,
+                WalletTransferFundsToAddressRequestBody, WalletTransferFundsToAddressResponseBody,
+            },
             transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
     },
@@ -73,6 +79,79 @@ impl WalletHttpClient {
     ) -> Result<WalletPrepareTransferResponseBody, Error> {
         let url = base_url
             .join(paths::wallet::TRANSACTIONS_PREPARE_TRANSFER_FUNDS)
+            .map_err(Error::Url)?;
+        self.client.post(url, &body).await
+    }
+
+    /// The address senders pay `wallet_address` at: its Bech32m string, with
+    /// the key note ciphertexts are encrypted to.
+    pub async fn get_address(
+        self,
+        base_url: &Url,
+        wallet_address: ZkPublicKey,
+    ) -> Result<WalletAddressResponseBody, Error> {
+        let Ok(wallet_address) = wallet_address.to_bytes() else {
+            return Err(Error::Client(String::from(
+                "The wallet address is not a valid public key.",
+            )));
+        };
+        let wallet_address = hex::encode(wallet_address.iter().as_slice());
+        let path = paths::wallet::ADDRESS.replace("{public_key}", wallet_address.as_str());
+        let url = base_url.join(path.as_str()).map_err(Error::Url)?;
+        self.client.get(url, Option::<&NoopBody>::None).await
+    }
+
+    /// Transfers funds to an address, and gets the delivery message of the
+    /// note the transfer pays.
+    pub async fn transfer_funds_to_address(
+        self,
+        base_url: Url,
+        body: WalletTransferFundsToAddressRequestBody,
+    ) -> Result<WalletTransferFundsToAddressResponseBody, Error> {
+        let url = base_url
+            .join(paths::wallet::TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS)
+            .map_err(Error::Url)?;
+        self.client.post(url, &body).await
+    }
+
+    /// Hands the wallet delivery messages of notes paid to it.
+    pub async fn import_delivery_messages(
+        self,
+        base_url: Url,
+        body: WalletImportDeliveryMessagesRequestBody,
+    ) -> Result<WalletImportDeliveryMessagesResponseBody, Error> {
+        let url = base_url
+            .join(paths::wallet::IMPORT_DELIVERY_MESSAGES)
+            .map_err(Error::Url)?;
+        self.client.post(url, &body).await
+    }
+
+    /// Asks the wallet to deliver again a note it paid.
+    pub async fn redeliver_note(
+        self,
+        base_url: Url,
+        body: WalletRedeliverRequestBody,
+    ) -> Result<WalletRedeliverResponseBody, Error> {
+        let url = base_url
+            .join(paths::wallet::REDELIVER_NOTE)
+            .map_err(Error::Url)?;
+        self.client.post(url, &body).await
+    }
+
+    /// Rebuilds the wallet over the whole chain, from the genesis block.
+    pub async fn rescan(self, base_url: Url) -> Result<(), Error> {
+        let url = base_url.join(paths::wallet::RESCAN).map_err(Error::Url)?;
+        self.client.post(url, &NoopBody).await
+    }
+
+    /// Names a staking key the wallet asked a sender to use.
+    pub async fn name_staking_key(
+        self,
+        base_url: Url,
+        body: WalletNameStakingKeyRequestBody,
+    ) -> Result<(), Error> {
+        let url = base_url
+            .join(paths::wallet::NAME_STAKING_KEY)
             .map_err(Error::Url)?;
         self.client.post(url, &body).await
     }

@@ -104,6 +104,10 @@ name = "test_mantle_faucet"
 path = "src/tests/mantle/faucet.rs"
 
 [[test]]
+name = "test_mantle_note_delivery"
+path = "src/tests/mantle/note_delivery.rs"
+
+[[test]]
 name              = "test_mantle_sdp_ops"
 path              = "src/tests/mantle/sdp/ops.rs"
 required-features = ["mantle-sdp"]

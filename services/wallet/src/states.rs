@@ -7,7 +7,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Value,
-        notes::{InputNullifiers, NoteNullifier},
+        notes::{InputNullifiers, NoteCommitment, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{
             MantleTxBuilder,
@@ -19,8 +19,12 @@ use lb_core::{
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
+use lb_note_encryption::DeliveryMessage;
 use lb_storage_service::api::StorageApi;
-use lb_wallet::{KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState};
+use lb_wallet::{
+    KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState,
+    delivery::delivered_commitment,
+};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -109,6 +113,129 @@ impl PendingNotes {
     }
 }
 
+/// The most delivery messages a wallet keeps pending: about 5 MB of them.
+pub const MAX_PENDING_DELIVERIES: usize = 4096;
+
+/// The immutable blocks after which a pending delivery message is dropped: no
+/// block has appended its commitment, and the wallet stops waiting for one.
+/// It has to outlast the longest wait between a sender posting an Operation
+/// and its outputs entering a note set, a withdrawal included.
+pub const PENDING_DELIVERY_EXPIRY_BLOCKS: u64 = 16_384;
+
+/// The delivery messages whose commitment no applied block has appended yet.
+/// A message is opened when a block appends its commitment, and not before:
+/// the wallet decapsulates only the ciphertexts whose commitment is in a note
+/// set. The service writes them to storage, so that they outlive a restart.
+#[derive(Default)]
+struct PendingDeliveries {
+    // the messages of each commitment, each with the immutable blocks since
+    // it was received
+    messages: HashMap<NoteCommitment, Vec<(DeliveryMessage, u64)>>,
+    // the number of messages
+    count: usize,
+    // set when the messages differ from the ones last written to storage
+    changed: bool,
+}
+
+impl PendingDeliveries {
+    // Keeps `messages` and tells how many are kept: a message whose
+    // commitment is not a field element is dropped, and a new message is
+    // refused once `MAX_PENDING_DELIVERIES` are kept. The commitment of a
+    // transaction is public before its block, so anyone can send a message
+    // for it: the messages of a commitment are kept side by side, and none
+    // replaces another.
+    fn add(&mut self, messages: impl IntoIterator<Item = DeliveryMessage>) -> usize {
+        let mut kept = 0;
+        for message in messages {
+            let Some(commitment) = delivered_commitment(&message) else {
+                continue;
+            };
+            let held = self
+                .messages
+                .get(&commitment)
+                .is_some_and(|held| held.iter().any(|(held, _)| *held == message));
+            if held {
+                kept += 1;
+                continue;
+            }
+            if self.count >= MAX_PENDING_DELIVERIES {
+                debug!(
+                    target: wallet::SERVICE,
+                    ?commitment,
+                    "Refusing a delivery message: too many are pending"
+                );
+                continue;
+            }
+            self.messages
+                .entry(commitment)
+                .or_default()
+                .push((message, 0));
+            self.count += 1;
+            self.changed = true;
+            kept += 1;
+        }
+        kept
+    }
+
+    // The kept messages of `commitments`.
+    fn of(&self, commitments: &[NoteCommitment]) -> Vec<DeliveryMessage> {
+        commitments
+            .iter()
+            .filter_map(|commitment| self.messages.get(commitment))
+            .flatten()
+            .map(|(message, _)| message.clone())
+            .collect()
+    }
+
+    fn forget(&mut self, commitments: &[NoteCommitment]) {
+        for commitment in commitments {
+            if let Some(messages) = self.messages.remove(commitment) {
+                self.count -= messages.len();
+                self.changed = true;
+            }
+        }
+    }
+
+    // Drops the messages received `PENDING_DELIVERY_EXPIRY_BLOCKS` immutable
+    // blocks ago or more.
+    fn evict_expired(&mut self, new_immutable_blocks_count: u64) {
+        if new_immutable_blocks_count == 0 {
+            return;
+        }
+        let held = self.count;
+        self.messages.retain(|_, messages| {
+            messages.retain_mut(|(_, immutable_blocks)| {
+                *immutable_blocks = immutable_blocks.saturating_add(new_immutable_blocks_count);
+                *immutable_blocks < PENDING_DELIVERY_EXPIRY_BLOCKS
+            });
+            !messages.is_empty()
+        });
+        self.count = self.messages.values().map(Vec::len).sum();
+        self.changed |= self.count != held;
+    }
+
+    // The messages to write to storage, as their bytes, when they differ from
+    // the ones last taken.
+    fn take_changed(&mut self) -> Option<Vec<Vec<u8>>> {
+        core::mem::take(&mut self.changed).then(|| {
+            self.messages
+                .values()
+                .flatten()
+                .map(|(message, _)| message.to_bytes().to_vec())
+                .collect()
+        })
+    }
+
+    // The messages read from storage after a restart, waiting anew.
+    fn restore(&mut self, stored: &[Vec<u8>]) {
+        let messages = stored
+            .iter()
+            .filter_map(|bytes| DeliveryMessage::from_bytes(bytes));
+        self.add(messages);
+        self.changed = false;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryState {
     /// [`WalletState`] at the last known LIB.
@@ -142,6 +269,11 @@ pub struct ServiceState<'u> {
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
     fee_margin_percent: u64,
+    pending_deliveries: PendingDeliveries,
+    // The staking keys the wallet named to senders, other than its public
+    // keys: a note delivered under one of them is its own. The service writes
+    // them to storage.
+    named_staking_keys: Vec<ZkPublicKey>,
 }
 
 impl<'u> ServiceState<'u> {
@@ -200,7 +332,53 @@ impl<'u> ServiceState<'u> {
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
             fee_margin_percent: settings.fee_margin_percent,
+            pending_deliveries: PendingDeliveries::default(),
+            named_staking_keys: Vec::new(),
         }
+    }
+
+    pub fn add_pending_deliveries(
+        &mut self,
+        messages: impl IntoIterator<Item = DeliveryMessage>,
+    ) -> usize {
+        self.pending_deliveries.add(messages)
+    }
+
+    pub fn pending_deliveries_of(&self, commitments: &[NoteCommitment]) -> Vec<DeliveryMessage> {
+        self.pending_deliveries.of(commitments)
+    }
+
+    // The commitments a delivery message is kept for.
+    pub fn pending_delivery_commitments(&self) -> HashSet<NoteCommitment> {
+        self.pending_deliveries.messages.keys().copied().collect()
+    }
+
+    pub fn forget_pending_deliveries(&mut self, commitments: &[NoteCommitment]) {
+        self.pending_deliveries.forget(commitments);
+    }
+
+    pub fn named_staking_keys(&self) -> &[ZkPublicKey] {
+        &self.named_staking_keys
+    }
+
+    // Names `staking_key`, and tells whether it is a new one.
+    pub fn name_staking_key(&mut self, staking_key: ZkPublicKey) -> bool {
+        let new = !self.named_staking_keys.contains(&staking_key);
+        if new {
+            self.named_staking_keys.push(staking_key);
+        }
+        new
+    }
+
+    // The pending delivery messages to write to storage, when they changed
+    // since the last call.
+    pub fn take_changed_pending_deliveries(&mut self) -> Option<Vec<Vec<u8>>> {
+        self.pending_deliveries.take_changed()
+    }
+
+    // The pending delivery messages written before a restart, kept again.
+    pub fn restore_pending_deliveries(&mut self, stored: &[Vec<u8>]) {
+        self.pending_deliveries.restore(stored);
     }
 
     // the priority fee percentage of a funding that names none
@@ -259,6 +437,27 @@ impl<'u> ServiceState<'u> {
         Ok(())
     }
 
+    // Applies `blocks` again, each after its parent, with the notes the wallet
+    // has learnt since it first applied them. All of them or none: the wallet
+    // is left as it was if one fails.
+    pub fn reapply_blocks(&mut self, blocks: &[WalletBlock]) -> Result<(), WalletError> {
+        let mut wallet = self.wallet.clone();
+        wallet.reapply_blocks(blocks)?;
+        self.wallet = wallet;
+        self.update_state();
+        Ok(())
+    }
+
+    // Replaces the wallet by `wallet`, rebuilt over the chain with the notes
+    // the wallet has learnt since. It has to hold the state of the LIB, which
+    // the recovery state is written from.
+    pub fn replace_wallet(&mut self, wallet: Wallet) -> Result<(), WalletError> {
+        wallet.wallet_state_at(self.lib)?;
+        self.wallet = wallet;
+        self.update_state();
+        Ok(())
+    }
+
     pub fn advance_lib(&mut self, new_lib: HeaderId, new_immutable_blocks_count: u64) {
         // The wallet must already hold a `WalletState` for `new_lib`, otherwise
         // `update_state` cannot persist the recovery state. The service
@@ -285,6 +484,8 @@ impl<'u> ServiceState<'u> {
             .expect("WalletState at LIB must exist");
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
+        self.pending_deliveries
+            .evict_expired(new_immutable_blocks_count);
         self.update_state();
     }
 
@@ -409,7 +610,6 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::notes::NoteCommitment;
     use lb_groth16::Field as _;
 
     use super::*;
@@ -419,6 +619,126 @@ mod tests {
     };
 
     const EXPIRY_BLOCKS: u64 = 4;
+
+    #[test]
+    fn a_delivery_message_is_kept_until_its_commitment_is_forgotten() {
+        use lb_note_encryption::NOTE_CIPHERTEXT_SIZE;
+
+        let message = |commitment: NoteCommitment| DeliveryMessage {
+            commitment: lb_groth16::fr_to_bytes(&commitment.0),
+            ciphertext: [0; NOTE_CIPHERTEXT_SIZE],
+        };
+        let (first, second) = (NoteCommitment(Fr::ONE), NoteCommitment(Fr::from(2u64)));
+        // Its commitment is the modulus, which no note set holds.
+        let invalid = DeliveryMessage {
+            commitment: lb_groth16::fr_modulus().to_bytes_le().try_into().unwrap(),
+            ciphertext: [0; NOTE_CIPHERTEXT_SIZE],
+        };
+        let mut pending = PendingDeliveries::default();
+
+        assert_eq!(pending.add([message(first), message(second), invalid]), 2);
+        // A block appending the first commitment and one the wallet holds no
+        // message for.
+        let appended = [first, NoteCommitment(Fr::from(3u64))];
+        assert_eq!(pending.of(&appended), vec![message(first)]);
+
+        pending.forget(&appended);
+        assert_eq!(pending.of(&appended), vec![]);
+        assert_eq!(pending.of(&[second]), vec![message(second)]);
+    }
+
+    fn delivery_message(commitment: u64) -> DeliveryMessage {
+        DeliveryMessage {
+            commitment: lb_groth16::fr_to_bytes(&Fr::from(commitment)),
+            ciphertext: [0; lb_note_encryption::NOTE_CIPHERTEXT_SIZE],
+        }
+    }
+
+    #[test]
+    fn pending_delivery_messages_are_bounded() {
+        let mut pending = PendingDeliveries::default();
+        let full = (0..MAX_PENDING_DELIVERIES as u64).map(delivery_message);
+        assert_eq!(pending.add(full), MAX_PENDING_DELIVERIES);
+
+        // A new message is refused, for a new commitment or for a kept one.
+        // A kept message is still kept.
+        assert_eq!(pending.add([delivery_message(u64::MAX)]), 0);
+        assert_eq!(pending.add([other_delivery_message(0)]), 0);
+        assert_eq!(pending.add([delivery_message(0)]), 1);
+        assert_eq!(pending.count, MAX_PENDING_DELIVERIES);
+        assert_eq!(
+            pending.take_changed().unwrap().len(),
+            MAX_PENDING_DELIVERIES
+        );
+    }
+
+    // The commitment of a transaction is public before its block: a message
+    // anyone sends for it must not replace the one of the sender.
+    #[test]
+    fn a_second_message_for_a_commitment_is_kept_beside_the_first() {
+        let commitment = NoteCommitment(Fr::ONE);
+        let mut pending = PendingDeliveries::default();
+
+        assert_eq!(pending.add([delivery_message(1)]), 1);
+        assert_eq!(pending.add([other_delivery_message(1)]), 1);
+        // The same message again is not kept twice.
+        assert_eq!(pending.add([delivery_message(1)]), 1);
+        assert_eq!(
+            pending.of(&[commitment]),
+            vec![delivery_message(1), other_delivery_message(1)]
+        );
+
+        pending.forget(&[commitment]);
+        assert_eq!(pending.of(&[commitment]), vec![]);
+        assert_eq!(pending.count, 0);
+    }
+
+    // Another ciphertext for the commitment of `delivery_message`.
+    fn other_delivery_message(commitment: u64) -> DeliveryMessage {
+        DeliveryMessage {
+            ciphertext: [1; lb_note_encryption::NOTE_CIPHERTEXT_SIZE],
+            ..delivery_message(commitment)
+        }
+    }
+
+    #[test]
+    fn a_pending_delivery_message_expires_after_enough_lib_progress() {
+        let commitment = NoteCommitment(Fr::ONE);
+        let mut pending = PendingDeliveries::default();
+        pending.add([delivery_message(1)]);
+
+        pending.evict_expired(0);
+        pending.evict_expired(PENDING_DELIVERY_EXPIRY_BLOCKS - 1);
+        assert_eq!(pending.of(&[commitment]), vec![delivery_message(1)]);
+
+        pending.evict_expired(1);
+        assert_eq!(pending.of(&[commitment]), vec![]);
+    }
+
+    #[test]
+    fn pending_delivery_messages_are_stored_when_they_change_and_restored() {
+        let mut pending = PendingDeliveries::default();
+        assert_eq!(pending.take_changed(), None);
+
+        pending.add([delivery_message(1), delivery_message(2)]);
+        let stored = pending.take_changed().unwrap();
+        assert_eq!(stored.len(), 2);
+        // Nothing changed since the messages were taken.
+        assert_eq!(pending.take_changed(), None);
+
+        pending.forget(&[NoteCommitment(Fr::ONE)]);
+        assert_eq!(pending.take_changed().unwrap().len(), 1);
+
+        // After a restart the stored messages wait again, and are not written
+        // back as they are.
+        let mut restarted = PendingDeliveries::default();
+        restarted.restore(&stored);
+        assert_eq!(
+            restarted.of(&[NoteCommitment(Fr::ONE), NoteCommitment(Fr::from(2u64))]),
+            vec![delivery_message(1), delivery_message(2)]
+        );
+        assert_eq!(restarted.take_changed(), None);
+    }
 
     #[test]
     fn pending_note_does_not_expire_without_lib_progress() {

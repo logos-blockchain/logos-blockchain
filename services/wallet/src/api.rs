@@ -4,12 +4,15 @@ use lb_chain_service::Epoch;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, OpProof, SignedOps, Value,
+        Note, Op, OpProof, SignedOps, Value,
         gas::GasCost,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{NoteCommitment, NoteNullifier},
-        ops::channel::ChannelId,
+        ops::{
+            channel::{ChannelId, inscribe::Inscription},
+            inscribe::InscribeOp,
+        },
         transactions::{
             MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
             tx_list::ops::OpsContext,
@@ -18,8 +21,9 @@ use lb_core::{
 };
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, secured_key::SecuredKey};
+use lb_note_encryption::{DeliveryMessage, delivery_inscription};
 use lb_utils::bounded::BoundedError;
-use lb_wallet::{KnownNote, OwnedNote, WalletBalance};
+use lb_wallet::{KnownNote, OwnedNote, WalletBalance, address::Address, delivery::deliver};
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{
@@ -27,6 +31,7 @@ use overwatch::{
         relay::{OutboundRelay, OutboundRelayError},
     },
 };
+use rand::rngs::OsRng;
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
@@ -52,6 +57,35 @@ impl From<OutboundRelayError<WalletMsg>> for WalletApiError {
     fn from(value: OutboundRelayError<WalletMsg>) -> Self {
         Self::RelaySend(Box::new(value))
     }
+}
+
+/// A signed transfer to an address, with what the sender keeps and hands over
+/// for the note it creates.
+pub struct TransferTo {
+    pub transaction: SignedOps<Preverified, StandardMode>,
+    /// The note the transfer creates. The sender keeps it, to deliver it
+    /// again if the recipient asks.
+    pub note: Note,
+    /// The delivery message of the note, when the address holds the
+    /// encryption key of its recipient.
+    pub delivery: Option<DeliveryMessage>,
+}
+
+/// A note delivered again to its recipient.
+pub struct Redelivery {
+    pub note: Note,
+    /// A new delivery message of the note, when the address holds the
+    /// encryption key of its recipient.
+    pub delivery: Option<DeliveryMessage>,
+}
+
+// The delivery message of `note` for `recipient`, when its address holds an
+// encryption key.
+fn delivery_of(note: &Note, recipient: &Address) -> Option<DeliveryMessage> {
+    recipient
+        .encryption_key
+        .as_ref()
+        .map(|encryption_key| deliver(note, encryption_key, &mut OsRng))
 }
 
 pub trait WalletServiceData:
@@ -266,6 +300,18 @@ where
         Ok(rx.await??)
     }
 
+    /// The address a sender pays `public_key` at, a key of this wallet.
+    pub async fn address(&self, public_key: ZkPublicKey) -> Result<Address, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::GetAddress {
+                public_key,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
     // Keeps `note`, the leader reward note of a block about to be published,
     // returning once the persisted state of the wallet knows it.
     pub async fn track_leader_reward(&self, note: Note) -> Result<(), WalletApiError> {
@@ -385,20 +431,155 @@ where
         amount: Value,
     ) -> Result<TipResponse<(SignedOps<Preverified, StandardMode>, Note)>, WalletApiError> {
         let note = Note::new(amount, crate::random_nonce(), recipient_pk);
-        if self.get_known_addresses().await?.contains(&recipient_pk) {
-            self.import_note(note, NoteSetIndex::Ledger).await?;
-        }
-        let mantle_tx_builder = MantleTxBuilder::new().add_ledger_output(note)?;
-        let funded_tx_builder = self
-            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, None, None)
-            .await?;
         let TipResponse { tip, response } = self
-            .sign_tx(Some(funded_tx_builder.tip), funded_tx_builder.response)
+            .transfer_note(tip, change_pk, funding_pks, note, None)
             .await?;
         Ok(TipResponse {
             tip,
             response: (response, note),
         })
+    }
+
+    // The signed transfer creating `note` in the ledger note set. It commits
+    // to `delivery`, the delivery message of the note, in an inscribe.
+    async fn transfer_note(
+        &self,
+        tip: Option<HeaderId>,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        note: Note,
+        delivery: Option<&DeliveryMessage>,
+    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
+        if self.get_known_addresses().await?.contains(&note.public_key) {
+            self.import_note(note, NoteSetIndex::Ledger).await?;
+        }
+        let mantle_tx_builder = match delivery {
+            Some(delivery) => MantleTxBuilder::new().push_op(Op::Inscribe(InscribeOp {
+                inscription: Inscription::try_new(
+                    delivery_inscription(core::slice::from_ref(delivery)).to_vec(),
+                    u32::MAX,
+                )?,
+            }))?,
+            None => MantleTxBuilder::new(),
+        }
+        .add_ledger_output(note)?;
+        let funded_tx_builder = self
+            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, None, None)
+            .await?;
+        self.sign_tx(Some(funded_tx_builder.tip), funded_tx_builder.response)
+            .await
+    }
+
+    /// The signed transfer of `amount` to `recipient`, and the delivery
+    /// message of the note it creates, for the sender to hand over or
+    /// publish. There is none when the address holds no encryption key: the
+    /// sender then gives the recipient the note by other means.
+    ///
+    /// The transfer commits to the delivery message in an inscribe, so that
+    /// whoever carries the message can check it against the transaction.
+    ///
+    /// The note takes the public key of the recipient as staking key, unless
+    /// the recipient named another to the sender, given as `staking_key`. The
+    /// wallet keeps the note, so that [`Self::redeliver`] delivers it again.
+    pub async fn transfer_funds_to(
+        &self,
+        tip: Option<HeaderId>,
+        change_pk: ZkPublicKey,
+        funding_pks: Vec<ZkPublicKey>,
+        recipient: &Address,
+        staking_key: Option<ZkPublicKey>,
+        amount: Value,
+    ) -> Result<TipResponse<TransferTo>, WalletApiError> {
+        let note = Note {
+            stake_public_key: staking_key.unwrap_or(recipient.public_key),
+            ..Note::new(amount, crate::random_nonce(), recipient.public_key)
+        };
+        let delivery = delivery_of(&note, recipient);
+        let TipResponse {
+            tip,
+            response: transaction,
+        } = self
+            .transfer_note(tip, change_pk, funding_pks, note, delivery.as_ref())
+            .await?;
+        self.record_sent_note(note).await?;
+        Ok(TipResponse {
+            tip,
+            response: TransferTo {
+                transaction,
+                note,
+                delivery,
+            },
+        })
+    }
+
+    // Keeps `note`, which the wallet created for someone else.
+    async fn record_sent_note(&self, note: Note) -> Result<(), WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::RecordSentNote { note, resp_tx })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// Delivers again the note of `commitment`, which the wallet created for
+    /// `recipient`: a delivery was lost, or wrongly encrypted. The message is
+    /// a new encryption of the same note. `None` when the wallet holds no
+    /// such note, or holds it for another public key.
+    pub async fn redeliver(
+        &self,
+        commitment: NoteCommitment,
+        recipient: &Address,
+    ) -> Result<Option<Redelivery>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::SentNote {
+                commitment,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx
+            .await??
+            .filter(|note| note.public_key == recipient.public_key)
+            .map(|note| Redelivery {
+                note,
+                delivery: delivery_of(&note, recipient),
+            }))
+    }
+
+    /// Rebuilds the wallet over the whole chain, with the notes it knows and
+    /// the delivery messages it keeps: it finds the notes it learnt after
+    /// their block left the states the wallet holds.
+    pub async fn rescan(&self) -> Result<(), WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay.send(WalletMsg::Rescan { resp_tx }).await?;
+        Ok(rx.await??)
+    }
+
+    /// Names a staking key the wallet asked a sender to use in place of its
+    /// public key, so that the wallet owns the notes delivered under it.
+    pub async fn name_staking_key(&self, staking_key: ZkPublicKey) -> Result<(), WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::NameStakingKey {
+                staking_key,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// Hands the wallet the delivery messages of notes paid to it, and tells
+    /// how many it keeps. The wallet opens a message when a block appends its
+    /// commitment.
+    pub async fn import_delivery_messages(
+        &self,
+        messages: Vec<DeliveryMessage>,
+    ) -> Result<usize, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ImportDeliveryMessages { messages, resp_tx })
+            .await?;
+        Ok(rx.await?)
     }
 
     pub async fn sign_tx(

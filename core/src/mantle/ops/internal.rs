@@ -10,7 +10,8 @@ use super::{
 use crate::mantle::{
     ledger::ProvableOperation as _,
     ops::{
-        channel::withdraw::ChannelWithdrawOp, pow::ClaimPowRewardOp, program::ProgramRegisterOp,
+        channel::withdraw::ChannelWithdrawOp, inscribe::InscribeOp, pow::ClaimPowRewardOp,
+        program::ProgramRegisterOp,
     },
 };
 
@@ -28,6 +29,7 @@ pub enum OpSer<'a> {
     SDPActive(OpWire<{ SDPActiveOp::CODE }, &'a SDPActiveOp>),
     ClaimPowReward(OpWire<{ ClaimPowRewardOp::CODE }, &'a ClaimPowRewardOp>),
     ProgramRegister(OpWire<{ ProgramRegisterOp::CODE }, &'a ProgramRegisterOp>),
+    Inscribe(OpWire<{ InscribeOp::CODE }, &'a InscribeOp>),
 }
 
 impl<'a> From<&'a Op> for OpSer<'a> {
@@ -43,6 +45,7 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::SDPActive(op) => Self::SDPActive(OpWire::new(op)),
             Op::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
             Op::ProgramRegister(op) => Self::ProgramRegister(OpWire::new(op)),
+            Op::Inscribe(op) => Self::Inscribe(OpWire::new(op)),
         }
     }
 }
@@ -60,6 +63,7 @@ impl<'a> From<OpRef<'a>> for OpSer<'a> {
             OpRef::Transfer(op) => Self::Transfer(OpWire::new(op)),
             OpRef::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
             OpRef::ProgramRegister(op) => Self::ProgramRegister(OpWire::new(op)),
+            OpRef::Inscribe(op) => Self::Inscribe(OpWire::new(op)),
         }
     }
 }
@@ -78,6 +82,7 @@ pub enum OpDe {
     SDPActive(OpWire<{ SDPActiveOp::CODE }, SDPActiveOp>),
     ClaimPowReward(OpWire<{ ClaimPowRewardOp::CODE }, ClaimPowRewardOp>),
     ProgramRegister(OpWire<{ ProgramRegisterOp::CODE }, ProgramRegisterOp>),
+    Inscribe(OpWire<{ InscribeOp::CODE }, InscribeOp>),
 }
 
 impl From<OpDe> for Op {
@@ -93,6 +98,7 @@ impl From<OpDe> for Op {
             OpDe::SDPActive(w) => Self::SDPActive(w.into_op()),
             OpDe::ClaimPowReward(w) => Self::ClaimPowReward(w.into_op()),
             OpDe::ProgramRegister(w) => Self::ProgramRegister(w.into_op()),
+            OpDe::Inscribe(w) => Self::Inscribe(w.into_op()),
         }
     }
 }
