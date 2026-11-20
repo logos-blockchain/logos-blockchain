@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::RangeInclusive};
 
 use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
 use lb_blend_message::{
@@ -14,7 +14,7 @@ use lb_core::{
     mantle::Value,
     sdp::{Declaration, ProviderId, ServiceType},
 };
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
 use tracing::debug;
@@ -44,11 +44,15 @@ pub struct CurrentEpochState {
 }
 
 impl CurrentEpochState {
-    pub fn new(epoch_state: &EpochState, settings: &RewardsParameters) -> Self {
+    pub fn new(
+        epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
+        settings: &RewardsParameters,
+    ) -> Self {
         Self {
             epoch: epoch_state.epoch(),
             epoch_randomness: (*epoch_state.nonce()).into(),
-            leader_input: settings.leader_inputs(epoch_state),
+            leader_input: settings.leader_inputs(epoch_state, epoch_slots),
             pow_input: settings.pow_inputs(epoch_state),
         }
     }
@@ -106,6 +110,7 @@ impl CurrentEpochTracker {
         current_reward_epoch_state: &CurrentEpochState,
         last_epoch_state: &EpochState,
         next_epoch_state: &EpochState,
+        next_epoch_slots: &RangeInclusive<Slot>,
         target_settings: &RewardsParameters,
         settings: &RewardsParameters,
     ) -> CurrentEpochTrackerOutput<ProofsVerifier>
@@ -136,7 +141,11 @@ impl CurrentEpochTracker {
                 next_epoch_state.epoch,
             );
             return CurrentEpochTrackerOutput::WithoutTargetEpoch {
-                current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
+                current_epoch_state: CurrentEpochState::new(
+                    next_epoch_state,
+                    next_epoch_slots,
+                    settings,
+                ),
                 current_epoch_tracker: Self::new(),
             };
         }
@@ -152,7 +161,11 @@ impl CurrentEpochTracker {
                 target_settings.minimum_network_size.get()
             );
             return CurrentEpochTrackerOutput::WithoutTargetEpoch {
-                current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
+                current_epoch_state: CurrentEpochState::new(
+                    next_epoch_state,
+                    next_epoch_slots,
+                    settings,
+                ),
                 current_epoch_tracker: Self::new(),
             };
         }
@@ -196,7 +209,11 @@ impl CurrentEpochTracker {
                 proof_verifier,
                 self.epoch_income,
             ),
-            current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
+            current_epoch_state: CurrentEpochState::new(
+                next_epoch_state,
+                next_epoch_slots,
+                settings,
+            ),
             current_epoch_tracker: Self::new(),
         }
     }

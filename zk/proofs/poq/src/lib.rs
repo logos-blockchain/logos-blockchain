@@ -271,6 +271,8 @@ mod tests {
             )
             .unwrap()
             .into(),
+            pol_window_first_slot: 648_000,
+            pol_window_last_slot: 1_295_999,
         };
         let common_data = PoQCommonInputsData {
             core_quota: Quota::new::<15>(),
@@ -311,6 +313,8 @@ mod tests {
             pol_eligible_aged: chain_data.pol_eligible_aged,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
+            pol_window_first_slot: chain_data.pol_window_first_slot,
+            pol_window_last_slot: chain_data.pol_window_last_slot,
         };
         assert!(verify(&proof, recomputed_verify_inputs.into()).unwrap());
     }
@@ -341,8 +345,36 @@ mod tests {
             pol_eligible_aged: chain_data.pol_eligible_aged,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
+            pol_window_first_slot: chain_data.pol_window_first_slot,
+            pol_window_last_slot: chain_data.pol_window_last_slot,
         };
         assert!(verify(&proof, recomputed_verify_inputs.into()).unwrap());
+    }
+
+    #[test]
+    fn test_leader_slot_outside_window() {
+        let (chain_data, _, _) = test_utils::leader_witness_data();
+        let epoch_length = chain_data.pol_window_last_slot - chain_data.pol_window_first_slot + 1;
+        let previous_epoch = (
+            chain_data.pol_window_first_slot - epoch_length,
+            chain_data.pol_window_first_slot - 1,
+        );
+        let next_epoch = (
+            chain_data.pol_window_last_slot + 1,
+            chain_data.pol_window_last_slot + epoch_length,
+        );
+
+        for (pol_window_first_slot, pol_window_last_slot) in [previous_epoch, next_epoch] {
+            let (chain_data, common_data, wallet_data) = test_utils::leader_witness_data();
+            let chain_data = PoQChainInputsData {
+                pol_window_first_slot,
+                pol_window_last_slot,
+                ..chain_data
+            };
+            let witness_inputs =
+                PoQWitnessInputs::from_leader_data(chain_data, common_data, wallet_data);
+            assert!(prove(witness_inputs).is_err());
+        }
     }
 
     #[test]
@@ -373,6 +405,8 @@ mod tests {
             )
             .unwrap()
             .into(),
+            pol_window_first_slot: 648_000,
+            pol_window_last_slot: 1_295_999,
         };
         let common_data = PoQCommonInputsData {
             core_quota: Quota::new::<10>(),
@@ -419,6 +453,8 @@ mod tests {
             pol_eligible_aged: chain_data.pol_eligible_aged,
             lottery_0: chain_data.lottery_0,
             lottery_1: chain_data.lottery_1,
+            pol_window_first_slot: chain_data.pol_window_first_slot,
+            pol_window_last_slot: chain_data.pol_window_last_slot,
         };
         assert!(verify(&proof, recomputed_verify_inputs.into()).unwrap());
     }

@@ -1099,6 +1099,8 @@ fn activity_proof(
             message_quota,
             lottery_0: target.lottery_0,
             lottery_1: target.lottery_1,
+            pol_window_first_slot: config.starting_slot_for_epoch(target.epoch).into_inner(),
+            pol_window_last_slot: config.last_slot_for_epoch(target.epoch).into_inner(),
         },
         pow: PowInputs {
             pow_blend_difficulty: target.blend_pow_difficulty,

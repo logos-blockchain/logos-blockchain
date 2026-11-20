@@ -2,7 +2,7 @@ pub mod rewards;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::RangeInclusive};
 
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
@@ -51,6 +51,7 @@ impl Service {
         self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
         config: ServiceParameters,
         last_rewards_params: &ServiceRewardsParameters,
         rewards_params: &ServiceRewardsParameters,
@@ -60,6 +61,7 @@ impl Service {
                 let (new_state, reward_notes, events) = state.try_apply_header(
                     last_epoch_state,
                     epoch_state,
+                    epoch_slots,
                     config,
                     &last_rewards_params.blend,
                     &rewards_params.blend,
@@ -135,10 +137,12 @@ impl Service {
         self,
         rewards_params: &ServiceRewardsParameters,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
     ) -> Self {
         match self {
             Self::BlendNetwork(mut state) => {
-                state.rewards = blend::Rewards::new(&rewards_params.blend, epoch_state);
+                state.rewards =
+                    blend::Rewards::new(&rewards_params.blend, epoch_state, epoch_slots);
                 Self::BlendNetwork(state)
             }
         }
@@ -227,6 +231,7 @@ impl<R: Rewards> ServiceState<R> {
         mut self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
         service_params: ServiceParameters,
         last_rewards_params: &R::Params,
         rewards_params: &R::Params,
@@ -239,6 +244,7 @@ impl<R: Rewards> ServiceState<R> {
             (self.rewards, reward_notes) = self.rewards.update_epoch(
                 last_epoch_state,
                 epoch_state,
+                epoch_slots,
                 &service_params,
                 last_rewards_params,
                 rewards_params,
@@ -350,10 +356,14 @@ impl SdpLedger {
         config: &Config,
         mut note_sets: NoteSets,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
         declarations: impl IntoIterator<Item = SignedOperation<SDPDeclareOp, Preverified, GenesisMode>>,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
-        let mut sdp = Self::new(epoch_state.epoch())
-            .with_blend_service(&config.service_rewards_params.blend, epoch_state);
+        let mut sdp = Self::new(epoch_state.epoch()).with_blend_service(
+            &config.service_rewards_params.blend,
+            epoch_state,
+            epoch_slots,
+        );
 
         let mut all_events = Vec::new();
         for declaration in declarations {
@@ -387,6 +397,7 @@ impl SdpLedger {
         mut self,
         rewards_settings: &blend::RewardsParameters,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
     ) -> Self {
         assert_eq!(
             epoch_state.epoch, self.epoch,
@@ -394,7 +405,7 @@ impl SdpLedger {
         );
         let service = Service::BlendNetwork(Self::new_service_state(
             ServiceType::BlendNetwork,
-            blend::Rewards::new(rewards_settings, epoch_state),
+            blend::Rewards::new(rewards_settings, epoch_state, epoch_slots),
         ));
         self.services = self.services.insert(ServiceType::BlendNetwork, service);
         self
@@ -405,6 +416,7 @@ impl SdpLedger {
         mut self,
         rewards_params: &ServiceRewardsParameters,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
     ) -> Self {
         // The declarations run before the genesis epoch state is final; no
         // income exists at genesis, so the reward state is rebuilt from
@@ -417,7 +429,7 @@ impl SdpLedger {
                     *service_type,
                     service
                         .clone()
-                        .with_genesis_rewards(rewards_params, epoch_state),
+                        .with_genesis_rewards(rewards_params, epoch_state, epoch_slots),
                 )
             })
             .collect();
@@ -440,6 +452,7 @@ impl SdpLedger {
         config: &Config,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
     ) -> Result<(Self, HeaderEffect), Error> {
         let mut all_reward_notes = Vec::new();
         let mut all_events = Vec::new();
@@ -455,6 +468,7 @@ impl SdpLedger {
                 let (new_state, reward_notes, events) = service_state.clone().try_apply_header(
                     last_epoch_state,
                     epoch_state,
+                    epoch_slots,
                     *service_params,
                     &last_config.service_rewards_params,
                     &config.service_rewards_params,
@@ -778,7 +792,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        cryptarchia::tests::note_with_sk, mantle::sdp::test_utils::generate_activity_proof,
+        cryptarchia::tests::note_with_sk,
+        mantle::sdp::test_utils::{epoch_slots, generate_activity_proof},
     };
 
     fn setup(service_params: ServiceParameters) -> Config {
@@ -894,6 +909,7 @@ mod tests {
         SdpLedger::new(epoch).with_blend_service(
             &config.service_rewards_params.blend,
             &dummy_epoch_state(epoch),
+            &epoch_slots(epoch),
         )
     }
 
@@ -955,6 +971,7 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch0,
+                &epoch_slots(epoch0.epoch()),
                 &epoch0,
                 &config.service_rewards_params.blend,
             ))),
@@ -993,7 +1010,13 @@ mod tests {
         let mut last_epoch_state = epoch0;
         let new_epoch_state = next_epoch_state(1.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
+            .try_apply_header(
+                &config,
+                &config,
+                &last_epoch_state,
+                &new_epoch_state,
+                &epoch_slots(new_epoch_state.epoch()),
+            )
             .unwrap();
         last_epoch_state = new_epoch_state;
 
@@ -1019,7 +1042,13 @@ mod tests {
         for epoch in 2..=6 {
             let new_epoch_state = next_epoch_state(epoch.into(), &ledger, &config);
             (ledger, _) = ledger
-                .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
+                .try_apply_header(
+                    &config,
+                    &config,
+                    &last_epoch_state,
+                    &new_epoch_state,
+                    &epoch_slots(new_epoch_state.epoch()),
+                )
                 .unwrap();
             last_epoch_state = new_epoch_state;
         }
@@ -1097,7 +1126,13 @@ mod tests {
         let last_epoch_state = epoch0;
         let new_epoch_state = next_epoch_state(1.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
+            .try_apply_header(
+                &config,
+                &config,
+                &last_epoch_state,
+                &new_epoch_state,
+                &epoch_slots(new_epoch_state.epoch()),
+            )
             .unwrap();
 
         let utxo = note_with_sk();
@@ -1178,7 +1213,13 @@ mod tests {
         // Move forward to the epoch 1
         let epoch1 = next_epoch_state(1.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch0, &epoch1)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch0,
+                &epoch1,
+                &epoch_slots(epoch1.epoch()),
+            )
             .unwrap();
 
         // Add a declaration at epoch 1
@@ -1208,15 +1249,33 @@ mod tests {
         // from epoch 3)
         let epoch2 = next_epoch_state(2.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch1, &epoch2)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch1,
+                &epoch2,
+                &epoch_slots(epoch2.epoch()),
+            )
             .unwrap();
         let epoch3 = next_epoch_state(3.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch2, &epoch3)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch2,
+                &epoch3,
+                &epoch_slots(epoch3.epoch()),
+            )
             .unwrap();
         let epoch4 = next_epoch_state(4.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch3, &epoch4)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch3,
+                &epoch4,
+                &epoch_slots(epoch4.epoch()),
+            )
             .unwrap();
         // Check that the declaration is still present.
         let declarations = ledger
@@ -1234,6 +1293,7 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch3, // proving activity from epoch 3
+                &epoch_slots(epoch3.epoch()),
                 &epoch4,
                 &config.service_rewards_params.blend,
             ))),
@@ -1257,15 +1317,33 @@ mod tests {
         // (active=4, inactivity=2 -> 4+2 < 7).
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch4, &epoch5)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch4,
+                &epoch5,
+                &epoch_slots(epoch5.epoch()),
+            )
             .unwrap();
         let epoch6 = next_epoch_state(6.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch5, &epoch6)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch5,
+                &epoch6,
+                &epoch_slots(epoch6.epoch()),
+            )
             .unwrap();
         let epoch7 = next_epoch_state(7.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch6, &epoch7)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch6,
+                &epoch7,
+                &epoch_slots(epoch7.epoch()),
+            )
             .unwrap();
         // Nevertheless, the declaration should be still present because no
         // withdrawal message was submitted.
@@ -1301,7 +1379,13 @@ mod tests {
         // Move forward to epoch 1 and declare.
         let epoch1 = next_epoch_state(1.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch0, &epoch1)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch0,
+                &epoch1,
+                &epoch_slots(epoch1.epoch()),
+            )
             .unwrap();
 
         let utxo = note_with_sk();
@@ -1323,11 +1407,23 @@ mod tests {
         // Advance to epoch 3.
         let epoch2 = next_epoch_state(2.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch1, &epoch2)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch1,
+                &epoch2,
+                &epoch_slots(epoch2.epoch()),
+            )
             .unwrap();
         let epoch3 = next_epoch_state(3.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch2, &epoch3)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch2,
+                &epoch3,
+                &epoch_slots(epoch3.epoch()),
+            )
             .unwrap();
 
         // Simulate block-reward income accrued during epoch 3.
@@ -1337,7 +1433,13 @@ mod tests {
         // Advance to epoch 4: The declaration becomes active.
         let epoch4 = next_epoch_state(4.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch3, &epoch4)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch3,
+                &epoch4,
+                &epoch_slots(epoch4.epoch()),
+            )
             .unwrap();
 
         // Submit an activity proof at epoch 4
@@ -1347,6 +1449,7 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch3,
+                &epoch_slots(epoch3.epoch()),
                 &epoch4,
                 &config.service_rewards_params.blend,
             ))),
@@ -1363,7 +1466,13 @@ mod tests {
         assert_eq!(ledger.pending_rewards_income(), 0);
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         let (_, effect) = ledger
-            .try_apply_header(&config, &config, &epoch4, &epoch5)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch4,
+                &epoch5,
+                &epoch_slots(epoch5.epoch()),
+            )
             .unwrap();
 
         // The single provider is both the only submitter and the premium
@@ -1503,7 +1612,13 @@ mod tests {
             let new_epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
             let previous_state = sdp_ledger.clone();
             let (next_sdp_ledger, _) = sdp_ledger
-                .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
+                .try_apply_header(
+                    &config,
+                    &config,
+                    &last_epoch_state,
+                    &new_epoch_state,
+                    &epoch_slots(new_epoch_state.epoch()),
+                )
                 .unwrap();
             if epoch == removal_epoch {
                 assert_eq!(sdp_ledger, previous_state);
@@ -1652,7 +1767,13 @@ mod tests {
             let new_epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
             let events;
             (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
-                .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
+                .try_apply_header(
+                    &config,
+                    &config,
+                    &last_epoch_state,
+                    &new_epoch_state,
+                    &epoch_slots(new_epoch_state.epoch()),
+                )
                 .unwrap();
             assert_eq!(count_removal_events(events, declaration_id), 0);
             last_epoch_state = new_epoch_state;
@@ -1671,7 +1792,13 @@ mod tests {
         );
         let events;
         (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
-            .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
+            .try_apply_header(
+                &config,
+                &config,
+                &last_epoch_state,
+                &new_epoch_state,
+                &epoch_slots(new_epoch_state.epoch()),
+            )
             .unwrap();
         assert_eq!(count_removal_events(events, declaration_id), 1);
         assert!(
@@ -1700,7 +1827,13 @@ mod tests {
         // Declare at epoch 1.
         let epoch1 = next_epoch_state(1.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch0, &epoch1)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch0,
+                &epoch1,
+                &epoch_slots(epoch1.epoch()),
+            )
             .unwrap();
 
         let utxo = note_with_sk();
@@ -1721,7 +1854,13 @@ mod tests {
         // Withdraw at epoch 2 (`e`): `withdraw_at = 4`.
         let epoch2 = next_epoch_state(2.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch1, &epoch2)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch1,
+                &epoch2,
+                &epoch_slots(epoch2.epoch()),
+            )
             .unwrap();
         let withdraw_op = withdraw_op(declaration_id, 100);
         let proof_withdraw = ZkAndEd25519Proof::sample();
@@ -1748,7 +1887,13 @@ mod tests {
         // snapshot and block-reward income accrues.
         let epoch3 = next_epoch_state(3.into(), &ledger, &config);
         (ledger, _) = ledger
-            .try_apply_header(&config, &config, &epoch2, &epoch3)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch2,
+                &epoch3,
+                &epoch_slots(epoch3.epoch()),
+            )
             .unwrap();
         assert!(
             epoch_snapshot_contains(&declaration_id, 3.into(), &ledger, &config),
@@ -1762,7 +1907,13 @@ mod tests {
         let epoch4 = next_epoch_state(4.into(), &ledger, &config);
         let events;
         (ledger, HeaderEffect { events, .. }) = ledger
-            .try_apply_header(&config, &config, &epoch3, &epoch4)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch3,
+                &epoch4,
+                &epoch_slots(epoch4.epoch()),
+            )
             .unwrap();
         assert!(!epoch_snapshot_contains(
             &declaration_id,
@@ -1783,6 +1934,7 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 &zk_key,
                 &epoch3,
+                &epoch_slots(epoch3.epoch()),
                 &epoch4,
                 &config.service_rewards_params.blend,
             ))),
@@ -1799,7 +1951,13 @@ mod tests {
         // the declaration removed in the same header, in that order.
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         let (ledger, effect) = ledger
-            .try_apply_header(&config, &config, &epoch4, &epoch5)
+            .try_apply_header(
+                &config,
+                &config,
+                &epoch4,
+                &epoch5,
+                &epoch_slots(epoch5.epoch()),
+            )
             .unwrap();
         let received: Vec<&Note> = effect
             .reward_notes

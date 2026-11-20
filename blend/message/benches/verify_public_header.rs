@@ -120,6 +120,8 @@ static FIXTURE: LazyLock<(EncapsulatedMessage, RealProofsVerifier)> = LazyLock::
             message_quota: Quota::ONE,
             lottery_0: full_width_value(1003),
             lottery_1: full_width_value(1004),
+            pol_window_first_slot: 648_000,
+            pol_window_last_slot: 1_295_999,
         },
         pow: PowInputs::disabled(),
     };

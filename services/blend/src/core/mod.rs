@@ -599,6 +599,8 @@ where
                 BlendEpochState {
                     aged,
                     epoch,
+                    first_slot,
+                    last_slot,
                     lottery_0,
                     lottery_1,
                     nonce,
@@ -642,6 +644,8 @@ where
                             message_quota: config.epoch_leadership_quota(),
                             lottery_0,
                             lottery_1,
+                            pol_window_first_slot: first_slot.into_inner(),
+                            pol_window_last_slot: last_slot.into_inner(),
                         },
                         poq_pow_public_inputs: PowInputs {
                             pow_blend_difficulty: pow_difficulty,

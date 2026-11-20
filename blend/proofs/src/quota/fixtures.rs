@@ -39,6 +39,8 @@ pub fn valid_proof_of_core_quota_inputs(
             message_quota: Quota::ONE,
             lottery_0,
             lottery_1,
+            pol_window_first_slot: 648_000,
+            pol_window_last_slot: 1_295_999,
         },
         pow: PowInputs {
             pow_blend_difficulty: BigUint::from(1u64).into(),
@@ -156,6 +158,8 @@ pub fn valid_proof_of_leadership_quota_inputs(
             message_quota: leader_quota,
             lottery_0: chain.lottery_0,
             lottery_1: chain.lottery_1,
+            pol_window_first_slot: chain.pol_window_first_slot,
+            pol_window_last_slot: chain.pol_window_last_slot,
         },
         core: CoreInputs {
             zk_root: BigUint::from(1u64).into(),
@@ -230,6 +234,8 @@ pub fn valid_proof_of_work_quota_inputs(
                     .parse::<BigUint>()
                     .unwrap()
                     .into(),
+            pol_window_first_slot: 648_000,
+            pol_window_last_slot: 1_295_999,
         },
     };
 

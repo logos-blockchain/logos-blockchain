@@ -479,6 +479,8 @@ pub fn new_epoch_info(
             message_quota: settings.epoch_leadership_quota(),
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
+            pol_window_first_slot: 0,
+            pol_window_last_slot: 0,
         },
     }
 }

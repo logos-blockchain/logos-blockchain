@@ -3,6 +3,8 @@ pub mod helpers;
 pub mod pow;
 pub mod sdp;
 
+use std::ops::RangeInclusive;
+
 use lb_core::{
     crypto::Hash,
     events::TxEvent,
@@ -81,11 +83,19 @@ pub struct LedgerState {
 
 impl LedgerState {
     #[must_use]
-    pub fn new(config: &Config, pow_reward_pool: PowReward, epoch_state: &EpochState) -> Self {
+    pub fn new(
+        config: &Config,
+        pow_reward_pool: PowReward,
+        epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
+    ) -> Self {
         Self {
             channels: channel::Channels::new(),
-            sdp: sdp::SdpLedger::new(epoch_state.epoch())
-                .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
+            sdp: sdp::SdpLedger::new(epoch_state.epoch()).with_blend_service(
+                &config.sdp_config.service_rewards_params.blend,
+                epoch_state,
+                epoch_slots,
+            ),
             pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
             programs: Programs::new(),
         }
@@ -98,6 +108,7 @@ impl LedgerState {
         pow_reward_pool: PowReward,
         note_sets: NoteSets,
         epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
     ) -> Result<(Self, NoteSets, Vec<TxEvent>), Error> {
         let mut tx_events = Vec::new();
 
@@ -108,6 +119,7 @@ impl LedgerState {
             &config.sdp_config,
             note_sets,
             epoch_state,
+            epoch_slots,
             signed_operation_declarations,
         )?;
         tx_events.extend(events);
@@ -125,11 +137,18 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn with_genesis_epoch_state(self, config: &Config, epoch_state: &EpochState) -> Self {
+    pub fn with_genesis_epoch_state(
+        self,
+        config: &Config,
+        epoch_state: &EpochState,
+        epoch_slots: &RangeInclusive<Slot>,
+    ) -> Self {
         Self {
-            sdp: self
-                .sdp
-                .with_genesis_epoch_state(&config.sdp_config.service_rewards_params, epoch_state),
+            sdp: self.sdp.with_genesis_epoch_state(
+                &config.sdp_config.service_rewards_params,
+                epoch_state,
+                epoch_slots,
+            ),
             ..self
         }
     }
@@ -167,11 +186,14 @@ impl LedgerState {
     ) -> Result<(Self, HeaderEffect), Error> {
         let last_config = config_for_epoch(eras, last_epoch_state.epoch);
         let config = config_for_epoch(eras, epoch_state.epoch);
+        let epoch_slots = eras.starting_slot_for_epoch(epoch_state.epoch)
+            ..=eras.last_slot_for_epoch(epoch_state.epoch);
         let (new_sdp, effect) = self.sdp.try_apply_header(
             &last_config.sdp_config,
             &config.sdp_config,
             last_epoch_state,
             epoch_state,
+            &epoch_slots,
         )?;
         self.sdp = new_sdp;
         self.pow = self.pow.apply_header(last_epoch_state, epoch_state, config);
