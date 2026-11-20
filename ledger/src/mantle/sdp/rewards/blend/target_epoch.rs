@@ -202,6 +202,7 @@ impl TargetEpochTracker {
         target_epoch_state: &TargetEpochState<ProofsVerifier>,
         provider_id: &ProviderId,
     ) -> RewardEstimate {
+        let in_activity_epoch = target_epoch_state.providers.contains_key(provider_id);
         let did_submit_proof = self.submitted_proofs.contains_key(provider_id);
         let premium_providers = &self.min_hamming_distance.providers;
         let is_premium = premium_providers.contains(provider_id);
@@ -223,6 +224,7 @@ impl TargetEpochTracker {
             activity_epoch: target_epoch_state.epoch(),
             pool: target_epoch_state.epoch_income(),
             network,
+            in_activity_epoch,
             did_submit_proof,
             is_premium,
             estimated_reward,
@@ -299,6 +301,8 @@ pub struct RewardEstimate {
     pub network: Network,
     /// Blend income to be split
     pub pool: Value,
+    /// Whether the provider was in the activity epoch, and so can earn from it
+    pub in_activity_epoch: bool,
     /// Whether the provider submitted its activity proof
     pub did_submit_proof: bool,
     /// Whether the provider earns the double reward

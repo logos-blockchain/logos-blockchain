@@ -1,7 +1,9 @@
 use std::fmt::{Debug, Display};
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
-use lb_blend_service::message::{DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::message::{
+    CoreStatus, DataPayload, NetworkInfo, ProxyServiceMessage, ServiceMessage,
+};
 use lb_chain_service::{
     BlendRewards, State,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -14,6 +16,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_network_service::backends::libp2p::PeerId;
 use lb_sdp_service::{
     SdpService, SdpServiceApi, SdpSubmission, mempool::SdpMempoolAdapter, state::SdpStateStorage,
+    status,
 };
 use lb_wallet_service::{
     TipResponse,
@@ -23,6 +26,7 @@ use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, ServiceData},
 };
+use serde::Serialize;
 use tokio::sync::oneshot;
 
 use crate::http::{DynError, consensus::Cryptarchia};
@@ -118,6 +122,25 @@ pub fn select_service_note<Id: Copy>(
     }
 
     Err(ServiceNoteError::InsufficientTotal { total, threshold })
+}
+
+/// This node's core status, or `None` when it is not a core node.
+pub async fn blend_core_status<BlendService, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<Option<CoreStatus>, DynError>
+where
+    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
+{
+    let relay = handle.relay::<BlendService>().await?;
+    let (sender, receiver) = oneshot::channel();
+
+    relay
+        .send(ServiceMessage::GetCoreStatus { reply: sender }.into())
+        .await
+        .map_err(|error| DynError::from(error.to_string()))?;
+
+    receiver.await.map_err(|error| Box::new(error) as DynError)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -349,7 +372,8 @@ where
         SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
     >::from_overwatch_handle(handle)
     .await;
-    let Some(participation) = sdp_api.get_participation().await? else {
+    let sdp_status = sdp_api.get_status().await?;
+    let Some(participation) = sdp_status.participation else {
         return Err(DynError::from("The node has no Blend declaration."));
     };
 
@@ -358,6 +382,65 @@ where
         .await?
         .ok_or_else(|| DynError::from("The node has no Blend declaration in the ledger."))?;
     Ok(rewards)
+}
+
+/// The node's Blend status.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlendStatus {
+    pub sdp: status::SdpBlendStatus,
+    /// `None` when not a core node.
+    pub core: Option<CoreStatus>,
+}
+
+/// Gets this node's Blend status: core or edge, its declaration and its
+/// activity proof for the activity epoch.
+///
+/// # Errors
+///
+/// Fails right away if the chain is not `Online`.
+pub async fn blend_status<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    BlendService,
+    RuntimeServiceId,
+>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<BlendStatus, DynError>
+where
+    MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx: Send> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
+    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
+    RuntimeServiceId: Send
+        + Sync
+        + Debug
+        + Display
+        + 'static
+        + AsServiceId<ChainService>
+        + AsServiceId<BlendService>
+        + AsServiceId<
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
+        >,
+{
+    let chain_api = CryptarchiaServiceApi::<ChainService>::from_overwatch_handle(handle).await;
+    if chain_api.info().await?.cryptarchia_info.state != State::Online {
+        return Err(DynError::from("The node is not online yet."));
+    }
+
+    let sdp_api = SdpServiceApi::<
+        SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
+    >::from_overwatch_handle(handle)
+    .await;
+    let status = sdp_api.get_blend_status().await?;
+
+    let core_status = blend_core_status::<BlendService, RuntimeServiceId>(handle).await?;
+
+    Ok(BlendStatus {
+        sdp: status,
+        core: core_status,
+    })
 }
 
 #[cfg(test)]

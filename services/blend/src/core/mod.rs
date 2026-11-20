@@ -112,7 +112,7 @@ use crate::{
         chain::{BlendEpoch, BlendEpochState},
     },
     message::{
-        DataPayload, DataPayloadType, ProcessedMessage, ServiceMessage,
+        CoreStatus, DataPayload, DataPayloadType, EpochPeers, ProcessedMessage, ServiceMessage,
         proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
     },
     mode::{CoreMembership, ModeMembership},
@@ -1315,7 +1315,30 @@ where
             drop(reply.send(pending_transactions.iter().cloned().collect()));
             recovery_checkpoint
         }
+        ServiceMessage::GetCoreStatus { reply } => {
+            let status = core_status(backend, &recovery_checkpoint).await;
+            let _ = reply.send(status);
+            recovery_checkpoint
+        }
     }
+}
+
+/// This node's core status, or `None` without core network info.
+async fn core_status<NodeId, Backend, ProofsVerifier, NetworkSettings, RuntimeServiceId>(
+    backend: &Backend,
+    recovery_checkpoint: &ServiceState<Backend::Settings, NetworkSettings>,
+) -> Option<CoreStatus>
+where
+    Backend: BlendBackend<NodeId, ChaCha20Rng, ProofsVerifier, RuntimeServiceId> + Sync,
+{
+    let core_info = backend.network_info().await?.core_info?;
+    Some(CoreStatus {
+        epoch_peers: EpochPeers::from(&core_info),
+        tokens_collected_in_current_epoch: recovery_checkpoint
+            .current_epoch_token_collector()
+            .tokens()
+            .len(),
+    })
 }
 
 /// Acts on something the current epoch produced, which both stages do the same
