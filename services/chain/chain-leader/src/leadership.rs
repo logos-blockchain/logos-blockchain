@@ -42,43 +42,6 @@ use crate::{
 
 const LOG_TARGET: &str = chain::leader::LEADERSHIP;
 
-/// The first of the eligible notes that wins `slot`, if any.
-///
-/// The lottery only depends on the epoch, the slot and the note, so this needs
-/// no tip. The proof of a win does, as it attests that the note is unspent.
-pub async fn winning_note<RuntimeServiceId>(
-    aged: &[AgedNote],
-    epoch_state: &EpochState,
-    slot: Slot,
-    kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-) -> Option<AgedNote> {
-    let public_inputs = public_inputs_for_slot(epoch_state, slot, &epoch_state.note_sets);
-    for note in aged {
-        match kms
-            .check_winning_with_key(note.key_id.clone(), &note.note.note, &public_inputs)
-            .await
-        {
-            Ok(true) => {
-                return Some(AgedNote {
-                    note: note.note.clone(),
-                    aged_path: note.aged_path.clone(),
-                    key_id: note.key_id.clone(),
-                });
-            }
-            Ok(false) => {}
-            Err(e) => {
-                metrics::consensus_proposals_create_failed("leadership_check");
-                tracing::error!(
-                    target: LOG_TARGET,
-                    "Failed to check winning note {:?} for {slot:?}: {e:?}",
-                    note.note.note.commitment(),
-                );
-            }
-        }
-    }
-    None
-}
-
 // An aged note of the wallet winning the slot, with the public inputs it wins
 // and its wallet witness.
 #[derive(Debug)]
@@ -86,25 +49,6 @@ pub struct WinningNote {
     pub note: AgedNote,
     pub public_inputs: LeaderPublic,
     pub wallet_inputs: PolWalletInputsData,
-}
-
-impl WinningNote {
-    /// `note`, which won `slot` (see [`winning_note`]), with the public inputs
-    /// of its win against `C_LEAD` and the eligible root of the `latest` note
-    /// sets, and its witness, or `None` if the witness fails.
-    pub async fn of(
-        note: AgedNote,
-        epoch_state: &EpochState,
-        slot: Slot,
-        latest: &NoteSets,
-    ) -> Option<Self> {
-        let wallet_inputs = leader_wallet_inputs(&note, epoch_state, latest, slot).await?;
-        Some(Self {
-            note,
-            public_inputs: public_inputs_for_slot(epoch_state, slot, latest),
-            wallet_inputs,
-        })
-    }
 }
 
 // The first aged note winning `slot` whose witness can be built, checked
