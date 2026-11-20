@@ -1201,6 +1201,10 @@ mod tests {
     /// message, and the declaration persists across epochs regardless of how
     /// long it has been inactive.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This test walks a declaration through eight epochs, one header each"
+    )]
     fn active_message_refreshes_declaration() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
@@ -1367,6 +1371,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This test walks a provider from declaration to reward through six epochs, one header each"
+    )]
     fn rewards_distributed_to_active_provider() {
         let config = setup(ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
