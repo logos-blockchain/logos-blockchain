@@ -288,14 +288,14 @@ impl Settings {
     /// uncles as the era allows, with transactions taking all the bytes it
     /// allows them.
     #[must_use]
-    pub fn max_block_size(&self) -> usize {
+    pub const fn max_block_size(&self) -> usize {
         Block::<ValidatedTx>::max_encoded_size(self.block_limits())
     }
 
     /// The size of the largest block proposal of the era: one that references
     /// as many uncles and transactions as the era allows.
     #[must_use]
-    pub fn max_proposal_size(&self) -> usize {
+    pub const fn max_proposal_size(&self) -> usize {
         Proposal::max_encoded_size(self.block_limits())
     }
 

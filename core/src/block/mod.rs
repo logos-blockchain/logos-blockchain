@@ -123,8 +123,8 @@ impl References {
     /// The largest canonical encoding of the references of a proposal whose
     /// era allows `max_transactions`.
     #[must_use]
-    pub fn max_encoded_size(max_transactions: u16) -> usize {
-        size_of::<u16>() + usize::from(max_transactions) * TxHashPrefix::CANONICAL_ENCODED_SIZE
+    pub const fn max_encoded_size(max_transactions: u16) -> usize {
+        size_of::<u16>() + max_transactions as usize * TxHashPrefix::CANONICAL_ENCODED_SIZE
     }
 
     /// Constructs a `References` instance from a list of transactions,
@@ -239,7 +239,7 @@ impl Proposal {
     /// than being an unexplained total. It describes the canonical encoding,
     /// not the configured-bincode representation.
     #[must_use]
-    pub fn max_encoded_size(limits: BlockLimits) -> usize {
+    pub const fn max_encoded_size(limits: BlockLimits) -> usize {
         Header::CANONICAL_ENCODED_SIZE
             + UncleHeaders::max_encoded_size(limits.max_uncles)
             + References::max_encoded_size(limits.max_transactions)
@@ -334,7 +334,7 @@ impl<Tx> Block<Tx> {
     /// transactions take at most `limits.max_transactions_size` bytes besides
     /// their count.
     #[must_use]
-    pub fn max_encoded_size(limits: BlockLimits) -> usize {
+    pub const fn max_encoded_size(limits: BlockLimits) -> usize {
         Header::CANONICAL_ENCODED_SIZE
             + UncleHeaders::max_encoded_size(limits.max_uncles)
             + size_of::<u16>()

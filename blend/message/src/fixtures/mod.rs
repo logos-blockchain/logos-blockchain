@@ -3,6 +3,7 @@ use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection},
 };
+use lb_core::block::{BlockLimits, Proposal};
 use lb_key_management_system_keys::keys::{
     ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
     UnsecuredEd25519Key,
@@ -30,8 +31,21 @@ use crate::{
 // -- Payload ---------------------------------------------------------------
 
 /// The payload body size of the fixtures: the largest block proposal of an era
-/// that allows four uncles.
-const FIXTURE_PAYLOAD_BODY_SIZE: u16 = 17_752;
+/// under the limits below, which match the deployment templates.
+/// It is currently `17_752` bytes.
+const FIXTURE_PAYLOAD_BODY_SIZE: u16 = {
+    let block_limits = BlockLimits {
+        max_uncles: 4,
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+    };
+    let size = Proposal::max_encoded_size(block_limits);
+    assert!(
+        size <= u16::MAX as usize,
+        "The largest proposal must fit a Blend payload."
+    );
+    size as u16
+};
 
 /// The layout of the fixture messages: one blending header, and bodies of
 /// [`FIXTURE_PAYLOAD_BODY_SIZE`].
