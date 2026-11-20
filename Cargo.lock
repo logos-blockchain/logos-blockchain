@@ -5010,6 +5010,7 @@ dependencies = [
  "rand 0.8.8",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -5277,6 +5278,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde_json",
  "x-wing",
+ "zeroize",
 ]
 
 [[package]]

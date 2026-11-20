@@ -13,13 +13,17 @@ use lb_log_targets::kms;
 use lb_note_encryption::{DecapsulationKey, DeliveryMessage, EncapsulationKey, decrypt_note};
 use tokio::sync::oneshot;
 use tracing::debug;
+use zeroize::Zeroize as _;
 
 const LOG_TARGET: &str = kms::operators::ZK_NOTE_ENCRYPTION;
 
 // The key that opens the note ciphertexts of `key`, `sk_enc`, derived from
 // its secret key `k_logos`.
 fn decapsulation_key(key: &ZkKey) -> DecapsulationKey {
-    DecapsulationKey::from_secret_key(&fr_to_bytes(key.as_fr()))
+    let mut k_logos = fr_to_bytes(key.as_fr());
+    let sk_enc = DecapsulationKey::from_secret_key(&k_logos);
+    k_logos.zeroize();
+    sk_enc
 }
 
 // The note `message` delivers to the holder of `sk_enc` and `public_key`:

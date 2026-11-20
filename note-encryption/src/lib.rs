@@ -17,6 +17,7 @@ use chacha20poly1305::{AeadInPlace as _, ChaCha20Poly1305, Key, KeyInit as _, No
 use hybrid_array::{Array, typenum::U64};
 use rand_core::{CryptoRng, RngCore};
 use x_wing::{Decapsulate as _, Decapsulator as _, KeyExport as _};
+use zeroize::Zeroize as _;
 
 /// Size of an encryption key, the X-Wing encapsulation key.
 pub const ENCAPSULATION_KEY_SIZE: usize = x_wing::ENCAPSULATION_KEY_SIZE;
@@ -61,13 +62,18 @@ impl DecapsulationKey {
     /// `sk_enc = BLAKE2b-256(WALLET_ENC_SK_V1 || k_logos)`.
     #[must_use]
     pub fn from_secret_key(k_logos: &[u8; 32]) -> Self {
-        Self::from_seed(blake2b_256(&[WALLET_ENC_SK_DST, k_logos]))
+        let mut sk_enc = blake2b_256(&[WALLET_ENC_SK_DST, k_logos]);
+        let key = Self::from_seed(sk_enc);
+        sk_enc.zeroize();
+        key
     }
 
     /// The key whose 32-byte X-Wing seed is `sk_enc`.
     #[must_use]
-    pub fn from_seed(sk_enc: [u8; 32]) -> Self {
-        Self(x_wing::DecapsulationKey::from(sk_enc))
+    pub fn from_seed(mut sk_enc: [u8; 32]) -> Self {
+        let key = Self(x_wing::DecapsulationKey::from(sk_enc));
+        sk_enc.zeroize();
+        key
     }
 
     #[must_use]
@@ -159,7 +165,9 @@ pub fn encrypt_note(
 ) -> NoteCiphertext {
     let mut randomness = [0; x_wing::ENCAPSULATION_RANDOMNESS_SIZE];
     rng.fill_bytes(&mut randomness);
-    encrypt_note_with(pk_enc, commitment, value, nonce, randomness)
+    let ciphertext = encrypt_note_with(pk_enc, commitment, value, nonce, randomness);
+    randomness.zeroize();
+    ciphertext
 }
 
 // `randomness` is the input of X-Wing's `EncapsulateDerand`. It must be
@@ -170,16 +178,20 @@ fn encrypt_note_with(
     commitment: &Commitment,
     value: u64,
     nonce: &NoteNonce,
-    randomness: [u8; x_wing::ENCAPSULATION_RANDOMNESS_SIZE],
+    mut randomness: [u8; x_wing::ENCAPSULATION_RANDOMNESS_SIZE],
 ) -> NoteCiphertext {
-    let (kem_ciphertext, shared_secret) = pk_enc
-        .0
-        .encapsulate_deterministic(&Array::<u8, U64>::from(randomness));
+    let mut seed = Array::<u8, U64>::from(randomness);
+    randomness.zeroize();
+    let (kem_ciphertext, mut shared_secret) = pk_enc.0.encapsulate_deterministic(&seed);
+    seed.as_mut_slice().zeroize();
+    let cipher = cipher(&shared_secret, &kem_ciphertext);
+    shared_secret.as_mut_slice().zeroize();
 
+    // Sealed in place: the buffer holds no plaintext afterwards.
     let mut plaintext = [0; PLAINTEXT_SIZE];
     plaintext[..8].copy_from_slice(&value.to_le_bytes());
     plaintext[8..].copy_from_slice(nonce);
-    let tag = cipher(&shared_secret, &kem_ciphertext)
+    let tag = cipher
         .encrypt_in_place_detached(&Nonce::default(), commitment, &mut plaintext)
         .expect("a 40-byte message is below the limit of ChaCha20-Poly1305");
 
@@ -210,10 +222,12 @@ pub fn decrypt_note(
     let (kem_ciphertext, sealed) = ciphertext.split_at(KEM_CIPHERTEXT_SIZE);
     let (sealed, tag) = sealed.split_at(PLAINTEXT_SIZE);
     let tag: [u8; TAG_SIZE] = tag.try_into().ok()?;
-    let shared_secret = sk_enc.0.decapsulate_slice(kem_ciphertext).ok()?;
+    let mut shared_secret = sk_enc.0.decapsulate_slice(kem_ciphertext).ok()?;
+    let cipher = cipher(&shared_secret, kem_ciphertext);
+    shared_secret.as_mut_slice().zeroize();
 
     let mut plaintext: [u8; PLAINTEXT_SIZE] = sealed.try_into().ok()?;
-    cipher(&shared_secret, kem_ciphertext)
+    cipher
         .decrypt_in_place_detached(
             &Nonce::default(),
             commitment,
@@ -223,16 +237,17 @@ pub fn decrypt_note(
         .ok()?;
 
     let (value, nonce) = plaintext.split_at(8);
-    Some((
-        u64::from_le_bytes(value.try_into().ok()?),
-        nonce.try_into().ok()?,
-    ))
+    let note = value.try_into().ok().zip(nonce.try_into().ok());
+    plaintext.zeroize();
+    note.map(|(value, nonce)| (u64::from_le_bytes(value), nonce))
 }
 
 // key = BLAKE2b-256(LOGOS_NOTE_ENC_V1 || ss || ct)
 fn cipher(shared_secret: &[u8], kem_ciphertext: &[u8]) -> ChaCha20Poly1305 {
-    let key = blake2b_256(&[NOTE_ENC_DST, shared_secret, kem_ciphertext]);
-    ChaCha20Poly1305::new(&Key::from(key))
+    let mut key = Key::from(blake2b_256(&[NOTE_ENC_DST, shared_secret, kem_ciphertext]));
+    let cipher = ChaCha20Poly1305::new(&key);
+    key.as_mut_slice().zeroize();
+    cipher
 }
 
 fn blake2b_256(parts: &[&[u8]]) -> [u8; 32] {
