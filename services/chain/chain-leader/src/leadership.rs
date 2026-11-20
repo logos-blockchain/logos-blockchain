@@ -24,6 +24,7 @@ use lb_ledger::{
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_pol::PolWalletInputsData;
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
+use lb_utils::tokio::task::spawn_blocking;
 use lb_wallet_service::{
     AgedNote,
     api::{WalletApi, WalletServiceData},
@@ -52,6 +53,10 @@ pub struct WinningNote {
 
 // The first aged note winning `slot` whose witness can be built, checked
 // against C_LEAD and the latest eligible root.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "The lottery check and the witness of each note, with a log for each outcome"
+)]
 pub async fn find_winning_note<RuntimeServiceId>(
     aged: &[AgedNote],
     epoch_state: &EpochState,
@@ -76,7 +81,8 @@ pub async fn find_winning_note<RuntimeServiceId>(
                 );
                 // A winning note whose witness fails, such as one spent since
                 // the epoch snapshot, leaves the slot to the next winning note.
-                let Some(wallet_inputs) = leader_wallet_inputs(note, epoch_state, latest, slot)
+                let Some(wallet_inputs) =
+                    leader_wallet_inputs(note, epoch_state, latest, slot).await
                 else {
                     continue;
                 };
@@ -115,31 +121,43 @@ pub async fn find_winning_note<RuntimeServiceId>(
 }
 
 // The wallet half of the PoL witness of an aged note, proven against the aged
-// note sets of the epoch and the `latest` note sets, or `None` if it fails.
-fn leader_wallet_inputs(
+// note sets of the epoch and the `latest` note sets, or `None` if it fails. Its
+// paths are read from the nullifier store, so it's built on the blocking pool.
+async fn leader_wallet_inputs(
     aged: &AgedNote,
     epoch_state: &EpochState,
     latest: &NoteSets,
     slot: Slot,
 ) -> Option<PolWalletInputsData> {
-    let note = &aged.note;
-    pol_wallet_inputs(
-        &note.note,
-        note.note_set,
-        &note.nullifier,
-        &aged.aged_path,
-        &epoch_state.note_sets,
-        latest,
-    )
-    .inspect_err(|e| {
+    let note = aged.note.clone();
+    let aged_path = aged.aged_path.clone();
+    let (aged_sets, latest) = (epoch_state.note_sets.clone(), latest.clone());
+    let commitment = note.note.commitment();
+    let witness = spawn_blocking("logos/chain/leader-witness-blocking", move || {
+        pol_wallet_inputs(
+            &note.note,
+            note.note_set,
+            &note.nullifier,
+            &aged_path,
+            &aged_sets,
+            &latest,
+        )
+    })
+    .await;
+
+    let failed = |e: &dyn Display| {
         metrics::consensus_proposals_create_failed("private_inputs");
         tracing::error!(
             target: LOG_TARGET,
-            "Failed to build the witness of winning note {:?} for {slot:?}: {e}",
-            note.note.commitment(),
+            "Failed to build the witness of winning note {commitment:?} for {slot:?}: {e}",
         );
-    })
-    .ok()
+        None
+    };
+    match witness {
+        Ok(Ok(wallet_inputs)) => Some(wallet_inputs),
+        Ok(Err(e)) => failed(&e),
+        Err(e) => failed(&e),
+    }
 }
 
 // C_LEAD and eligible_LATEST.
@@ -175,8 +193,8 @@ pub enum PrivateInputsError {
 /// aged UTXO tree) and the wallet's leader-eligible notes (aged at the end of
 /// the previous epoch). The block-proposal path additionally needs the *latest*
 /// ledger state (to prove a note is still unspent), which it fetches separately
-/// per slot; the Blend winning-slot scan does not, since the leadership quota
-/// proof only attests that a note was aged, not that it is unspent.
+/// per won slot; the Blend winning-slot scan does not, since the leadership
+/// quota proof only attests that a note was aged, not that it is unspent.
 pub struct SlotContext {
     /// Tip explicitly passed to `get_leader_aged_notes` for the wallet query.
     pub wallet_tip: HeaderId,

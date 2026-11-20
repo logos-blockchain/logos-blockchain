@@ -243,11 +243,18 @@ pub enum WalletMsg {
     GenerateRewardKey {
         resp_tx: Sender<Result<ZkPublicKey, WalletServiceError>>,
     },
-    // A leader reward note under a private random nonce, returned once persisted.
+    // A leader reward note under a private random nonce, for a block about to
+    // be built. The wallet keeps it only once told to with `TrackLeaderReward`.
     NewLeaderReward {
         value: Value,
         public_key: ZkPublicKey,
         resp_tx: Sender<Result<Note, WalletServiceError>>,
+    },
+    // Keeps a leader reward note, of a block about to be published, answering
+    // once it is persisted.
+    TrackLeaderReward {
+        note: Note,
+        resp_tx: Sender<Result<(), WalletServiceError>>,
     },
     ImportNote {
         note: Note,
@@ -436,6 +443,7 @@ impl WalletMsg {
             | Self::SignTxWithEd25519 { .. }
             | Self::GenerateRewardKey { .. }
             | Self::NewLeaderReward { .. }
+            | Self::TrackLeaderReward { .. }
             | Self::ImportNote { .. }
             | Self::GetKnownAddresses { .. }
             | Self::ReleasePendingNotes { .. } => None,
@@ -1068,9 +1076,15 @@ where
                 public_key,
                 resp_tx,
             } => {
-                let result = Self::new_leader_reward(value, public_key, state, storage, kms).await;
-                if resp_tx.send(result).is_err() {
+                let note = Note::new(value, random_nonce(), public_key);
+                if resp_tx.send(Ok(note)).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to NewLeaderReward");
+                }
+            }
+            WalletMsg::TrackLeaderReward { note, resp_tx } => {
+                let result = Self::track_leader_reward(note, state, storage, kms).await;
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to TrackLeaderReward");
                 }
             }
             WalletMsg::ImportNote {
@@ -1655,25 +1669,22 @@ where
         Ok(withdrawal)
     }
 
-    // A new leader reward note under `public_key`, with a private random nonce.
-    // Nothing on chain opens the note, so it is returned only once it is
-    // written to storage: a process crash after publication cannot lose the
-    // reward. A note of value 0 holds nothing to lose, so the wallet does
-    // not track it.
-    async fn new_leader_reward(
-        value: Value,
-        public_key: ZkPublicKey,
+    // Keeps `note`, the leader reward note of a block about to be published.
+    // Nothing on chain opens the note, so it is kept only once it is written
+    // to storage: a crash after its block is published cannot lose the
+    // reward. A note of value 0 holds nothing to lose, so the wallet does not
+    // track it.
+    async fn track_leader_reward(
+        note: Note,
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<Note, WalletServiceError> {
-        let note = Note::new(value, random_nonce(), public_key);
-        if value == 0 {
-            return Ok(note);
+    ) -> Result<(), WalletServiceError> {
+        if note.value == 0 {
+            return Ok(());
         }
         let known_note = Self::held_note(note, NoteSetIndex::Ledger, state, kms).await?;
-        state.store_known_notes(storage, &[known_note]).await?;
-        Ok(note)
+        state.store_known_notes(storage, &[known_note]).await
     }
 
     // Registers the change note `funded` returns to a key of the wallet.
