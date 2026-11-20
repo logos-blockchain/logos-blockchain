@@ -5,7 +5,7 @@
 
 # The circom-generated witness calculators leak a small `new[]` block on every
 # call: 12 bytes per leader proof, 12 bytes per proof of claim, 128 bytes per
-# ZK signature.
+# ZK signature, 160 bytes per ZK transfer.
 {
    circom_pol_witness_leak
    Memcheck:Leak
@@ -26,4 +26,11 @@
    match-leak-kinds: definite
    ...
    fun:poc_generate_witness
+}
+{
+   circom_transfer_witness_leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   ...
+   fun:transfer_generate_witness
 }
