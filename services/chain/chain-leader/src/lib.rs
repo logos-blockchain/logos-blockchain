@@ -16,7 +16,7 @@ use std::{
     sync::Arc,
 };
 
-use futures::{FutureExt as _, Stream, StreamExt as _, stream::FuturesOrdered};
+use futures::{FutureExt as _, Stream, StreamExt as _};
 use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
@@ -52,10 +52,7 @@ use lb_tx_service::{
     storage::MempoolStorageAdapter,
 };
 use lb_utils::tokio::task::{spawn, spawn_blocking};
-use lb_wallet_service::{
-    AgedNote,
-    api::{WalletApi, WalletApiError},
-};
+use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
@@ -78,44 +75,41 @@ use crate::{
     kms::{KmsAdapter as _, PreloadKmsService},
     leadership::{
         PrivateInputsError, SlotContext, WinningNote, fetch_slot_context, find_winning_note,
-        search_for_winning_slots, winning_note,
+        search_for_winning_slots,
     },
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     proposal::{assemble_block, block_msg},
     relays::CryptarchiaConsensusRelays,
 };
 
-/// How many won slots wait for the proposal underway. Wins are far apart, so
-/// these only fill up if proposals have stopped getting through.
-const MAX_QUEUED_WON_SLOTS: usize = 4;
+/// How many slots wait for the one underway before the next ones are skipped. A
+/// slot that doesn't win takes a fraction of a slot, so they only pile up
+/// behind a proof, or if the wallet or the KMS stalls, and one this far behind
+/// leaves its block little time anyway.
+const MAX_QUEUED_SLOTS: usize = 16;
 
-/// How many slots wait for their check before the next ones are skipped. A
-/// check takes a fraction of a slot, so they only pile up if the wallet or the
-/// KMS stalls, and one this far behind leaves its block little time anyway.
-const MAX_PENDING_SLOT_CHECKS: usize = 16;
-
-/// Builds and publishes the block of each won slot, with the note that won it,
-/// in turn, so that a win builds on the block of the win before it rather than
-/// forking off it.
+/// Checks each slot for a win and builds and publishes its block, in turn, so
+/// that a win builds on the block of the win before it rather than forking off
+/// it.
 ///
 /// A build is given up on once `tip_slot` has moved past its slot, as its block
 /// would only come in behind the chain. A block of the same slot doesn't stop
 /// it: fork choice settles between the two. Publishing isn't given up on, as a
 /// block should not be left applied but unpublished.
-async fn propose_in_turn<Note, Block, Build, Built, Publish, Published>(
-    mut won_slots: mpsc::Receiver<(Slot, Note)>,
+async fn propose_in_turn<Block, Build, Built, Publish, Published>(
+    mut slots: mpsc::Receiver<Slot>,
     mut tip_slot: watch::Receiver<Slot>,
     mut build: Build,
     mut publish: Publish,
 ) where
-    Build: FnMut(Slot, Note) -> Built,
+    Build: FnMut(Slot) -> Built,
     Built: Future<Output = Option<Block>>,
     Publish: FnMut(Block) -> Published,
     Published: Future<Output = ()>,
 {
-    while let Some((slot, note)) = won_slots.recv().await {
+    while let Some(slot) = slots.recv().await {
         tokio::select! {
-            built = build(slot, note) => {
+            built = build(slot) => {
                 if let Some(block) = built {
                     publish(block).await;
                 }
@@ -513,7 +507,7 @@ where
 
         // Proposals take seconds of proving, so the loop polls the one underway
         // along with its other inputs, to see every slot.
-        let (won_slots, won_slots_rx) = mpsc::channel(MAX_QUEUED_WON_SLOTS);
+        let (slots, slots_rx) = mpsc::channel(MAX_QUEUED_SLOTS);
         // The slot of the tip, for a build to stop once the tip has moved past
         // its slot. A build checks the tip as it starts, so genesis will do
         // until a block comes in.
@@ -524,12 +518,11 @@ where
         let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
         let mut proposing = pin!(
             propose_in_turn(
-                won_slots_rx,
+                slots_rx,
                 tip_slot_rx,
-                |slot, note| {
+                |slot| {
                     Self::build_block_for(
                         slot,
-                        note,
                         &cryptarchia_api,
                         &wallet_api,
                         &kms_api,
@@ -550,10 +543,6 @@ where
             )
             .fuse()
         );
-        // Checking a slot for a win takes the wallet and the KMS, so the loop
-        // polls the checks too, and takes the next tick on time whatever they
-        // take. They come back in slot order, the order to build in.
-        let mut slot_checks = FuturesOrdered::new();
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -571,20 +560,9 @@ where
                             relays.mempool_adapter_mut().rotate_era(era).await;
                             current_era = era;
                         }
-                        if slot_checks.len() < MAX_PENDING_SLOT_CHECKS {
-                            slot_checks.push_back(Self::check_slot(slot, &cryptarchia_api, &wallet_api, &kms_api));
-                        } else {
-                            metrics::consensus_proposals_create_failed("slot_checks_queue_full");
-                            error!(target: LOG_TARGET, "Too many slots waiting for their check: skipping {slot:?}");
-                        }
-                    }
-
-                    Some((slot, note)) = slot_checks.next() => {
-                        if let Some(note) = note
-                            && won_slots.try_send((slot, note)).is_err()
-                        {
-                            metrics::consensus_proposals_create_failed("won_slots_queue_full");
-                            error!(target: LOG_TARGET, "Too many proposals underway: giving up on {slot:?}");
+                        if slots.try_send(slot).is_err() {
+                            metrics::consensus_proposals_create_failed("slots_queue_full");
+                            error!(target: LOG_TARGET, "Too many slots waiting for the one underway: skipping {slot:?}");
                         }
                     }
 
@@ -689,45 +667,10 @@ where
         + AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
-    /// `slot`, with the note of the node's that won it, if any.
-    async fn check_slot(
-        slot: Slot,
-        cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
-        wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
-        kms_api: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
-    ) -> (Slot, Option<AgedNote>) {
-        let Some(SlotContext {
-            epoch_state,
-            eligible_aged,
-            ..
-        }) = fetch_slot_context(cryptarchia_api, wallet_api, slot).await
-        else {
-            error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
-            return (slot, None);
-        };
-        tracing::debug!(
-            target: LOG_TARGET,
-            event = "leader_eligible_notes",
-            path = "block_production",
-            slot = ?slot,
-            epoch = ?epoch_state.epoch,
-            note_count = eligible_aged.len(),
-            total_value = eligible_aged.iter().map(|note| note.note.note.value).sum::<u64>(),
-            "Eligible notes for block production"
-        );
-        let note = winning_note(&eligible_aged, &epoch_state, slot, kms_api).await;
-        (slot, note)
-    }
-
-    /// Builds the block of `slot`, which `note` won, on the current tip, if
-    /// any, with its reward note.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Everything a block of the node's is built from"
-    )]
+    /// Builds the block of `slot` on the current tip, if a note of the node's
+    /// wins it, with its reward note.
     async fn build_block_for(
         slot: Slot,
-        note: AgedNote,
         cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
         kms_api: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
@@ -749,16 +692,26 @@ where
             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
             return None;
         };
+        tracing::debug!(
+            target: LOG_TARGET,
+            event = "leader_eligible_notes",
+            path = "block_production",
+            slot = ?slot,
+            epoch = ?epoch_state.epoch,
+            note_count = eligible_aged.len(),
+            total_value = eligible_aged.iter().map(|note| note.note.note.value).sum::<u64>(),
+            "Eligible notes for block production"
+        );
         let tip_state = Self::tip_state(wallet_tip, cryptarchia_api).await?;
 
-        // The proof is produced once the body is fixed, in `propose_block`. A
-        // won note whose witness fails, such as one spent since the epoch
-        // snapshot, leaves the slot to the next winning note.
+        // The witness of a win shows the note unspent at the tip, so the slot
+        // is checked here, on the tip the block is built on. A winning note
+        // whose witness fails, such as one spent since the epoch snapshot,
+        // leaves the slot to the next winning note. The proof is produced once
+        // the body is fixed, in `propose_block`.
         let latest = tip_state.latest_note_sets();
-        let winning = match WinningNote::of(note, &epoch_state, slot, latest).await {
-            Some(winning) => winning,
-            None => find_winning_note(&eligible_aged, &epoch_state, latest, slot, kms_api).await?,
-        };
+        let winning =
+            find_winning_note(&eligible_aged, &epoch_state, latest, slot, kms_api).await?;
 
         Box::pin(Self::propose_block(
             wallet_tip,
@@ -813,7 +766,7 @@ where
         if tip_slot < slot {
             return false;
         }
-        debug!(target: LOG_TARGET, ?slot, ?tip_slot, "Skipping a won slot the tip has passed");
+        debug!(target: LOG_TARGET, ?slot, ?tip_slot, "Skipping a slot the tip has passed");
         true
     }
 
@@ -1121,25 +1074,25 @@ mod tests {
 
     use super::*;
 
-    /// The slots won, one after the other, with no more to come.
-    fn won_slots(slots: impl IntoIterator<Item = u64>) -> mpsc::Receiver<(Slot, ())> {
-        let (won_slots, won_slots_rx) = mpsc::channel(MAX_QUEUED_WON_SLOTS);
+    /// The slots, one after the other, with no more to come.
+    fn slots(slots: impl IntoIterator<Item = u64>) -> mpsc::Receiver<Slot> {
+        let (sender, receiver) = mpsc::channel(MAX_QUEUED_SLOTS);
         for slot in slots {
-            assert!(won_slots.try_send((Slot::new(slot), ())).is_ok());
+            assert!(sender.try_send(Slot::new(slot)).is_ok());
         }
-        won_slots_rx
+        receiver
     }
 
     #[tokio::test]
-    async fn won_slots_are_proposed_one_at_a_time_and_in_order() {
+    async fn slots_are_proposed_one_at_a_time_and_in_order() {
         let building = &AtomicUsize::new(0);
         let published = &Mutex::new(Vec::new());
         let (_tip, tip_slot) = watch::channel(Slot::genesis());
 
         propose_in_turn(
-            won_slots([1, 2, 3]),
+            slots([1, 2, 3]),
             tip_slot,
-            async move |slot, ()| {
+            async move |slot| {
                 assert_eq!(building.fetch_add(1, Ordering::SeqCst), 0);
                 sleep(Duration::from_millis(1)).await;
                 building.fetch_sub(1, Ordering::SeqCst);
@@ -1156,15 +1109,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_build_the_tip_moves_past_gives_way_to_the_next_won_slot() {
+    async fn a_build_the_tip_moves_past_gives_way_to_the_next_slot() {
         let published = &Mutex::new(Vec::new());
         let (stuck, next) = (Slot::new(1), Slot::new(3));
         let (tip, tip_slot) = watch::channel(Slot::genesis());
 
         let proposing = propose_in_turn(
-            won_slots([1, 3]),
+            slots([1, 3]),
             tip_slot,
-            move |slot, ()| {
+            move |slot| {
                 let build_is_stuck = slot == stuck;
                 async move {
                     if build_is_stuck {
@@ -1195,9 +1148,9 @@ mod tests {
         let tip = &tip;
 
         propose_in_turn(
-            won_slots([1]),
+            slots([1]),
             tip_slot,
-            async move |slot, ()| {
+            async move |slot| {
                 tip.send_replace(slot);
                 sleep(Duration::from_millis(10)).await;
                 Some(slot)
@@ -1216,9 +1169,9 @@ mod tests {
         let tip = &tip;
 
         propose_in_turn(
-            won_slots([1]),
+            slots([1]),
             tip_slot,
-            async |slot, ()| Some(slot),
+            async |slot| Some(slot),
             async move |slot| {
                 tip.send_replace(Slot::new(2));
                 sleep(Duration::from_millis(10)).await;
