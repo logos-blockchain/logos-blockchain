@@ -486,6 +486,8 @@ fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> Blend
         BlendEpochState {
             pow_difficulty: ZkHash::ZERO,
             epoch,
+            first_slot: Slot::from(0),
+            last_slot: Slot::from(0),
             nonce: Fr::ZERO,
             aged: Fr::ZERO,
             lottery_0: Fr::ZERO,

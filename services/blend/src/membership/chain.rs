@@ -11,7 +11,7 @@ use std::fmt::{Debug, Display};
 
 use futures::{Stream, StreamExt as _, stream::unfold};
 use lb_chain_service::{
-    Epoch, EpochStateQueryResult,
+    Epoch, EpochStateQueryResult, Slot,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::mantle::ops::pow::PowTarget;
@@ -30,6 +30,8 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct BlendEpochState {
     pub epoch: Epoch,
+    pub first_slot: Slot,
+    pub last_slot: Slot,
     pub nonce: Fr,
     pub aged: Fr,
     pub lottery_0: Fr,
@@ -50,7 +52,7 @@ pub type BlendEpochStateStream<NodeId> =
 fn log_membership_transition<NodeId>(
     component: &'static str,
     epoch: Epoch,
-    slot: lb_cryptarchia_engine::Slot,
+    slot: Slot,
     membership: &lb_blend::scheduling::membership::Membership<NodeId>,
 ) where
     NodeId: Debug + Eq + Hash,
@@ -148,6 +150,7 @@ where
                 match chain_api.get_epoch_state_with_source(slot).await {
                     Ok(Ok(EpochStateQueryResult {
                         epoch_state,
+                        epoch_slots,
                         source_tip_id,
                         source_tip_slot,
                         source_tip_height,
@@ -201,6 +204,8 @@ where
                         let item = (
                             BlendEpochState {
                                 epoch,
+                                first_slot: *epoch_slots.start(),
+                                last_slot: *epoch_slots.end(),
                                 nonce: epoch_state.nonce,
                                 aged: epoch_state.eligible_root(),
                                 lottery_0: epoch_state.lottery_0,

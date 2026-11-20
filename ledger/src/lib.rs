@@ -1180,6 +1180,7 @@ impl LedgerState {
             config,
             parameters.pow_reward_pool,
             cryptarchia_ledger.epoch_state(),
+            &config.genesis_epoch_slots(),
         );
         // Seed the genesis epoch-state membership snapshots from the genesis
         // SDP ledger, which only exists after the mantle ledger is
@@ -1230,6 +1231,7 @@ impl LedgerState {
         }
         let cryptarchia_ledger =
             CryptarchiaLedger::from_genesis_notes(&initial_notes, total_stake, config, &parameters);
+        let genesis_epoch_slots = config.genesis_epoch_slots();
         let (mantle_ledger, note_sets, events) = MantleLedger::from_genesis_tx(
             [inscription, distribution_inscription],
             declarations,
@@ -1237,14 +1239,18 @@ impl LedgerState {
             parameters.pow_reward_pool,
             cryptarchia_ledger.latest_note_sets().clone(),
             cryptarchia_ledger.epoch_state(),
+            &genesis_epoch_slots,
         )?;
         // Once the whole genesis transaction is executed every note set records
         // its root, and the epoch states and the Blend inputs are taken
         // from the result.
         let cryptarchia_ledger =
             cryptarchia_ledger.with_genesis_note_sets(note_sets.end_block(0, config.root_window)?);
-        let mantle_ledger =
-            mantle_ledger.with_genesis_epoch_state(config, cryptarchia_ledger.epoch_state());
+        let mantle_ledger = mantle_ledger.with_genesis_epoch_state(
+            config,
+            cryptarchia_ledger.epoch_state(),
+            &genesis_epoch_slots,
+        );
         let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Ok((
             Self {
@@ -2808,8 +2814,11 @@ mod tests {
         let rewards_params = &config.sdp_config.service_rewards_params;
         let sdp = state.mantle_ledger().sdp_ledger().clone();
         assert_eq!(
-            sdp.clone()
-                .with_genesis_epoch_state(rewards_params, state.epoch_state()),
+            sdp.clone().with_genesis_epoch_state(
+                rewards_params,
+                state.epoch_state(),
+                &config.genesis_epoch_slots()
+            ),
             sdp
         );
         let before_declarations = EpochState {
@@ -2817,8 +2826,11 @@ mod tests {
             ..state.epoch_state().clone()
         };
         assert_ne!(
-            sdp.clone()
-                .with_genesis_epoch_state(rewards_params, &before_declarations),
+            sdp.clone().with_genesis_epoch_state(
+                rewards_params,
+                &before_declarations,
+                &config.genesis_epoch_slots()
+            ),
             sdp
         );
     }
@@ -3124,13 +3136,17 @@ mod tests {
             .epoch_state
             .clone();
 
-        let config = ledger.era_schedule().genesis().parameters.clone();
+        let eras = ledger.era_schedule();
+        let config = eras.genesis().parameters.clone();
+        let target_epoch_slots = eras.starting_slot_for_epoch(target_epoch_state.epoch)
+            ..=eras.last_slot_for_epoch(target_epoch_state.epoch);
         let active_op = SDPActiveOp {
             declaration_id,
             nonce,
             metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
                 zk_key,
                 target_epoch_state,
+                &target_epoch_slots,
                 &current_epoch_state,
                 &config.sdp_config.service_rewards_params.blend,
             ))),

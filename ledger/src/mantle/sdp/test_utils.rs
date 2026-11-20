@@ -1,6 +1,8 @@
 //! Test-only helpers shared between `mantle::sdp::tests` and the outer
 //! [`crate::LedgerState`] tests in `lib.rs`.
 
+use std::ops::RangeInclusive;
+
 use lb_blend_crypto::merkle::MerkleTree;
 use lb_blend_message::reward::{BlendingToken, BlendingTokenEvaluation};
 use lb_blend_proofs::{
@@ -15,11 +17,19 @@ use lb_blend_proofs::{
     selection::VerifiedProofOfSelection,
 };
 use lb_core::{blend::core_quota, sdp::blend::ActivityProof};
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, kdf_public_key};
 
 use crate::{EpochState, mantle::sdp::rewards::blend::RewardsParameters};
 
 const SINGLE_NODE_SNAPSHOT_SIZE: usize = 1;
+
+/// The slots of `epoch` in the tests of the rewards, whose epochs hold 100
+/// slots.
+pub fn epoch_slots(epoch: Epoch) -> RangeInclusive<Slot> {
+    let first_slot = u64::from(epoch.into_inner()) * 100;
+    Slot::new(first_slot)..=Slot::new(first_slot + 99)
+}
 
 /// Generates an activity proof with a real `PoQ` + `PoSel` that the
 /// `rewards` module will accept for the single-provider snapshot used
@@ -33,6 +43,7 @@ const SINGLE_NODE_SNAPSHOT_SIZE: usize = 1;
 pub fn generate_activity_proof(
     provider_zk_key: &ZkKey,
     target_epoch_state: &EpochState,
+    target_epoch_slots: &RangeInclusive<Slot>,
     current_epoch_state: &EpochState,
     blend_params: &RewardsParameters,
 ) -> ActivityProof {
@@ -56,15 +67,17 @@ pub fn generate_activity_proof(
         num_blend_layers + (num_blend_layers * blend_params.data_replication_factor),
     )
     .expect("Leader Quota must fit within the width the `PoQ` circuit allows.");
-    // Match `RewardsParameters::leader_inputs(target_epoch_state)`: the target
-    // snapshot's `proof_verifier` was constructed with these values, so any
-    // proof must reproduce them exactly.
+    // Match `RewardsParameters::leader_inputs(target_epoch_state, ..)`: the
+    // target snapshot's `proof_verifier` was constructed with these values,
+    // so any proof must reproduce them exactly.
     let leader_inputs = LeaderInputs {
         pol_eligible_aged: target_epoch_state.eligible_root(),
         pol_epoch_nonce: *target_epoch_state.nonce(),
         message_quota,
         lottery_0: target_epoch_state.lottery_0,
         lottery_1: target_epoch_state.lottery_1,
+        pol_window_first_slot: target_epoch_slots.start().into_inner(),
+        pol_window_last_slot: target_epoch_slots.end().into_inner(),
     };
     let core_inputs = CoreInputs {
         zk_root: merkle_tree.root(),

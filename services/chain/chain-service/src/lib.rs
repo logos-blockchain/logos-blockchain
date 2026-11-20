@@ -16,6 +16,7 @@ use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
     marker::PhantomData,
+    ops::RangeInclusive,
     pin::Pin,
     sync::Arc,
 };
@@ -324,6 +325,8 @@ pub struct EpochStateQueryResult {
     pub requested_slot: Slot,
     pub requested_epoch: Epoch,
     pub epoch_state: EpochState,
+    /// The slots of the epoch of `epoch_state`, under its era.
+    pub epoch_slots: RangeInclusive<Slot>,
     pub source_tip_id: HeaderId,
     pub source_tip_slot: Slot,
     pub source_tip_height: u64,
@@ -668,11 +671,14 @@ impl Cryptarchia {
         let eras = self.ledger.era_schedule();
         let epoch_state = state.epoch_state_for_slot(slot, eras)?;
         let requested_epoch = eras.epoch_for_slot(slot);
+        let epoch_slots = eras.starting_slot_for_epoch(epoch_state.epoch)
+            ..=eras.last_slot_for_epoch(epoch_state.epoch);
 
         Ok(EpochStateQueryResult {
             requested_slot: slot,
             requested_epoch,
             epoch_state,
+            epoch_slots,
             source_tip_id: tip.id(),
             source_tip_slot: tip.slot(),
             source_tip_height: tip.length(),

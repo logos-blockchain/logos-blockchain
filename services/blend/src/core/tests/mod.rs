@@ -90,6 +90,8 @@ fn pol_state_match_detects_fingerprint_mismatch() {
         message_quota: Quota::ZERO,
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
+        pol_window_first_slot: 0,
+        pol_window_last_slot: 0,
     };
     let mut private = PolEpochInfo {
         epoch: Epoch::new(7),
@@ -142,6 +144,8 @@ fn pol_info_matches_the_blend_leader_inputs_on_the_eligible_root() {
         message_quota: Quota::try_new(1).unwrap(),
         lottery_0: ZkHash::ZERO,
         lottery_1: ZkHash::ZERO,
+        pol_window_first_slot: 0,
+        pol_window_last_slot: 0,
     };
     let mut info = PolEpochInfo {
         epoch: Epoch::new(7),
@@ -169,6 +173,8 @@ fn test_blend_epoch_state(
         BlendEpochState {
             pow_difficulty: ZkHash::ZERO,
             epoch: epoch.into(),
+            first_slot: Slot::from(0),
+            last_slot: Slot::from(0),
             nonce: ZkHash::ZERO,
             aged: ZkHash::ZERO,
             lottery_0: ZkHash::ZERO,
