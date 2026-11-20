@@ -1,7 +1,7 @@
+use core::num::NonZeroU32;
 use std::{
     collections::HashSet,
     fmt::{self, Display, Formatter},
-    sync::Arc,
     time::Duration,
 };
 
@@ -13,29 +13,47 @@ use lb_binary_codec::{
 use lb_chain_service::{ConsensusMsg, CryptarchiaInfo, PhaseTag, Query, Slot, State};
 use lb_core::{
     block::{BlockTransactions, UncleHeaders},
+    era::AcceptedForkDigests,
     events::{BlockEvent, Event},
     mantle::{
+        GenesisParameters, GenesisTime,
         gas::Gas,
         note_set::{CommitmentMmr, NoteSetUpdate},
         notes::derive_note_nullifier,
         ops::{
+            channel::{
+                MsgId,
+                inscribe::{Inscription, InscriptionOp, MiniBlocks},
+            },
             sdp::{SDPActiveOp, SDPDeclareOp},
             transfer::TransferOp,
         },
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     },
     proofs::leader_proof::Groth16LeaderProof,
+    sdp::ServiceParameters,
 };
-use lb_groth16::CompressedGroth16Proof;
-use lb_key_management_system_service::{KMSService, message::KMSMessage};
+use lb_cryptarchia_engine::EpochConfig;
+use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Field as _};
+use lb_key_management_system_service::{
+    KMSService, keys::UnverifiedEd25519PublicKey, message::KMSMessage,
+};
+use lb_ledger::{
+    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    mantle::sdp::{ServiceRewardsParameters, rewards},
+};
 use lb_storage_service::api::requests::StorageMsg;
 use lb_time::era::{Era, EraEntriesAfterGenesis, EraTiming};
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 use overwatch::services::{
-    relay::OutboundRelay,
+    relay::{InboundRelay, OutboundRelay, Relay},
     state::{NoOperator, NoState},
 };
 use time::OffsetDateTime;
-use tokio::sync::{mpsc, oneshot::error::TryRecvError, watch};
+use tokio::{
+    sync::{mpsc, oneshot::error::TryRecvError, watch},
+    time::{sleep, timeout},
+};
 
 use super::*;
 
@@ -273,7 +291,7 @@ async fn split_response_waits_for_an_atomic_save_and_a_failed_write_can_be_retri
     .await;
     assert!(matches!(failed, Err(WalletServiceError::PersistedState(_))));
     assert_eq!(failed_records.len(), 0);
-    assert_eq!(state.wallet().known_notes().len(), 1); // Only the original input.
+    assert_eq!(state.wallet().known_notes().size(), 1); // Only the original input.
 
     // Retry on the same wallet. Both outputs must be saved before it replies.
     let (succeeded, saved) =
@@ -298,13 +316,14 @@ async fn leader_reward_waits_for_storage_before_becoming_known() {
     let (storage, mut writes) = storage_api();
     let kms = kms_api(key);
 
-    let (reward, records) = complete_opening_write(
-        TestWallet::new_leader_reward(20, input.note.public_key, &mut state, &storage, &kms),
+    let reward = Note::new(20, Fr::from(9u64), input.note.public_key);
+    let (tracked, records) = complete_opening_write(
+        TestWallet::track_leader_reward(reward, &mut state, &storage, &kms),
         &mut writes,
         Ok(()),
     )
     .await;
-    let reward = reward.unwrap();
+    tracked.unwrap();
     let stored = storage_with_records(records)
         .load_wallet_known_notes()
         .await
@@ -369,7 +388,8 @@ async fn reward_keys_wait_for_the_saved_count_and_are_registered_again_on_startu
     // Keep storage replies under the test's control.
     let (storage, mut writes) = storage_api();
     let cryptarchia = chain_api();
-    let kms = kms_api(key.clone());
+    let signer = TestSigner::new(kms_api(key.clone()));
+    let signings = FuturesUnordered::new();
 
     let mut saved_count_record = None;
 
@@ -388,7 +408,8 @@ async fn reward_keys_wait_for_the_saved_count_and_are_registered_again_on_startu
             &settings.voucher_master_key_id,
             &storage,
             &cryptarchia,
-            &kms,
+            &signer,
+            &signings,
             &settings.era_schedule,
             era.parameters,
         ));
@@ -483,6 +504,8 @@ async fn split_with_storage_result(
 ) {
     let (storage, mut writes) = storage_api();
     let cryptarchia = chain_api();
+    let signer = TestSigner::new(kms.clone());
+    let signings = FuturesUnordered::new();
     let era = settings.era_schedule.get(Era::genesis()).unwrap();
     let (resp_tx, mut response) = oneshot::channel();
     let mut handle = Box::pin(TestWallet::handle_wallet_message(
@@ -498,7 +521,8 @@ async fn split_with_storage_result(
         &settings.voucher_master_key_id,
         &storage,
         &cryptarchia,
-        kms,
+        &signer,
+        &signings,
         &settings.era_schedule,
         era.parameters,
     ));
@@ -651,7 +675,7 @@ impl ServiceData for DummyCryptarchia {
     type Message = ConsensusMsg<TestTx>;
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 struct TestRuntimeServiceId;
 
 impl AsServiceId<DummyCryptarchia> for TestRuntimeServiceId {
@@ -860,7 +884,7 @@ fn wallet_for_backfill<'u>(
     updater: &'u StateUpdater<Option<RecoveryState>>,
 ) -> ServiceState<'u> {
     ServiceState::from_genesis(
-        HashMap::from([(known_note.note.commitment(), known_note)]),
+        KnownNotes::from_iter([(known_note.note.commitment(), known_note)]),
         0,
         settings,
         genesis,
@@ -971,4 +995,349 @@ fn chain_for_backfill(
         }
     });
     CryptarchiaServiceApi::new(OutboundRelay::new(msg_sender))
+}
+
+// Signings, which run off the service loop.
+
+/// Long enough for a task that isn't held back to have got this far.
+const SETTLE_TIME: Duration = Duration::from_millis(100);
+const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
+type TestSigner = TxSigner<TestKms, TestRuntimeServiceId>;
+
+#[tokio::test]
+async fn a_signing_in_flight_leaves_the_wallet_free() {
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
+    let chain = chain();
+    let (signer, _unserved_kms) = signer();
+    let signings = FuturesUnordered::new();
+
+    let (msg, _signed) = sign_message();
+    handle(msg, &mut state, &chain, &signer, &signings).await;
+
+    let (resp_tx, known_addresses) = oneshot::channel();
+    handle(
+        WalletMsg::GetKnownAddresses { resp_tx },
+        &mut state,
+        &chain,
+        &signer,
+        &signings,
+    )
+    .await;
+    assert!(known_addresses.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn signings_past_the_limit_wait_for_a_permit() {
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
+    let chain = chain();
+    let (signer, mut kms) = signer();
+    let mut signings = FuturesUnordered::new();
+
+    for _ in 0..=MAX_CONCURRENT_SIGNINGS {
+        let (msg, _signed) = sign_message();
+        handle(msg, &mut state, &chain, &signer, &signings).await;
+    }
+    // The service loop's part.
+    let _polling = tokio::spawn(async move { while signings.next().await.is_some() {} });
+
+    let mut requests = Vec::new();
+    for _ in 0..MAX_CONCURRENT_SIGNINGS {
+        requests.push(timeout(REPLY_TIMEOUT, kms.recv()).await.unwrap());
+    }
+    sleep(SETTLE_TIME).await;
+    assert!(timeout(SETTLE_TIME, kms.recv()).await.is_err());
+
+    // Failing one frees its permit for the signing that was waiting.
+    drop(requests.pop());
+    assert!(timeout(REPLY_TIMEOUT, kms.recv()).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_failed_signing_gives_its_reservations_back() {
+    let (signer, _unserved_kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+
+    let unused =
+        TestWallet::signing(unsignable_job(), tip(), funded_notes(), &signer, resp_tx).await;
+
+    assert!(response.await.unwrap().is_err());
+    assert_eq!(unused, funded_notes());
+}
+
+#[tokio::test]
+async fn an_undelivered_transaction_gives_its_reservations_back() {
+    let (signer, _unserved_kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+    drop(response);
+
+    let unused = TestWallet::signing(
+        signing_job(MantleTxBuilder::new()),
+        tip(),
+        funded_notes(),
+        &signer,
+        resp_tx,
+    )
+    .await;
+
+    assert_eq!(unused, funded_notes());
+}
+
+#[tokio::test]
+async fn a_delivered_transaction_keeps_its_reservations() {
+    let (signer, _unserved_kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+
+    let unused = TestWallet::signing(
+        signing_job(MantleTxBuilder::new()),
+        tip(),
+        funded_notes(),
+        &signer,
+        resp_tx,
+    )
+    .await;
+
+    assert!(response.await.unwrap().is_ok());
+    assert_eq!(unused, vec![]);
+}
+
+/// The genesis parameters of a test chain: the supply cap and the genesis gas
+/// prices of the deployments.
+fn genesis_parameters() -> GenesisParameters {
+    GenesisParameters {
+        chain_id: "test".to_owned().try_into().unwrap(),
+        start_time: GenesisTime::new(0),
+        epoch_nonce: Fr::ZERO,
+        max_supply: 10_000_000_000_000_000_000,
+        pow_reward_pool: 0,
+        rewards_reserve: 1_000_000_000_000_000_000,
+        storage_gas_price: NonZero::new(1_000_000_000).unwrap(),
+        execution_gas_price: NonZero::new(1_000_000_000).unwrap(),
+    }
+}
+
+fn ledger_config() -> lb_ledger::Config {
+    let mut service_params = HashMap::new();
+    service_params.insert(
+        lb_core::sdp::ServiceType::BlendNetwork,
+        ServiceParameters {
+            inactivity_period: 2.try_into().unwrap(),
+        },
+    );
+    let epoch_config = EpochConfig {
+        epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
+        epoch_period_nonce_buffer: 3.try_into().unwrap(),
+        epoch_period_nonce_stabilization: 4.try_into().unwrap(),
+    };
+    let consensus_config = lb_cryptarchia_engine::Config::new(
+        5.try_into().unwrap(),
+        ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
+        1.0.try_into().unwrap(),
+        12,
+        4,
+    );
+    let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
+
+    lb_ledger::Config {
+        epoch_config,
+        consensus_config,
+        sdp_config: lb_ledger::mantle::sdp::Config {
+            service_params: Arc::new(service_params),
+            service_rewards_params: ServiceRewardsParameters {
+                blend: rewards::blend::RewardsParameters {
+                    rounds_per_epoch: epoch_length.try_into().unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
+                    cover_replication_factor: 0,
+                    num_blend_layers: 3.try_into().unwrap(),
+                    minimum_network_size: 1.try_into().unwrap(),
+                    data_replication_factor: 0,
+                    activity_threshold_sensitivity: 1,
+                },
+            },
+            min_stake: lb_core::sdp::MinStake { threshold: 1 },
+        },
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        root_window: 1024,
+        channel_withdraw_delay: 86_400.into(),
+        execution_market: lb_ledger::config::ExecutionMarketConfig {
+            max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_137_798).unwrap(),
+            fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+        },
+        storage_market: lb_ledger::config::StorageMarketConfig {
+            max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+        },
+        block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+            lb_ledger::config::BlockRewardsParameters {
+                max_emission_rate: ProperFraction::new(1, 100.try_into().unwrap()).unwrap(),
+                min_emission_rate: NonNegativeRatio::new(0, 1.try_into().unwrap()),
+                stake_target: ProperFraction::new(3, 10.try_into().unwrap()).unwrap(),
+                pooled_fees_target: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                stake_deviation_weight: NonNegativeRatio::new(1, 4.try_into().unwrap()),
+                pooled_fees_weight: NonNegativeRatio::new(1, 1.try_into().unwrap()),
+                pooled_fees_window: 120.try_into().unwrap(),
+                blend_share: ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            },
+            10_000_000_000_000_000_000,
+            1.try_into().unwrap(),
+            ProperFraction::new(1, 30.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: GAS_PROFILE,
+        pow_config: PoWConfig {
+            blend: BlendPoWConfig {
+                base_difficulty: ModulusShift::new::<19>(),
+                damping_den_offset: 0,
+                damping_num: 1.try_into().unwrap(),
+                max_step: 1.try_into().unwrap(),
+                target_transactions_per_block: 1.try_into().unwrap(),
+            },
+            reward: RewardPoWConfig {
+                minimum_difficulty: ModulusShift::new::<26>(),
+                ema_smoothing_factor: 9,
+                ema_smoothing_precision: 10.try_into().unwrap(),
+                target_claims_per_block: 100.try_into().unwrap(),
+                rate_num: 0,
+                rate_den: NonZero::<u64>::MIN,
+                pow_share: 0,
+                share_den: NonZero::<u64>::MIN,
+                slot_window: 100.try_into().unwrap(),
+            },
+        },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![fork_digest()]),
+    }
+}
+
+/// The ledger of a chain with no notes.
+fn ledger() -> LedgerState {
+    LedgerState::from_notes([], &ledger_config(), &genesis_parameters())
+}
+
+fn fork_digest() -> ForkDigest {
+    ForkDigest::new([0x11; 32])
+}
+
+fn tip() -> HeaderId {
+    HeaderId::from([0; 32])
+}
+
+fn updater() -> StateUpdater<Option<RecoveryState>> {
+    StateUpdater::new(Arc::new(watch::channel(None).0))
+}
+
+/// A signer, and the KMS relay that nothing serves unless the test does.
+fn signer() -> (TestSigner, InboundRelay<KMSMessage<KmsBackend>>) {
+    let Relay {
+        inbound_relay,
+        outbound_relay,
+        ..
+    } = Relay::new(16);
+    (
+        TestSigner::new(KmsServiceApi::new(outbound_relay)),
+        inbound_relay,
+    )
+}
+
+fn closed_relay<Message>() -> OutboundRelay<Message> {
+    let Relay { outbound_relay, .. } = Relay::new(1);
+    outbound_relay
+}
+
+/// A chain that answers what the ledger is at any block with [`ledger`], and
+/// nothing else.
+fn chain() -> CryptarchiaServiceApi<DummyCryptarchia> {
+    let Relay {
+        mut inbound_relay,
+        outbound_relay,
+        ..
+    } = Relay::new(16);
+    tokio::spawn(async move {
+        while let Some(msg) = inbound_relay.recv().await {
+            if let ConsensusMsg::Query(Query::GetLedgerState { reply_channel, .. }) = msg {
+                assert!(reply_channel.send(Some(ledger())).is_ok());
+            }
+        }
+    });
+    CryptarchiaServiceApi::new(outbound_relay)
+}
+
+/// Handles `msg`, which leaves any signing it starts in `signings`.
+async fn handle(
+    msg: WalletMsg,
+    state: &mut ServiceState<'_>,
+    chain: &CryptarchiaServiceApi<DummyCryptarchia>,
+    signer: &TestSigner,
+    signings: &FuturesUnordered<PendingSigning>,
+) {
+    let voucher_master_key_id = "voucher-master".to_owned();
+    let storage = StorageApi::new(closed_relay());
+    let era_schedule = era_schedule();
+    let era_settings = era_schedule.get(Era::genesis()).unwrap().parameters;
+    let handled = Box::pin(TestWallet::handle_wallet_message(
+        msg,
+        state,
+        &voucher_master_key_id,
+        &storage,
+        chain,
+        signer,
+        signings,
+        &era_schedule,
+        era_settings,
+    ));
+    timeout(REPLY_TIMEOUT, handled)
+        .await
+        .expect("The handler should not wait for a signature.");
+}
+
+/// An inscription, which its signer signs through the KMS.
+fn inscription() -> Op {
+    let signer = Ed25519Key::from_bytes(&[1; 32]).public_key();
+    Op::ChannelInscribe(InscriptionOp {
+        channel_id: ChannelId::from([1; 32]),
+        inscription: Inscription::new_unchecked(Vec::new()),
+        parent: MsgId::root(),
+        signer: UnverifiedEd25519PublicKey::from_bytes(signer.as_bytes()).unwrap(),
+        mini_blocks: MiniBlocks::default(),
+    })
+}
+
+fn sign_message() -> (
+    WalletMsg,
+    oneshot::Receiver<Result<TipResponse<TestTx>, WalletServiceError>>,
+) {
+    let (resp_tx, resp_rx) = oneshot::channel();
+    let msg = WalletMsg::SignTx {
+        tip: Some(tip()),
+        tx_builder: MantleTxBuilder::new().push_op(inscription()).unwrap(),
+        resp_tx,
+    };
+    (msg, resp_rx)
+}
+
+fn signing_job(tx_builder: MantleTxBuilder) -> TxSigningRequest {
+    TxSigningRequest {
+        ops: tx_builder.build(fork_digest()).unwrap(),
+        channel_multi_sig_proofs: HashMap::new(),
+        witnesses: Vec::new(),
+        ledger: ledger(),
+    }
+}
+
+/// A transfer with no witness to prove it with, which signing can only refuse.
+fn unsignable_job() -> TxSigningRequest {
+    signing_job(
+        MantleTxBuilder::new()
+            .push_op(Op::Transfer(TransferOp::sample()))
+            .unwrap(),
+    )
+}
+
+/// The note funding a signing's transaction.
+fn funded_notes() -> Vec<NoteNullifier> {
+    vec![NoteNullifier(Fr::ONE)]
 }

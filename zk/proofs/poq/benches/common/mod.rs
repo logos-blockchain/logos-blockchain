@@ -71,6 +71,9 @@ pub fn core_node_inputs(key_index: KeyIndex) -> PoQWitnessInputs {
         .into(),
         lottery_0,
         lottery_1,
+        // The first epoch of 648,000 slots.
+        pol_window_first_slot: 0,
+        pol_window_last_slot: 647_999,
     };
     let blend_data = PoQBlendInputsData {
         core_sk: BigUint::from_str(

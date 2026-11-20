@@ -51,16 +51,27 @@ where
         .map_err(|e| Box::new(e) as overwatch::DynError)
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum JoinError {
+    #[error(transparent)]
+    Sdp(#[from] lb_sdp_service::api::Error),
+    #[error(transparent)]
+    Relay(DynError),
+}
+
 pub async fn blend_join_network<BlendService, RuntimeServiceId>(
     handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
     locator: Locator,
     amount: Value,
-) -> Result<SdpSubmission, DynError>
+) -> Result<SdpSubmission, JoinError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
-    let relay = handle.relay::<BlendService>().await?;
+    let relay = handle
+        .relay::<BlendService>()
+        .await
+        .map_err(|error| JoinError::Relay(Box::new(error)))?;
     let (sender, receiver) = oneshot::channel();
 
     relay
@@ -70,11 +81,11 @@ where
             reply: sender,
         })
         .await
-        .map_err(|error| overwatch::DynError::from(error.to_string()))?;
+        .map_err(|error| JoinError::Relay(DynError::from(error.to_string())))?;
 
     let result = receiver
         .await
-        .map_err(|e| Box::new(e) as overwatch::DynError)??;
+        .map_err(|error| JoinError::Relay(Box::new(error)))??;
 
     Ok(result)
 }

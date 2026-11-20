@@ -1,12 +1,12 @@
 use core::fmt::{self, Debug};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashSet, VecDeque},
     pin::Pin,
     sync::Arc,
     time::Duration,
 };
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream::FuturesUnordered};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
     era::ForkDigest,
@@ -115,6 +115,9 @@ where
             prolonged_bootstrap_period,
             epoch_state_query_sources: crate::service::EpochStateQuerySourceTracker::default(),
             genesis_block,
+            block_underway: None,
+            queued_blocks: VecDeque::new(),
+            pending_queries: FuturesUnordered::new(),
         }
     }
 
@@ -143,9 +146,9 @@ where
                     info!(target: LOG_TARGET, "genesis time reached: finishing {:?} phase", self.phase);
                     return ibd_skipped;
                 }
-                Some(msg) = self.inbound_relay.next() => match msg {
+                Some(msg) = self.inbound_relay.next(), if self.takes_messages() => match msg {
                     ConsensusMsg::Query(query) => {
-                        self.process_query(query).await;
+                        self.process_query(query);
                     }
                     ConsensusMsg::ApplyBlock { reply_channel, .. } => {
                         self.reject_apply_block_msg(reply_channel);
@@ -156,6 +159,7 @@ where
                         ibd_skipped = true;
                     }
                 },
+                Some(()) = self.pending_queries.next() => {}
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
                 _ = self.state_recording_timer.tick() => self.record_recovery_state(),
             }

@@ -49,6 +49,8 @@ impl From<Inputs> for PoQVerifierInput {
             pol_eligible_aged: value.prove_inputs.leader.pol_eligible_aged,
             lottery_0: value.prove_inputs.leader.lottery_0,
             lottery_1: value.prove_inputs.leader.lottery_1,
+            pol_window_first_slot: value.prove_inputs.leader.pol_window_first_slot,
+            pol_window_last_slot: value.prove_inputs.leader.pol_window_last_slot,
         }
         .into()
     }

@@ -254,8 +254,8 @@ impl<'u> ServiceState<'u> {
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
         self.wallet.apply_block(block)?;
         // Note reservations are released after `pending_note_expiry_blocks`
-        // (see `evict_expired`), not on spent.
-        self.update_state();
+        // (see `evict_expired`), not on spent. The recovery state, the LIB's
+        // wallet state, stays as it is.
         Ok(())
     }
 
@@ -279,6 +279,10 @@ impl<'u> ServiceState<'u> {
 
         self.lib = new_lib;
         self.wallet.prune_states(new_lib);
+        // The notes final at the new LIB are never adopted again.
+        self.wallet
+            .forget_final_known_notes(new_lib)
+            .expect("WalletState at LIB must exist");
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.update_state();
@@ -473,7 +477,7 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
         let mut state = ServiceState::from_genesis(
-            KnownNotes::new(),
+            KnownNotes::new_sync(),
             0,
             &settings,
             genesis,
@@ -550,7 +554,7 @@ mod tests {
         let updater = StateUpdater::new(Arc::new(sender));
 
         let mut state = ServiceState::from_genesis(
-            KnownNotes::new(),
+            KnownNotes::new_sync(),
             0,
             &settings,
             genesis,

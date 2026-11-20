@@ -31,6 +31,8 @@ impl From<Inputs> for PoQWitnessInputs {
             pol_eligible_aged: value.public.leader.pol_eligible_aged,
             lottery_0: value.public.leader.lottery_0,
             lottery_1: value.public.leader.lottery_1,
+            pol_window_first_slot: value.public.leader.pol_window_first_slot,
+            pol_window_last_slot: value.public.leader.pol_window_last_slot,
         };
         let common_input_data = PoQCommonInputsData {
             core_quota: value.public.core.quota,

@@ -136,25 +136,16 @@ impl RocksBackend {
         Ok(())
     }
 
-    pub fn remove_block(&self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {
-        let encoded_header_id: [u8; 32] = header_id.into();
-        let block_key = Bytes::copy_from_slice(&encoded_header_id);
-        let parent_key = key_bytes(BLOCK_PARENT_PREFIX, encoded_header_id);
-        let events_key = key_bytes(BLOCK_EVENTS_PREFIX, encoded_header_id);
-
-        // Load the block first so we can return it.
-        let val = self.load(&block_key)?;
-
-        let db_transaction = self.txn(move |db| {
-            let mut batch = WriteBatch::default();
-            batch.delete(block_key);
-            batch.delete(parent_key);
-            batch.delete(events_key);
-            db.write(batch)?;
-            Ok(None)
-        });
-        drop(self.execute(db_transaction)?);
-        Ok(val)
+    /// Removes the blocks and all that's stored for them, in one write.
+    pub fn remove_blocks(&self, header_ids: &[HeaderId]) -> Result<(), ChainError> {
+        let mut batch = WriteBatch::default();
+        for header_id in header_ids {
+            let encoded_header_id: [u8; 32] = (*header_id).into();
+            batch.delete(encoded_header_id);
+            batch.delete(key_bytes(BLOCK_PARENT_PREFIX, encoded_header_id));
+            batch.delete(key_bytes(BLOCK_EVENTS_PREFIX, encoded_header_id));
+        }
+        self.rocks.write(batch).map_err(Into::into)
     }
 
     pub fn get_block_parent(&self, header_id: HeaderId) -> Result<Option<HeaderId>, ChainError> {

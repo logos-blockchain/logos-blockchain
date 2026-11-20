@@ -248,7 +248,8 @@ where
     }
 
     // A leader reward note of `value` under `public_key`, with a private random
-    // nonce, returned once the persisted state of the wallet knows it.
+    // nonce, for a block about to be built. The wallet keeps it only once it is
+    // passed to `track_leader_reward`.
     pub async fn new_leader_reward(
         &self,
         value: Value,
@@ -261,6 +262,16 @@ where
                 public_key,
                 resp_tx,
             })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    // Keeps `note`, the leader reward note of a block about to be published,
+    // returning once the persisted state of the wallet knows it.
+    pub async fn track_leader_reward(&self, note: Note) -> Result<(), WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::TrackLeaderReward { note, resp_tx })
             .await?;
         Ok(rx.await??)
     }

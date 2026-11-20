@@ -188,16 +188,18 @@ mod serde_siblings {
 /// Update paths during a merge step.
 ///
 /// `right` is the subtree being merged from the right (containing the new
-/// leaf), and `left` is the existing peak being popped from the stack. At this
-/// height, `right.root` is the sibling for any tracked leaf on the left side,
-/// and `left.root` is the sibling for the new leaf's path.
+/// leaf, at index `new_leaf`), and `left` is the existing peak being popped
+/// from the stack. At this height, `right.root` is the sibling for any tracked
+/// leaf on the left side, and `left.root` is the sibling for the new leaf's
+/// path, if there's one to build.
 ///
 /// Time complexity: O(p), where p = number of tracked paths
 pub fn update_paths_at_merge(
     right: Root,
     left: Root,
     paths: &mut [MerklePath],
-    new_path: &mut MerklePath,
+    new_leaf: usize,
+    new_path: Option<&mut MerklePath>,
 ) {
     assert_eq!(
         left.height, right.height,
@@ -207,52 +209,71 @@ pub fn update_paths_at_merge(
     let height = right.height as usize;
 
     for path in paths.iter_mut() {
-        if are_siblings_at(new_path.leaf_index, path.leaf_index, height) {
+        if are_siblings_at(new_leaf, path.leaf_index, height) {
             path.siblings[height - 1] = right.root;
         }
     }
 
-    new_path.siblings[height - 1] = left.root;
+    if let Some(new_path) = new_path {
+        new_path.siblings[height - 1] = left.root;
+    }
 }
 
 /// Update paths for heights above the merge point.
 ///
 /// After the merge loop in [`crate::MerkleMountainRange::push_with_paths`],
-/// the subtree containing the new leaf may still be a sibling of tracked leaves
-/// at greater heights. This function walks upward, computing the growing
-/// subtree root by combining with remaining peaks (left siblings) or empty
-/// subtree roots (right siblings).
+/// the subtree containing the new leaf, at index `new_leaf`, may still be a
+/// sibling of tracked leaves at greater heights. This function walks upward,
+/// computing the growing subtree root by combining with remaining peaks (left
+/// siblings) or empty subtree roots (right siblings). Building the new leaf's
+/// path takes the walk up to `MAX_HEIGHT`; without one, it stops at the
+/// highest height a tracked path is a sibling at.
 ///
 /// Time complexity: O(`MAX_HEIGHT` + p), where p = number of tracked paths.
 pub fn update_paths_above_merge<Hash: Digest, const MAX_HEIGHT: u8>(
     merged_root: Root,
     mut remaining_peaks: impl Iterator<Item = Root>,
     paths: &mut [MerklePath],
-    new_path: &mut MerklePath,
+    new_leaf: usize,
+    mut new_path: Option<&mut MerklePath>,
 ) {
     let merged_height = merged_root.height as usize;
     let mut subtree_hash = merged_root.root;
 
     // Phase 1: precompute subtree hashes at each height and update new_path.
-    let height_range = merged_height..MAX_HEIGHT as usize;
+    let top = if new_path.is_some() {
+        MAX_HEIGHT as usize
+    } else {
+        paths
+            .iter()
+            .map(|path| sibling_height(new_leaf, path.leaf_index) + 1)
+            .max()
+            .unwrap_or(merged_height)
+            .clamp(merged_height, MAX_HEIGHT as usize)
+    };
+    let height_range = merged_height..top;
     let mut hashes = Vec::with_capacity(height_range.len());
     for height in height_range.clone() {
         hashes.push(subtree_hash);
 
-        if is_left_child(new_path.leaf_index, height) {
+        if is_left_child(new_leaf, height) {
             let empty = empty_subtree_root::<Hash>(height as u8);
-            new_path.siblings[height - 1] = empty;
+            if let Some(new_path) = new_path.as_deref_mut() {
+                new_path.siblings[height - 1] = empty;
+            }
             subtree_hash = Hash::compress(&[subtree_hash, empty]);
         } else {
             let left = remaining_peaks.next().expect("stack underflow");
-            new_path.siblings[height - 1] = left.root;
+            if let Some(new_path) = new_path.as_deref_mut() {
+                new_path.siblings[height - 1] = left.root;
+            }
             subtree_hash = Hash::compress(&[left.root, subtree_hash]);
         }
     }
 
     // Phase 2: update each path at its unique sibling height.
     for path in paths.iter_mut() {
-        let h = sibling_height(new_path.leaf_index, path.leaf_index);
+        let h = sibling_height(new_leaf, path.leaf_index);
         if height_range.contains(&h) {
             path.siblings[h - 1] = hashes[h - merged_height];
         }

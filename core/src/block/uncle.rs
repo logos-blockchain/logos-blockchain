@@ -19,8 +19,8 @@ impl UncleHeaders {
     /// The largest canonical encoding of the uncles of a block whose era
     /// allows `max_uncles`.
     #[must_use]
-    pub fn max_encoded_size(max_uncles: u8) -> usize {
-        size_of::<u8>() + usize::from(max_uncles) * Header::CANONICAL_ENCODED_SIZE
+    pub const fn max_encoded_size(max_uncles: u8) -> usize {
+        size_of::<u8>() + max_uncles as usize * Header::CANONICAL_ENCODED_SIZE
     }
 
     /// The uncles of a block whose era allows `max_uncles`.

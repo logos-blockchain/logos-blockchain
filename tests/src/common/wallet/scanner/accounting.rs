@@ -110,7 +110,7 @@ impl ScannerAccounting {
             secret_keys,
             wallet: Wallet::from_genesis(
                 [],
-                KnownNotes::new(),
+                KnownNotes::new_sync(),
                 HeaderId::from(GENESIS_ID),
                 &[],
                 &[],

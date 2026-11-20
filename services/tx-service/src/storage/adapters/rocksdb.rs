@@ -66,9 +66,13 @@ where
 
     async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
-    async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error> {
+    async fn store_items<Items>(&mut self, items: Items) -> Result<(), Self::Error>
+    where
+        Items: IntoIterator<Item = (Self::Key, Self::Item)> + Send,
+        Items::IntoIter: Send,
+    {
         self.storage
-            .store_transaction(key.into(), item)
+            .store_keyed_transactions(items.into_iter().map(|(key, item)| (key.into(), item)))
             .await
             .map_err(MempoolError::DynamicPoolError)
     }

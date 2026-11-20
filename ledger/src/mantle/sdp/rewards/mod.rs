@@ -2,7 +2,7 @@ pub mod blend;
 #[cfg(test)]
 mod test_utils;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::RangeInclusive};
 
 use lb_binary_codec::canonical::BinaryEncode as _;
 use lb_core::{
@@ -13,7 +13,7 @@ use lb_core::{
     },
     sdp::{ActivityMetadata, Declaration, ProviderId, ServiceParameters, ServiceType},
 };
-use lb_cryptarchia_engine::Epoch;
+use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;
 
@@ -66,6 +66,8 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
         last_epoch_state: &EpochState,
         // The state of the new epoch
         next_epoch_state: &EpochState,
+        // The slots of the new epoch
+        next_epoch_slots: &RangeInclusive<Slot>,
         config: &ServiceParameters,
         last_params: &Self::Params,
         params: &Self::Params,
