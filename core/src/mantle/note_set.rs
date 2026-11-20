@@ -167,6 +167,22 @@ pub enum NoteSetError {
     AlreadyStored(NoteSetIndex),
 }
 
+impl NoteSetError {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::Imt(err) => err.is_store_failure(),
+            Self::EmptyInputs
+            | Self::DuplicateInput(_)
+            | Self::UnknownRoot(_)
+            | Self::AlreadySpent(_)
+            | Self::BufferedTooLarge { .. }
+            | Self::MmrFull
+            | Self::AlreadyStored(_) => false,
+        }
+    }
+}
+
 // The commitment MMR of a referenced root extended by a prefix of the
 // transaction buffer is kept every `PREFIX_CHECKPOINT` commitments, so each
 // root replays the buffer once and each lookup at most that many commitments.
@@ -1224,15 +1240,19 @@ impl NoteSets {
 
     // Applies `step` to the nullifier tree of every set, gathering the writes
     // it returns as writes of the store of the sets, and the sets they touch.
+    // A set `step` returns nothing for is kept, shared with `self`: replacing
+    // every set would leave no part of the channel sets shared.
     fn map_nullifiers(
         &self,
-        mut step: impl FnMut(&NullifierImt) -> Result<(NullifierImt, WriteBatch), ImtError>,
+        mut step: impl FnMut(&NullifierImt) -> Result<Option<(NullifierImt, WriteBatch)>, ImtError>,
     ) -> Result<CommittedSets, NoteSetError> {
         let mut sets = self.clone();
         let mut writes = WriteBatch::new();
         let mut written = Vec::new();
         for (index, set) in self.sets() {
-            let (nullifiers, set_writes) = step(&set.nullifiers)?;
+            let Some((nullifiers, set_writes)) = step(&set.nullifiers)? else {
+                continue;
+            };
             if !set_writes.is_empty() {
                 writes.append(set.nullifiers.store().namespace_batch(set_writes));
                 written.push(index);
@@ -1254,11 +1274,15 @@ impl NoteSets {
 
     /// Writes the block the sets are at the end of under `version`. The
     /// returned sets must not be used before the returned writes are applied
-    /// to [`Self::store`]. A set with no pending block writes nothing.
+    /// to [`Self::store`]. A set with no pending block, such as an idle
+    /// channel, writes nothing and is kept, shared with `self`.
     pub fn commit(&self, version: Version) -> Result<CommittedSets, NoteSetError> {
         self.map_nullifiers(|nullifiers| {
+            if !nullifiers.has_pending() {
+                return Ok(None);
+            }
             let Committed { imt, writes } = nullifiers.commit(version)?;
-            Ok((imt, writes))
+            Ok(Some((imt, writes)))
         })
     }
 
@@ -1267,7 +1291,7 @@ impl NoteSets {
     pub fn finalize(&self, block_id: BlockId) -> Result<(Self, WriteBatch), NoteSetError> {
         let finalized = self.map_nullifiers(|nullifiers| {
             let Finalized { imt, writes } = nullifiers.finalize(block_id)?;
-            Ok((imt, writes))
+            Ok(Some((imt, writes)))
         })?;
         Ok((finalized.sets, finalized.writes))
     }
@@ -1723,6 +1747,40 @@ mod test {
         reads.store(0, Ordering::Relaxed);
         let rebased = retained.rebase().unwrap();
         (reads.load(Ordering::Relaxed), rebased)
+    }
+
+    /// Committing a block replaces the sets it changed, not every set: an
+    /// idle channel stays shared with the state the block was built from.
+    #[test]
+    fn commit_keeps_the_sets_without_a_pending_block_shared() {
+        let mut sets = NoteSets::with_store(ErasedKv::into_dyn(MemKv::new()));
+        for n in 0..=2 {
+            sets = with_channel(sets, n).0;
+        }
+        let sets = finalized(&sets, 1);
+
+        let channel = sets
+            .channel(&channel_id(0))
+            .unwrap()
+            .clone()
+            .execute_spending(&[nullifier(1)])
+            .unwrap();
+        let block = sets.update_channel(channel).end_block(2, 1024).unwrap();
+        let CommittedSets {
+            sets: committed,
+            written,
+            ..
+        } = block.commit(Version(2)).unwrap();
+
+        assert_eq!(written, [NoteSetIndex::Channel(channel_id(0))]);
+        let spent_channel = committed.channel(&channel_id(0)).unwrap();
+        assert!(spent_channel.set.nullifiers.has_unfinalized_blocks());
+        for idle in [1, 2] {
+            assert!(core::ptr::eq(
+                block.channel(&channel_id(idle)).unwrap(),
+                committed.channel(&channel_id(idle)).unwrap(),
+            ));
+        }
     }
 
     /// Rebasing reads the store for the sets a block changed, not for every

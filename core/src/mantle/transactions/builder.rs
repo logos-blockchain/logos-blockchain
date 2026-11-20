@@ -327,6 +327,7 @@ impl MantleTxBuilder {
                 let inputs: &[NoteNullifier] = match op {
                     Op::Transfer(transfer) => &transfer.inputs,
                     Op::ChannelDeposit(deposit) => &deposit.inputs,
+                    Op::ChannelWithdraw(withdraw) => &withdraw.inputs,
                     Op::SDPDeclare(declare) => &declare.inputs,
                     Op::SDPWithdraw(withdraw) => {
                         core::slice::from_ref(&withdraw.service_note_nullifier)
@@ -341,6 +342,26 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn funding_inputs(&self) -> &[FundingNote] {
         &self.funding_inputs
+    }
+
+    /// The `ZkTransfer` openings of the Operations by Op Index, without the one
+    /// of the funding Transfer.
+    #[must_use]
+    pub const fn op_openings(&self) -> &BTreeMap<usize, ZkTransferOpening> {
+        &self.openings
+    }
+
+    /// The notes the Transfers among the Operations create. They are in the
+    /// ledger once their Transfer is executed, so a later Operation of the
+    /// transaction can spend them. The notes of a withdrawal are not: they
+    /// exist only once the withdrawal is released.
+    pub fn transfer_outputs(&self) -> impl Iterator<Item = &Note> {
+        self.ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| matches!(op, Op::Transfer(_)))
+            .filter_map(|(op_index, _)| self.openings.get(&op_index))
+            .flat_map(|opening| &opening.outputs)
     }
 
     // The ZkTransfer openings by Op Index, with the funding Transfer's at the

@@ -220,11 +220,7 @@ impl Sim {
             .unwrap();
         let mut batch = writes;
         for id in &canonical {
-            let version = self.blocks[id].version.unwrap();
-            batch.append(VersionRegistry::<Store>::release_writes(LiveBlock {
-                version,
-                block_id: block_id(*id),
-            }));
+            batch.append(VersionRegistry::<Store>::release_writes(block_id(*id)));
         }
         let stale: Vec<u64> = self
             .live()
@@ -235,12 +231,9 @@ impl Sim {
             .collect();
         for id in &stale {
             let version = self.blocks[id].version.unwrap();
-            batch.append(Tree::discard_writes(version)).append(
-                VersionRegistry::<Store>::release_writes(LiveBlock {
-                    version,
-                    block_id: block_id(*id),
-                }),
-            );
+            batch
+                .append(Tree::discard_writes(version))
+                .append(VersionRegistry::<Store>::release_writes(block_id(*id)));
         }
         self.store.write_batch(batch).unwrap();
         for id in stale.iter().chain(&canonical).chain([&self.lib]) {
@@ -300,7 +293,7 @@ impl Sim {
             if !replayed.iter().any(|id| block_id(*id) == live.block_id) {
                 batch
                     .append(Tree::discard_writes(live.version))
-                    .append(VersionRegistry::<Store>::release_writes(live));
+                    .append(VersionRegistry::<Store>::release_writes(live.block_id));
             }
         }
         self.store.write_batch(batch).unwrap();
@@ -588,7 +581,7 @@ fn test_empty_blocks_write_nothing() {
     let before = count_entries(&sim.store);
     let empty = sim.extend(GENESIS, &[]);
     // only the version registry entries
-    assert_eq!(count_entries(&sim.store), before + 3);
+    assert_eq!(count_entries(&sim.store), before + 2);
     let child = sim.extend(empty, &frs(&[3]));
     sim.check(&frs(&[1, 3, 4]));
     sim.advance_lib(child);

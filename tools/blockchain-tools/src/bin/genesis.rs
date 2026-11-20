@@ -572,3 +572,26 @@ fn write_yaml(value: &Value, output: Option<&Path>) -> Result<()> {
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The ceremony files of each deployment, read as the ceremony reads them.
+    #[test]
+    fn the_ceremony_files_of_every_deployment_distribute() {
+        for env in ["devnet", "testnet", "standalone"] {
+            let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../deployment/ceremony/genesis")
+                .join(env);
+            let stakeholders: Vec<StakeHolderInfo> =
+                load_yaml_file(&dir.join("stakeholders.yaml")).unwrap();
+            let providers: Vec<ProviderInfo> = load_yaml_file(&dir.join("providers.yaml"))
+                .unwrap_or_else(|error| panic!("the providers of {env} do not parse: {error:?}"));
+            let (notes, declarations) =
+                distribution::distribute(stakeholders, providers.clone()).unwrap();
+            assert!(!notes.is_empty(), "{env} distributes no note");
+            assert_eq!(declarations.len(), providers.len(), "{env}");
+        }
+    }
+}

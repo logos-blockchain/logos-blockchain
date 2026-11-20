@@ -54,6 +54,19 @@ pub enum Error {
     Program(#[from] ProgramRegisterError),
 }
 
+impl Error {
+    #[must_use]
+    pub const fn is_store_failure(&self) -> bool {
+        match self {
+            Self::Channel(err) => err.is_store_failure(),
+            Self::Sdp(err) => err.is_store_failure(),
+            Self::Transfer(err) => err.is_store_failure(),
+            Self::ClaimPow(err) => err.is_store_failure(),
+            Self::PowRewardPool(_) | Self::Program(_) => false,
+        }
+    }
+}
+
 /// A state of the mantle ledger
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`

@@ -34,7 +34,7 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::ZkPublicKey};
 use lb_ledger::{
-    EpochState, LedgerState,
+    LedgerState,
     config::{EraScheduledConfig, config_for_slot},
 };
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
@@ -70,7 +70,7 @@ use crate::{
     kms::{KmsAdapter as _, PreloadKmsService},
     leadership::{
         PrivateInputsError, SlotContext, WinningNote, fetch_slot_context, find_winning_note,
-        leader_wallet_inputs, search_for_winning_slots,
+        search_for_winning_slots,
     },
     mempool::MempoolAdapter as _,
     proposal::{assemble_block, block_msg},
@@ -517,7 +517,6 @@ where
                                 wallet_tip,
                                 slot,
                                 winning,
-                                &epoch_state,
                                 &cryptarchia_api,
                                 &wallet_api,
                                 &kms_api,
@@ -658,7 +657,6 @@ where
             era_schedule,
             cryptarchia_api,
             winning,
-            epoch_state,
             wallet_api,
             kms,
             reward_public_key
@@ -673,7 +671,6 @@ where
         parent: HeaderId,
         slot: Slot,
         winning: WinningNote,
-        epoch_state: &EpochState,
         cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
         wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
@@ -705,8 +702,7 @@ where
             });
 
         // The witness proves the note unspent in the note sets of the parent.
-        let wallet_inputs =
-            leader_wallet_inputs(&winning, epoch_state, ledger_state.latest_note_sets())?;
+        let wallet_inputs = winning.wallet_inputs;
 
         // The proof is produced once the body is fixed, so the transactions are
         // selected against the header without it; the block is applied with its

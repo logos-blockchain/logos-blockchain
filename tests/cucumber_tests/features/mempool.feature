@@ -4,7 +4,7 @@ Feature: Mempool lifecycle
   Scenario: Included transaction is removed from mempool view
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 10000        |
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 1 nodes
     And no nodes are declared as blend providers
@@ -30,7 +30,7 @@ Feature: Mempool lifecycle
   Scenario: Pending transaction is visible and survives restart before inclusion
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 10000        |
       | 2             | 0           | 0            |
     # Keep block production slow enough that the tx stays pending across restart.
     And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "60"
@@ -62,7 +62,7 @@ Feature: Mempool lifecycle
   Scenario: Included transaction stays absent from mempool after restart
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 10000        |
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 1 nodes
     And no nodes are declared as blend providers
@@ -94,7 +94,7 @@ Feature: Mempool lifecycle
   Scenario: Same transaction from competing forks is not included again after convergence
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 10000        |
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 3 nodes
     And no nodes are declared as blend providers

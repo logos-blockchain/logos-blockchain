@@ -9,7 +9,6 @@ use lb_core::{
     block::{UncleHeaders, genesis::GenesisBlock},
     events::Events,
     header::{Header, HeaderId},
-    mantle::note_set::NoteSetError,
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::Slot;
@@ -97,14 +96,10 @@ pub(crate) fn apply_block_api_error(err: crate::Error, id: HeaderId) -> ApiError
         }
         crate::Error::Storage(reason) => ApiError::Storage { id, reason },
         // The nullifier tree reads the store while the block is applied.
-        crate::Error::Ledger(LedgerError::NoteSet(NoteSetError::Imt(err)))
-            if err.is_store_failure() =>
-        {
-            ApiError::Storage {
-                id,
-                reason: err.to_string(),
-            }
-        }
+        crate::Error::Ledger(err) if err.is_store_failure() => ApiError::Storage {
+            id,
+            reason: err.to_string(),
+        },
         err => err.into(),
     }
 }

@@ -33,9 +33,9 @@ use std::{
 
 use ark_ff::AdditiveGroup as _;
 pub use layout::{
-    BaseMeta, BlockId, BlockVersionKey, Child, CodecError, GcKey, GcMarker, IndexEntry,
-    LiveVersion, LiveVersionKey, MetaKey, NextVersionKey, NodeKey, NodePosition, NullifierKey,
-    StaleKey, StaleMarker, StoreKey, StoreValue, StoredNode, Version,
+    BaseMeta, BlockId, BlockVersionKey, Child, CodecError, GcKey, GcMarker, IndexEntry, MetaKey,
+    NextVersionKey, NodeKey, NodePosition, NullifierKey, StaleKey, StaleMarker, StoreKey,
+    StoreValue, StoredNode, Version,
 };
 use lb_dynamic_merkle::{MerkleHasher as _, MerkleNode, MerklePath};
 use lb_kv_store::{KvStore, WriteBatch};
@@ -1034,8 +1034,14 @@ where
         if self.pending.is_some() {
             return Err(ImtError::UncommittedBlock);
         }
+        // The state may still hold blocks the base took over since it was
+        // last rebased: they are finalized already.
+        let base_len = Self::read_meta(&self.store)?.map_or(0, |meta| meta.len);
         let mut writes = WriteBatch::new();
         for record in &self.unfinalized {
+            if record.end_len <= base_len {
+                continue;
+            }
             let gc = GcKey {
                 end_len: record.end_len,
                 version: record.version,

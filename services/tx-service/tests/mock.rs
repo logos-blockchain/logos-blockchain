@@ -723,6 +723,47 @@ async fn an_inscription_beyond_the_era_limit_is_refused() {
     ));
 }
 
+#[tokio::test]
+async fn inscription_and_step_data_count_together_for_admission() {
+    const MAX_DATA_SIZE: usize = 64;
+    let settings = MempoolSettings {
+        admission: era_schedule().map(|_| AdmissionLimits {
+            max_op_data_size: MAX_DATA_SIZE,
+            ..ADMISSION_LIMITS
+        }),
+        ..default_settings()
+    };
+    let mut pool = InMemoryPool::new(settings, Era::genesis(), InMemoryStorageAdapter::default());
+
+    let sample = InscriptionOp::sample_with_step();
+    let step_data_size: usize = sample.steps().map(|step| step.inscription().len()).sum();
+    let inscribing = |total_size| {
+        Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                inscription: Inscription::new_unchecked(vec![b'x'; total_size - step_data_size]),
+                ..sample.clone()
+            })],
+        )
+    };
+
+    let at_limit = inscribing(MAX_DATA_SIZE);
+    pool.add_item(at_limit.hash(), at_limit)
+        .await
+        .expect("combined data at the era limit should be admitted");
+
+    let over_limit = inscribing(MAX_DATA_SIZE + 1);
+    let error = pool
+        .add_item(over_limit.hash(), over_limit)
+        .await
+        .expect_err("step data puts the inscription over the era limit");
+    assert!(matches!(
+        error,
+        MempoolError::InscriptionTooLarge { size, max }
+            if max == MAX_DATA_SIZE && size == MAX_DATA_SIZE + 1
+    ));
+}
+
 /// The pool holds a transaction to the era it is in, even one it admitted under
 /// an earlier era.
 #[tokio::test]

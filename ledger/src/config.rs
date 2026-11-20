@@ -669,8 +669,9 @@ pub struct BlockRewardsParameters {
     pub stake_deviation_weight: NonNegativeRatio,
     /// `α_a`: how strongly the release responds to the fees the window pooled.
     pub pooled_fees_weight: NonNegativeRatio,
-    /// `T`: the blocks whose pooled fees the window averages. A window that
-    /// grows at an era counts the blocks it lacks as pooling nothing.
+    /// `T`: the blocks whose pooled fees the window averages. An era that
+    /// shrinks it drops the oldest blocks, and one that grows it starts the
+    /// window over empty.
     pub pooled_fees_window: NonZeroU16,
     /// The Blend nodes' share of a reward, the leader taking the rest with the
     /// tips.
@@ -725,7 +726,9 @@ pub struct BlockRewardsConfig {
     emission_factor_scale: NonZeroU64,
     /// What `I_min` adds to the release's weight, on its scale.
     min_emission_offset: Value,
-    /// `T`: the blocks whose pooled fees the window averages.
+    /// `T`: the blocks whose pooled fees the window averages. An era that
+    /// shrinks it drops the oldest blocks, and one that grows it starts the
+    /// window over empty.
     pooled_fees_window: NonZeroU16,
     /// `FEE_AVG_NUMERATOR`: how much each unit of the fees pooled over the
     /// window adds to the release's weight.

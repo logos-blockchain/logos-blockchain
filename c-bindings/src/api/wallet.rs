@@ -845,8 +845,9 @@ pub type FfiChannelDepositResult = FfiStatusResult<Hash>;
 /// Arguments for [`channel_deposit`].
 ///
 /// The node's wallet splits a note of exactly `amount` from the notes of
-/// `funding_public_key` (which owns them and any change), and the deposit
-/// moves it into the channel as a note of `holder_public_key`.
+/// `funding_public_key` (which owns them and any change), the deposit moves it
+/// into the channel as a note of `holder_public_key`, and the wallet pays the
+/// fees of the transaction from other notes of `funding_public_key`.
 #[repr(C)]
 pub struct ChannelDepositArguments {
     /// Optional pointer to the header ID to build against. If null, the current
@@ -854,8 +855,8 @@ pub struct ChannelDepositArguments {
     pub optional_tip: *const HeaderId,
     /// The 32-byte channel ID to deposit into.
     pub channel_id: *const u8,
-    /// The 32-byte public key funding the deposit (owns the funding notes and
-    /// any change).
+    /// The 32-byte public key funding the deposit and its fees (owns the
+    /// funding notes and any change).
     pub funding_public_key: *const u8,
     /// The 32-byte public key holding the deposited note in the channel.
     pub holder_public_key: *const u8,
@@ -912,16 +913,19 @@ impl ChannelDepositArguments {
 ///
 /// This mirrors the node's `channel_deposit` HTTP handler: the wallet splits a
 /// note of exactly `amount` from the notes of `funding_public_key` (change to
-/// the same key), and the [`DepositOp`] spends it to a note of
-/// `holder_public_key`. Gas is not funded because the platform gas price is
-/// currently 0.
+/// the same key), the [`DepositOp`] spends it to a note of `holder_public_key`,
+/// and the wallet funds the fees of the transaction from other notes of
+/// `funding_public_key`, with the priority reserve of its configuration. The
+/// split and the deposit carry no excess, so the fees come from this funding
+/// alone.
 ///
 /// # Arguments
 ///
 /// - `node`: A [`LogosBlockchainNode`] instance.
 /// - `tip`: The header ID to split the note and sign against.
 /// - `channel_id`: The channel to deposit into.
-/// - `funding_public_key`: Owns the funding notes and the change.
+/// - `funding_public_key`: Owns the funding notes and the change, and pays the
+///   fees.
 /// - `holder_public_key`: Holds the deposited note.
 /// - `amount`: The exact amount to deposit.
 /// - `metadata`: Metadata attached to the deposit.
@@ -1013,9 +1017,15 @@ pub(crate) fn channel_deposit_sync(
             }
         };
 
-        // 3. Sign against the tip the split is proven at.
+        // 3. Fund the fees, against the tip the split is proven at.
+        let TipResponse {
+            tip,
+            response: funded_tx_builder,
+        } = fund_deposit(&api, split_tip, tx_builder, funding_public_key).await?;
+
+        // 4. Sign against the tip the transaction is funded at.
         let signed_tx = api
-            .sign_tx(Some(split_tip), tx_builder)
+            .sign_tx(Some(tip), funded_tx_builder)
             .await
             .map_err(|error| {
                 OperationStatus::error(
@@ -1025,7 +1035,7 @@ pub(crate) fn channel_deposit_sync(
             })?
             .response;
 
-        // 4. Submit to the mempool.
+        // 5. Submit to the mempool.
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
@@ -1033,6 +1043,32 @@ pub(crate) fn channel_deposit_sync(
             ));
         }
         Ok(signed_tx)
+    })
+}
+
+// Funds the fees of the deposit `tx_builder` from the notes of
+// `funding_public_key`, change to the same key, against `tip`, the tip of its
+// split. A funding that fails releases the notes of the split in the wallet.
+async fn fund_deposit(
+    api: &WalletApi<WalletService, RuntimeServiceId>,
+    tip: CoreHeaderId,
+    tx_builder: MantleTxBuilder,
+    funding_public_key: ZkPublicKey,
+) -> StatusResult<TipResponse<MantleTxBuilder>> {
+    api.fund_tx(
+        Some(tip),
+        tx_builder,
+        funding_public_key,
+        vec![funding_public_key],
+        None,
+        None,
+    )
+    .await
+    .map_err(|error| {
+        OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Failed to fund the deposit fees: {error}"),
+        )
     })
 }
 
@@ -1078,7 +1114,10 @@ async fn adopt_holder_note(
 /// Submits an amount-based channel deposit.
 ///
 /// The node's wallet splits a note of exactly `amount` from the funding notes,
-/// so the channel receives exactly `amount`, held by `holder_public_key`.
+/// so the channel receives exactly `amount`, held by `holder_public_key`, and
+/// pays the fees of the transaction from other funding notes. A deposit the
+/// funding notes cannot also pay the fees of fails, and releases the notes it
+/// reserved.
 ///
 /// # Arguments
 ///
