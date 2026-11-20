@@ -1,11 +1,11 @@
 use std::ffi::{CString, c_char};
 
-use lb_api_service::http::blend::blend_join_network;
+use lb_api_service::http::blend::{JoinError, blend_join_network};
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
 use lb_core::sdp::{self, Locator};
 use lb_node::{RuntimeServiceId, generic_services::blend::BlendService};
-use lb_sdp_service::SdpSubmission;
+use lb_sdp_service::{SdpSubmission, api::Error as SdpApiError};
 use multiaddr::PeerId;
 
 use crate::{
@@ -86,10 +86,14 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         )
         .await
         .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to join blend network: {error}"),
-            )
+            let code = match error {
+                JoinError::Relay(_)
+                | JoinError::Sdp(SdpApiError::RelaySend(_) | SdpApiError::RelayReceive(_)) => {
+                    OperationStatusCode::RelayError
+                }
+                JoinError::Sdp(SdpApiError::Other(_)) => OperationStatusCode::ServiceError,
+            };
+            OperationStatus::error(code, format!("Failed to join blend network: {error}"))
         })
     });
 
