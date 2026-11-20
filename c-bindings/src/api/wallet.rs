@@ -979,8 +979,8 @@ pub(crate) fn channel_deposit_sync(
                 )
             })?;
 
-            // 2. The funder spends a note to create a note of the same value in the
-            //    channel, owned by the holder.
+            // 2. The funder spends a note to create a note of the same value in
+            //    the channel, owned by the holder.
             let mut nonce = [0u8; 32];
             OsRng.fill_bytes(&mut nonce);
             let holder_note = Note::new(amount, fr_from_mod_bytes(&nonce), holder_public_key);
