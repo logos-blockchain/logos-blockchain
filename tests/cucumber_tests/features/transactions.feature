@@ -6,7 +6,7 @@ Feature: Transactions
       | account_index | token_count | token_amount |
       | 1             | 0           | 0            |
       | 2             | 0           | 0            |
-    And we have a sponsored genesis fee account with 30 tokens of 500 value each
+    And we have a sponsored genesis fee account with 30 tokens of 50000 value each
     And I have a cluster with capacity of 2 nodes
     And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:
@@ -47,15 +47,18 @@ Feature: Transactions
     When I log wallet balances for all wallets
     # Funding wallets have allocated funds at scenario start, so we can send transactions to user wallets
     When I drain all node "NODE_1" wallets into "WALLET_1A"
-    When wallet "WALLET_1A" has 20000 or more LGO in 10 seconds
+    When wallet "WALLET_1A" has 20000 or more spendable LGO in 300 seconds
+    When all nodes converged to within 0 blocks in 360 seconds
     When I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1 LGO tokens each
-    When wallet "WALLET_1A" has 6 or more outputs in 120 seconds
+    When wallet "WALLET_1A" has 6 or more spendable outputs in 240 seconds
+    When all nodes converged to within 0 blocks in 360 seconds
     When I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1 LGO tokens each
-    When wallet "WALLET_1A" has 12 or more outputs in 120 seconds
+    When wallet "WALLET_1A" has 12 or more spendable outputs in 240 seconds
+    When all nodes converged to within 0 blocks in 360 seconds
     When I log wallet balances for all wallets
     # Now we can drain all user wallets to node wallets again
     When I drain wallet "WALLET_1A" into "NODE_1_WALLET_FUNDING"
-    When wallet "NODE_1_WALLET_FUNDING" has 20000 or more LGO in 120 seconds
+    When wallet "NODE_1_WALLET_FUNDING" has 20000 or more LGO in 240 seconds
     When I log wallet balances for all wallets
     When I drain wallet "WALLET_1A" into "NODE_1_WALLET_FUNDING"
     When I log wallet balances for all wallets
@@ -74,10 +77,13 @@ Feature: Transactions
     When all nodes have at least 2 blocks and converged to within 1 blocks in 180 seconds
     And I submit inscription transaction "INSCRIPTION_32K" of 32 KiB from wallet "WALLET_1A"
     Then transaction "INSCRIPTION_32K" is included on node "NODE_1" in 90 seconds
+    And wallet "WALLET_1A" has 1 or more spendable outputs in 240 seconds
     When I submit inscription transaction "INSCRIPTION_128K" of 128 KiB from wallet "WALLET_1A"
     Then transaction "INSCRIPTION_128K" is included on node "NODE_1" in 90 seconds
+    And wallet "WALLET_1A" has 1 or more spendable outputs in 240 seconds
     When I submit inscription transaction "INSCRIPTION_512K" of 512 KiB from wallet "WALLET_1A"
     Then transaction "INSCRIPTION_512K" is included on node "NODE_1" in 90 seconds
+    And wallet "WALLET_1A" has 1 or more spendable outputs in 240 seconds
     When I submit inscription transaction "INSCRIPTION_896K" of 896 KiB from wallet "WALLET_1A"
     Then transaction "INSCRIPTION_896K" is included on node "NODE_1" in 120 seconds
     Then I stop all nodes
@@ -154,7 +160,7 @@ Feature: Transactions
   Scenario: Many nodes with wallets startup
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 2000         |
+      | 1             | 2           | 10000        |
       | 2             | 0           | 0            |
       | 3             | 0           | 0            |
       | 4             | 0           | 0            |
@@ -198,7 +204,7 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 300 seconds
     And I do a coin split for "WALLET_1A" of 10 UTXOs valued at 5000 LGO tokens each
-    When wallet "WALLET_1A" has 12 or more outputs in 240 seconds
+    When wallet "WALLET_1A" has 12 or more spendable outputs in 240 seconds
     And I send 5 transactions of 2000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     And I send one transaction with 2 outputs of 2000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 7 or more outputs and 14000 or more LGO in 120 seconds
@@ -216,22 +222,22 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 300 seconds
-    When I perform continuous transactions on user wallets with 5 coin split outputs of 2500 LGO, 5 transactions of 900 LGO each for 3 cycles and timeout of 300 seconds with 0 epochs headroom
+    When I perform continuous transactions on user wallets with 5 coin split outputs of 4000 LGO, 5 transactions of 900 LGO each for 3 cycles and timeout of 600 seconds with 0 epochs headroom
     Then I stop all nodes
 
   @transactions_ci
   Scenario: Continuous transactions next wallet with coin split
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 50000        |
-      | 2             | 2           | 50000        |
+      | 1             | 2           | 100000       |
+      | 2             | 2           | 100000       |
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
-    And I perform 2 coin split transactions for each user wallet with 6 outputs of 4000 LGO each
+    And I perform 2 coin split transactions for each user wallet with 6 outputs of 10000 LGO each
     And I verify each wallet has minimum 12 outputs "available" in 300 seconds
     And I perform 3 stress continuous cycles with 12 transactions of 1000 LGO to the next user wallet with 0 epochs headroom
     Then I stop all nodes
@@ -240,7 +246,7 @@ Feature: Transactions
   Scenario: Coin split with many transfers to other
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 4           | 30000        |
+      | 1             | 4           | 45000        |
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
@@ -249,16 +255,16 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 300 seconds
     # Coin split
-    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
-    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 1000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 6000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 6000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 6000 LGO tokens each
+    And I do a coin split for "WALLET_1A" of 6 UTXOs valued at 6000 LGO tokens each
     # Many small transfers to other wallet
-    When wallet "WALLET_1A" has 24 or more outputs in 240 seconds
+    When wallet "WALLET_1A" has 24 or more spendable outputs in 240 seconds
     And I send 12 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 12 or more outputs in 240 seconds
     # All outputs accounted for
-    When wallet "WALLET_1A" has 100000 or less LGO in 180 seconds
+    When wallet "WALLET_1A" has 150000 or less LGO in 180 seconds
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
     Then I stop all nodes
 
@@ -266,10 +272,10 @@ Feature: Transactions
   Scenario: Two fork chains join later and preserve persisted state wallet balances
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 2500         |
-      | 2             | 2           | 2500         |
-      | 4             | 2           | 2500         |
-      | 5             | 2           | 2500         |
+      | 1             | 2           | 6000         |
+      | 2             | 2           | 6000         |
+      | 4             | 2           | 6000         |
+      | 5             | 2           | 6000         |
       | 7             | 0           | 0            |
       | 8             | 0           | 0            |
     And I have a cluster with capacity of 5 nodes
@@ -313,22 +319,22 @@ Feature: Transactions
     And wallet "WALLET_2A" has 3 or more outputs in 60 seconds
     And wallet "WALLET_4A" has 3 or more outputs in 60 seconds
     And wallet "WALLET_5A" has 3 or more outputs in 60 seconds
-    # Wait for more blocks to be mined on each fork to ensure the chains are well established
-    When node "NODE_1" is at height 5 in 180 seconds
-    And node "NODE_4" is at height 5 in 180 seconds
+    # Keep one post-transfer block on each fork before bridging them.
+    When node "NODE_1" is at height 4 in 180 seconds
+    And node "NODE_4" is at height 4 in 180 seconds
     # Bridge the two forks
     When I start peer node "NODE_JOIN" connected to node "NODE_1" and node "NODE_4"
     # Wait for all nodes to converge on the same chain and for the transactions to be mined in the new combined chain
     When node "NODE_JOIN" is at height 8 in 180 seconds
-    # Previous wallet state should be restored for the re-orged chain.
+    # Both fork transaction sets must be recovered after the chains join.
     When wallet "WALLET_1A" has 3 or more outputs in 120 seconds
     And wallet "WALLET_2A" has 3 or more outputs in 10 seconds
     And wallet "WALLET_4A" has 3 or more outputs in 10 seconds
     And wallet "WALLET_5A" has 3 or more outputs in 10 seconds
-    When wallet "WALLET_1A" has 4300 or less LGO in 10 seconds
-    And wallet "WALLET_2A" has 4300 or less LGO in 10 seconds
-    And wallet "WALLET_4A" has 4300 or less LGO in 10 seconds
-    And wallet "WALLET_5A" has 4300 or less LGO in 10 seconds
+    When wallet "WALLET_1A" has 7000 or less LGO in 10 seconds
+    And wallet "WALLET_2A" has 7000 or less LGO in 10 seconds
+    And wallet "WALLET_4A" has 7000 or less LGO in 10 seconds
+    And wallet "WALLET_5A" has 7000 or less LGO in 10 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -400,7 +406,7 @@ Feature: Transactions
   Scenario: Invalid transactions do not block valid transactions
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 6000         |
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
@@ -418,9 +424,9 @@ Feature: Transactions
   Scenario: Continuous wallet funding survives natural forks without reusing in-flight notes
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 450000       |
-      | 2             | 2           | 450000       |
-      | 3             | 2           | 450000       |
+      | 1             | 2           | 4500000       |
+      | 2             | 2           | 4500000       |
+      | 3             | 2           | 4500000       |
     And I have a cluster with capacity of 3 nodes
     And no nodes are declared as blend providers
     And we use IBD peers
@@ -433,7 +439,7 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
       | NODE_3    | 3             | WALLET_3A   | NODE_1       |
     When node "NODE_1" is at height 2 in 240 seconds
-    And wallet "WALLET_1A" sends 6 notes of 40000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And wallet "WALLET_1A" sends 10 notes of 400000 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
     And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 240 seconds
     And I fund 200 transactions paying 100 LGO from node "NODE_1" wallet to wallet "WALLET_2A" retrying every 1 seconds for 600 seconds each as prefix "SOAK"
     Then all transactions with prefix "SOAK" are finalized on node "NODE_1" in 900 seconds

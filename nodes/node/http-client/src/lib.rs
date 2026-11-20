@@ -24,6 +24,10 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         chain::{ChainForkResponseBody, ChainIdResponseBody},
+        channel::{
+            ChannelDepositRequestBody, ChannelPrepareDepositResponseBody, ChannelStepRequestBody,
+            ChannelStepResponseBody, ChannelWithdrawRequestBody, ChannelWithdrawResponseBody,
+        },
         mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
@@ -36,18 +40,20 @@ use lb_http_api_common::{
             },
             fund::{WalletFundRequestBody, WalletFundResponseBody},
             import::WalletImportNoteRequestBody,
-            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+            transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
     },
     paths::{
         BLEND_DISPERSE_TRANSACTION, BLEND_JOIN_NETWORK, BLEND_PENDING_TRANSACTIONS, BLOCK_EVENTS,
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHAIN_FORK, CHAIN_ID, CHANNEL,
-        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES,
-        MANTLE_LIMITS, MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS,
-        MEMPOOL_ADD_TX, NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
+        CHANNEL_PREPARE_DEPOSIT, CHANNEL_STEP, CHANNEL_WITHDRAW, CRYPTARCHIA_INFO,
+        CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES, MANTLE_LIMITS,
+        MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX,
+        NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{
             ADDRESS, BALANCE, FUND, IMPORT_DELIVERY_MESSAGES, IMPORT_NOTE, NAME_STAKING_KEY,
-            REDELIVER_NOTE, TRANSACTIONS_TRANSFER_FUNDS, TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS,
+            REDELIVER_NOTE, TRANSACTIONS_PREPARE_TRANSFER_FUNDS,
+            TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS,
         },
     },
     queries::BlocksStreamQuery,
@@ -512,6 +518,23 @@ impl CommonHttpClient {
         self.get::<(), TimeInfo>(request_url, None).await
     }
 
+    /// Prepare a signed deposit without submitting it.
+    ///
+    /// Durably save the whole reply before publishing its `transaction` with
+    /// [`Self::post_transaction`]. Retry submission with that saved
+    /// transaction.
+    pub async fn prepare_channel_deposit(
+        &self,
+        base_url: Url,
+        body: ChannelDepositRequestBody,
+    ) -> Result<ChannelPrepareDepositResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_PREPARE_DEPOSIT.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
     /// Get channel state for a specific channel id.
     pub async fn channel_state(
         &self,
@@ -768,14 +791,18 @@ impl CommonHttpClient {
             .await
     }
 
-    /// Post a request to transfer funds.
-    pub async fn transfer_funds(
+    /// Prepare a signed transfer without submitting it.
+    ///
+    /// Durably save the whole reply before publishing its `transaction` with
+    /// [`Self::post_transaction`]. Retry submission with that saved
+    /// transaction.
+    pub async fn prepare_transfer_funds(
         &self,
         base_url: Url,
         body: WalletTransferFundsRequestBody,
-    ) -> Result<WalletTransferFundsResponseBody, Error> {
+    ) -> Result<WalletPrepareTransferResponseBody, Error> {
         let request_url = base_url
-            .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .join(TRANSACTIONS_PREPARE_TRANSFER_FUNDS.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await
@@ -794,6 +821,33 @@ impl CommonHttpClient {
     ) -> Result<WalletFundResponseBody, Error> {
         let request_url = base_url
             .join(FUND.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Withdraw channel notes the node's wallet holds to the ledger.
+    pub async fn channel_withdraw(
+        &self,
+        base_url: Url,
+        body: ChannelWithdrawRequestBody,
+    ) -> Result<ChannelWithdrawResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_WITHDRAW.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Request a user step, or a program deposit, built and proven from the
+    /// notes the node's wallet holds in a channel.
+    pub async fn channel_step(
+        &self,
+        base_url: Url,
+        body: ChannelStepRequestBody,
+    ) -> Result<ChannelStepResponseBody, Error> {
+        let request_url = base_url
+            .join(CHANNEL_STEP.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

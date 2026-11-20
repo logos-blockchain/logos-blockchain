@@ -1445,6 +1445,7 @@ pub mod tests {
             config,
             GENESIS_POW_REWARD_POOL,
             cryptarchia_ledger.epoch_state(),
+            &config.genesis_epoch_slots(),
         );
         crate::LedgerState {
             block_number: 0,

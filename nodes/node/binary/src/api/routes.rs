@@ -43,7 +43,9 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::BLEND_DISPERSE_TRANSACTION => crate::api::handlers::blend_tx, blend_tx::<BlendService, RuntimeServiceId>;
             get lb_http_api_common::paths::MEMPOOL_VIEW => crate::api::handlers::mempool_view, mempool_view::<MempoolStorageAdapter, RuntimeServiceId>;
             get lb_http_api_common::paths::CHANNEL => crate::api::handlers::channel, channel::<RuntimeServiceId>;
-            post lb_http_api_common::paths::CHANNEL_DEPOSIT => crate::api::handlers::channel_deposit, channel_deposit::<WalletService, MempoolStorageAdapter, RuntimeServiceId>;
+            post lb_http_api_common::paths::CHANNEL_STEP => crate::api::handlers::channel_step, channel_step::<WalletService, RuntimeServiceId>;
+            post lb_http_api_common::paths::CHANNEL_WITHDRAW => crate::api::handlers::channel_withdraw, channel_withdraw::<WalletService, MempoolStorageAdapter, RuntimeServiceId>;
+            post lb_http_api_common::paths::CHANNEL_PREPARE_DEPOSIT => crate::api::handlers::prepare_channel_deposit, prepare_channel_deposit::<WalletService, RuntimeServiceId>;
             post lb_http_api_common::paths::SDP_POST_DECLARATION => crate::api::handlers::post_declaration, post_declaration::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
             post lb_http_api_common::paths::SDP_POST_ACTIVITY => crate::api::handlers::post_activity, post_activity::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
             post lb_http_api_common::paths::SDP_POST_WITHDRAWAL => crate::api::handlers::post_withdrawal, post_withdrawal::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
@@ -63,7 +65,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::wallet::BALANCE => crate::api::handlers::wallet::get_balance, wallet::get_balance::<WalletService, _>;
             get lb_http_api_common::paths::MANTLE_GAS_PRICES => crate::api::handlers::get_gas_prices, get_gas_prices::<RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_LIMITS => crate::api::handlers::get_limits, get_limits::<RuntimeServiceId>;
-            post lb_http_api_common::paths::wallet::TRANSACTIONS_TRANSFER_FUNDS => crate::api::handlers::wallet::post_transactions_transfer_funds, wallet::post_transactions_transfer_funds::<WalletService, MempoolStorageAdapter, _>;
+            post lb_http_api_common::paths::wallet::TRANSACTIONS_PREPARE_TRANSFER_FUNDS => crate::api::handlers::wallet::prepare_transfer_funds, wallet::prepare_transfer_funds::<WalletService, RuntimeServiceId>;
             post lb_http_api_common::paths::wallet::SIGN_TX_ED25519 => crate::api::handlers::wallet::sign_tx_ed25519, wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::FUND => crate::api::handlers::wallet::fund, wallet::fund::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::IMPORT_NOTE => crate::api::handlers::wallet::import_note, wallet::import_note::<WalletService, _>;

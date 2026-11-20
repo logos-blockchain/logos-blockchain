@@ -43,9 +43,11 @@ Feature: Test harness
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
       | NODE_3    | 3             | WALLET_3A   | NODE_2       |
       | NODE_4    | 4             | WALLET_4A   | NODE_3       |
-    When I do a coin split for "WALLET_1A" of 10 UTXOs valued at 1000 LGO tokens each
+    When I do a coin split for "WALLET_1A" of 10 UTXOs valued at 6000 LGO tokens each
     Then wallet "WALLET_1A" has exactly 11 outputs in 120 seconds
     When node "NODE_1" is at height 2 in 300 seconds
+    And I record node "NODE_1" height as "COIN_SPLIT_HEIGHT"
+    Then node "NODE_1" reaches 4 blocks beyond recorded height "COIN_SPLIT_HEIGHT" in 120 seconds
     When I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_3A"
     And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_4A"
@@ -65,7 +67,7 @@ Feature: Test harness
       | NODE_3    | 3             | WALLET_3A   | NODE_2       |
       | NODE_4    | 4             | WALLET_4A   | NODE_3       |
     When all nodes have at least 5 blocks and converged to within 0 blocks in 30 seconds
-    Then wallet "WALLET_1A" has exactly 9 outputs in 2 seconds
+    Then wallet "WALLET_1A" has exactly 11 outputs in 2 seconds
     And wallet "WALLET_2A" has exactly 1 outputs in 2 seconds
     And wallet "WALLET_3A" has exactly 1 outputs in 2 seconds
     And wallet "WALLET_4A" has exactly 1 outputs in 2 seconds

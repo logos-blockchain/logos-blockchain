@@ -46,7 +46,7 @@ impl PoQWitnessInputs {
             chain: chain.into(),
             common: common.into(),
             blend: blend.into(),
-            wallet: Self::unused_wallet_inputs(),
+            wallet: Self::unused_wallet_inputs(&chain),
             pow: Self::unused_pow_inputs(),
         }
     }
@@ -61,7 +61,7 @@ impl PoQWitnessInputs {
             chain: chain.into(),
             common: common.into(),
             blend: Self::unused_blend_inputs(),
-            wallet: Self::unused_wallet_inputs(),
+            wallet: Self::unused_wallet_inputs(&chain),
             pow: pow.into(),
         }
     }
@@ -73,9 +73,9 @@ impl PoQWitnessInputs {
         })
     }
 
-    fn unused_wallet_inputs() -> PoQWalletInputs {
+    fn unused_wallet_inputs(chain: &PoQChainInputsData) -> PoQWalletInputs {
         PoQWalletInputs::from(PoQWalletInputsData {
-            slot: 0,
+            slot: chain.pol_window_first_slot,
             note_value: 0,
             note_nonce: Fr::ZERO,
             note_program: Fr::ZERO,
@@ -135,7 +135,7 @@ impl From<PoQWitnessInputs> for PoQInputsJson {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct PoQVerifierInputJson([Groth16InputDeser; 12]);
+pub struct PoQVerifierInputJson([Groth16InputDeser; 14]);
 
 #[derive(Clone)]
 pub struct PoQVerifierInput {
@@ -150,6 +150,8 @@ pub struct PoQVerifierInput {
     pub pol_epoch_nonce: Groth16Input,
     pub pol_t0: Groth16Input,
     pub pol_t1: Groth16Input,
+    pub pol_window_first_slot: Groth16Input,
+    pub pol_window_last_slot: Groth16Input,
     pub pol_eligible_aged: Groth16Input,
 }
 
@@ -165,6 +167,8 @@ pub struct PoQVerifierInputData {
     pub pol_epoch_nonce: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
+    pub pol_window_first_slot: u64,
+    pub pol_window_last_slot: u64,
     pub pol_eligible_aged: Fr,
 }
 
@@ -185,6 +189,8 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
             pol_epoch_nonce,
             pol_t0,
             pol_t1,
+            pol_window_first_slot,
+            pol_window_last_slot,
         ] = value.0;
         Ok(Self {
             key_nullifier: key_nullifier.try_into()?,
@@ -198,6 +204,8 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
             pol_epoch_nonce: pol_epoch_nonce.try_into()?,
             pol_t0: pol_t0.try_into()?,
             pol_t1: pol_t1.try_into()?,
+            pol_window_first_slot: pol_window_first_slot.try_into()?,
+            pol_window_last_slot: pol_window_last_slot.try_into()?,
             pol_eligible_aged: pol_eligible_aged.try_into()?,
         })
     }
@@ -205,7 +213,7 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
 
 impl PoQVerifierInput {
     #[must_use]
-    pub const fn to_inputs(self) -> [Fr; 12] {
+    pub const fn to_inputs(self) -> [Fr; 14] {
         [
             self.key_nullifier.into_inner(),
             self.core_quota.into_inner(),
@@ -219,6 +227,8 @@ impl PoQVerifierInput {
             self.pol_epoch_nonce.into_inner(),
             self.pol_t0.into_inner(),
             self.pol_t1.into_inner(),
+            self.pol_window_first_slot.into_inner(),
+            self.pol_window_last_slot.into_inner(),
         ]
     }
 }
@@ -238,6 +248,8 @@ impl From<PoQVerifierInputData> for PoQVerifierInput {
             pol_eligible_aged: value.pol_eligible_aged.into(),
             pol_t0: Groth16Input::new(value.lottery_0),
             pol_t1: Groth16Input::new(value.lottery_1),
+            pol_window_first_slot: Groth16Input::new(value.pol_window_first_slot.into()),
+            pol_window_last_slot: Groth16Input::new(value.pol_window_last_slot.into()),
         }
     }
 }

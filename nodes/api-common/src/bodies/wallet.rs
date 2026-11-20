@@ -114,20 +114,15 @@ pub mod aged_notes {
 }
 
 pub mod transfer_funds {
-    use axum::{
-        http::StatusCode,
-        response::{IntoResponse, Response},
-    };
     use lb_core::{
         header::HeaderId,
-        mantle::{Note, TxHash, Value},
+        mantle::{
+            Note, SignedOps, TxHash, Value, ledger::verification_mode::StandardMode,
+            transactions::states::Unverified,
+        },
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
-    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
-    use tracing::error;
-
-    const LOG_TARGET: &str = api::http::wallet::TRANSFER_FUNDS;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
@@ -138,30 +133,18 @@ pub mod transfer_funds {
         pub amount: Value,
     }
 
+    /// A signed transfer that has not been submitted.
+    ///
+    /// Persist this whole response before publishing `transaction` through
+    /// `/mempool/add/tx`. If submission needs retrying, submit the same saved
+    /// transaction again.
     #[derive(Serialize, Deserialize)]
-    pub struct WalletTransferFundsResponseBody {
+    pub struct WalletPrepareTransferResponseBody<Tx = SignedOps<Unverified, StandardMode>> {
         pub hash: TxHash,
+        pub transaction: Tx,
         /// The note paid to the recipient. A recipient whose wallet is not this
         /// node's imports it to spend it.
         pub recipient_note: Note,
-    }
-
-    impl IntoResponse for WalletTransferFundsResponseBody {
-        fn into_response(self) -> Response {
-            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!(
-                    target: LOG_TARGET,
-                    "WalletTransferFundsResponseBody serialization failed: {e}"
-                );
-                // We panic here because this should never happen, and if it
-                // does, it's a critical error that we want to
-                // be immediately visible during development and
-                // testing.
-                panic!("WalletTransferFundsResponseBody serialization failed: {e}")
-            });
-
-            (StatusCode::CREATED, json).into_response()
-        }
     }
 }
 

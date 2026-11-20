@@ -206,7 +206,7 @@ pub fn self_transfer_paying_fee_at(
         .copied()
         .expect("account should own a genesis note");
     let nullifier = derive_note_nullifier(&note.commitment(), &account.secret_key.nullifier_key());
-    let known = KnownNotes::from([(
+    let known = KnownNotes::from_iter([(
         note.commitment(),
         KnownNote {
             note,
@@ -217,6 +217,7 @@ pub fn self_transfer_paying_fee_at(
     let owned = WalletState::from_genesis(&known, &genesis.notes, &genesis.service_notes, 0.into())
         .expect("genesis notes should fit their note sets")
         .notes_owned_by_pks([account.public_key()])
+        .expect("genesis note paths should fit their note sets")
         .pop()
         .expect("account should own a genesis note");
     let root = owned.path.root::<ZkHasher>(note.commitment().0);

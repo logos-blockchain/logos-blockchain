@@ -12,7 +12,7 @@ use lb_http_api_common::{
                 WalletRedeliverRequestBody, WalletRedeliverResponseBody,
                 WalletTransferFundsToAddressRequestBody, WalletTransferFundsToAddressResponseBody,
             },
-            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+            transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
     },
     paths,
@@ -68,13 +68,17 @@ impl WalletHttpClient {
         self.client.get(url, Option::<&NoopBody>::None).await
     }
 
-    pub async fn transfer_funds(
+    /// Prepare a signed transfer without submitting it.
+    ///
+    /// Durably save the whole returned reply before sending its `transaction`
+    /// to `POST /mempool/add/tx`. Retry submission with that saved transaction.
+    pub async fn prepare_transfer_funds(
         self,
         base_url: Url,
         body: WalletTransferFundsRequestBody,
-    ) -> Result<WalletTransferFundsResponseBody, Error> {
+    ) -> Result<WalletPrepareTransferResponseBody, Error> {
         let url = base_url
-            .join(paths::wallet::TRANSACTIONS_TRANSFER_FUNDS)
+            .join(paths::wallet::TRANSACTIONS_PREPARE_TRANSFER_FUNDS)
             .map_err(Error::Url)?;
         self.client.post(url, &body).await
     }

@@ -11,7 +11,7 @@ Feature: PoW mining
   # names, plus an unrelated second wallet to show only one mining wallet is
   # configured.
   #
-  # Two deployment tweaks make mining observable in a short test:
+  # PoW settings make mining observable in a short test:
   #   * A nonzero `rate_num` enables the reward payout (the shipped configs
   #     disable it with `rate_num = 0`), paying from the pool the genesis
   #     block seeds, 1 000 000 000 on test chains.
@@ -24,7 +24,7 @@ Feature: PoW mining
   #     target claims per block also divide the per-claim reward, which a
   #     `rate_num` as large makes up for.
 
-  @blend_ci
+  @blend_ci @pow_mining
   Scenario: A late-joining node mines PoW rewards while two nodes run consensus
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -33,7 +33,9 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
+     # Give proposals more time to propagate and keep the slot-based reward
+    # window open longer in wall-clock time while nodes converge and claim.
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "3"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     # Fund the pool for exactly one claim (pool == per-claim reward): with the
@@ -63,6 +65,7 @@ Feature: PoW mining
       | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
       | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
     And node "NODE_3" is at height 6 in 180 seconds
+    And all nodes converged to within 0 blocks in 360 seconds
     # Record the miner's balance, then mine and claim; assert the balance grew.
     And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
     And I start mining on node "NODE_3"
@@ -78,6 +81,7 @@ Feature: PoW mining
     When I start mining on node "NODE_3"
     Then node "NODE_3" reports PoW mining on
     When I stop mining on node "NODE_3"
+    When all nodes converged to within 0 blocks in 360 seconds
     And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
     Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
     # The balance grows by exactly the reward the claim transaction paid to the
@@ -93,7 +97,7 @@ Feature: PoW mining
   # limits instead. That is the path where a claim can be built larger than the
   # Blend payload it has to travel in: such a transaction is refused at publish
   # time and never reaches a block, so the claim step below fails outright.
-  @blend_ci
+  @blend_ci @pow_mining
   Scenario: A mining node claims a backlog of rewards in one transaction
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -102,7 +106,9 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
+    # Give proposals more time to propagate and keep the slot-based reward
+    # window open longer in wall-clock time while nodes converge and claim.
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "3"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     # Funds 1000 claims, so `reward_pool / reward` no longer caps the batch and
@@ -126,12 +132,14 @@ Feature: PoW mining
       | NODE_3    | 1             | WALLET_MINER | true             | NODE_1       |
       | NODE_3    | 2             | OTHER_WALLET | false            | NODE_1       |
     And node "NODE_3" is at height 6 in 180 seconds
+    When all nodes converged to within 0 blocks in 360 seconds
     And I record the balance of wallet "WALLET_MINER" as "MINER_BASELINE"
     And I start mining on node "NODE_3"
     # Mine until the ready set is far past any per-transaction cap, so the
     # batch the node builds is the largest one it believes it may build.
     And node "NODE_3" has at least 500 claimable PoW rewards within 120 seconds
     And I stop mining on node "NODE_3"
+    When all nodes converged to within 0 blocks in 360 seconds
     And I claim PoW rewards on node "NODE_3" as "POW_CLAIM_TX" within 120 seconds
     Then transaction "POW_CLAIM_TX" is included on node "NODE_1" in 120 seconds
     # The claim must have batched the backlog rather than quietly falling back
@@ -143,7 +151,7 @@ Feature: PoW mining
   # Same setup as above, but nothing ever calls the claim endpoint: the node is
   # configured with a `pow.auto_claim` target and claims on its own. The miner's
   # account starts empty, so any balance at all proves auto-claim ran.
-  @blend_ci
+  @blend_ci @pow_mining
   Scenario: A mining node claims its PoW rewards unattended
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -152,7 +160,9 @@ Feature: PoW mining
     And I have a cluster with capacity of 3 nodes
     And the first 2 nodes are declared as blend providers
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
-    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
+     # Give proposals more time to propagate and keep the slot-based reward
+    # window open longer in wall-clock time while nodes converge and claim.
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "3"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     # One claim pays out the whole pool, as in the first scenario.

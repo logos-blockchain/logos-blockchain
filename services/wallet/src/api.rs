@@ -9,7 +9,10 @@ use lb_core::{
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{NoteCommitment, NoteNullifier},
-        ops::{channel::inscribe::Inscription, inscribe::InscribeOp},
+        ops::{
+            channel::{ChannelId, inscribe::Inscription},
+            inscribe::InscribeOp,
+        },
         transactions::{
             MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
             tx_list::ops::OpsContext,
@@ -32,8 +35,8 @@ use rand::rngs::OsRng;
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    AgedNote, LeaderAgedNotesInfo, TipResponse, WalletMsg, WalletServiceError,
-    WalletServiceSettings,
+    AgedNote, ChannelStep, ChannelStepRequest, ChannelWithdrawal, LeaderAgedNotesInfo, TipResponse,
+    WalletMsg, WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -318,6 +321,44 @@ where
             .send(WalletMsg::ImportNote {
                 note,
                 note_set,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// A user step, or a program deposit, spending the channel notes of the
+    /// wallet, with its proof.
+    pub async fn prove_channel_step(
+        &self,
+        tip: Option<HeaderId>,
+        request: ChannelStepRequest,
+    ) -> Result<TipResponse<ChannelStep>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ProveChannelStep {
+                tip,
+                request,
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await??)
+    }
+
+    /// A withdrawal of the channel notes `notes` of the wallet, each released
+    /// as a ledger note of the same value and key.
+    pub async fn channel_withdrawal(
+        &self,
+        tip: Option<HeaderId>,
+        channel_id: ChannelId,
+        notes: Vec<NoteCommitment>,
+    ) -> Result<TipResponse<ChannelWithdrawal>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ChannelWithdrawal {
+                tip,
+                channel_id,
+                notes,
                 resp_tx,
             })
             .await?;
@@ -612,7 +653,7 @@ mod tests {
     use std::fmt::{self, Display, Formatter};
 
     use lb_core::mantle::{
-        ops::channel::{ChannelId, ChannelKeyIndex},
+        ops::channel::ChannelKeyIndex,
         transactions::{GasPrices, tx_list::ops::OpsGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};

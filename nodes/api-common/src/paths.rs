@@ -21,7 +21,9 @@ pub const BLEND_DISPERSE_TRANSACTION: &str = "/blend/transactions/disperse";
 pub const BLEND_PENDING_TRANSACTIONS: &str = "/blend/transactions/pending";
 pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";
 pub const CHANNEL: &str = "/channel/{id}";
-pub const CHANNEL_DEPOSIT: &str = "/channel/deposit";
+pub const CHANNEL_PREPARE_DEPOSIT: &str = "/channel/prepare-deposit";
+pub const CHANNEL_STEP: &str = "/channel/step";
+pub const CHANNEL_WITHDRAW: &str = "/channel/withdraw";
 pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";
 pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";
@@ -48,7 +50,8 @@ pub const TRANSACTION: &str = "/cryptarchia/transaction/{id}";
 
 pub mod wallet {
     pub const BALANCE: &str = "/wallet/{public_key}/balance";
-    pub const TRANSACTIONS_TRANSFER_FUNDS: &str = "/wallet/transactions/transfer-funds";
+    pub const TRANSACTIONS_PREPARE_TRANSFER_FUNDS: &str =
+        "/wallet/transactions/prepare-transfer-funds";
     pub const SIGN_TX_ED25519: &str = "/wallet/sign/ed25519";
     pub const FUND: &str = "/wallet/fund";
     pub const IMPORT_NOTE: &str = "/wallet/notes/import";

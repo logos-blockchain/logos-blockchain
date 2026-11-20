@@ -1,7 +1,8 @@
 pub mod requests;
+mod wallet;
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fmt::{Debug, Display},
     marker::PhantomData,
     num::NonZeroUsize,
@@ -9,15 +10,15 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::{StreamExt as _, future::join_all, stream::BoxStream};
+use futures::{StreamExt as _, stream::BoxStream};
 use lb_binary_codec::{
     bincode::{DeserializeOp as _, SerializeOp as _},
-    canonical::{BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, DecodeError},
 };
 use lb_core::{
     block::Block,
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId},
     mantle::{
         TxHash,
         traits::{Hashable, StorageSize},
@@ -49,6 +50,10 @@ impl<Tx> Clone for StorageApi<Tx> {
     }
 }
 
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "Wallet storage operations are grouped in the wallet API module"
+)]
 impl<Tx> StorageApi<Tx> {
     #[must_use]
     pub const fn new(relay: OutboundRelay<StorageMsg>) -> Self {
@@ -70,6 +75,21 @@ impl<Tx> StorageApi<Tx> {
             .relay::<StorageService<RuntimeServiceId>>()
             .await
             .map(Self::new)
+    }
+
+    /// Removes blocks and all that's stored for them, in one write. Blocks that
+    /// aren't there make no difference.
+    pub async fn remove_blocks<Ids>(&self, ids: Ids) -> Result<(), DynError>
+    where
+        Ids: IntoIterator<Item = HeaderId>,
+    {
+        let header_ids = ids.into_iter().collect();
+        self.request(|response_tx| StorageMsg::RemoveBlocks {
+            header_ids,
+            response_tx,
+        })
+        .await?
+        .map_err(Into::into)
     }
 
     pub async fn store<Value: Serialize>(&self, key: Bytes, value: Value) -> Result<(), DynError> {
@@ -95,6 +115,17 @@ impl<Tx> StorageApi<Tx> {
         .map_err(Into::into)
     }
 
+    /// Writes every entry atomically, replying once the database write
+    /// finishes.
+    pub async fn bulk_store_confirmed(&self, items: HashMap<Bytes, Bytes>) -> Result<(), DynError> {
+        self.request(|reply_channel| StorageMsg::BulkStoreConfirmed {
+            items,
+            reply_channel,
+        })
+        .await?
+        .map_err(Into::into)
+    }
+
     pub async fn load<Value: DeserializeOwned>(
         &self,
         key: Bytes,
@@ -102,7 +133,30 @@ impl<Tx> StorageApi<Tx> {
         let bytes = self
             .request(|reply_channel| StorageMsg::Load { key, reply_channel })
             .await?;
-        Ok(bytes.map(|bytes| Value::from_bytes(&bytes).expect("Failed to decode stored value")))
+        bytes
+            .map(|bytes| Value::from_bytes(&bytes))
+            .transpose()
+            .map_err(Into::into)
+    }
+
+    /// Loads and decodes the values stored under `prefix`.
+    pub async fn load_prefix<Value: DeserializeOwned>(
+        &self,
+        prefix: Bytes,
+    ) -> Result<Vec<Value>, DynError> {
+        let values = self
+            .request(|reply_channel| StorageMsg::LoadPrefix {
+                prefix,
+                start_key: None,
+                end_key: None,
+                limit: None,
+                reply_channel,
+            })
+            .await?;
+        values
+            .into_iter()
+            .map(|bytes| Value::from_bytes(&bytes).map_err(Into::into))
+            .collect()
     }
 
     async fn request<Reply>(
@@ -121,6 +175,16 @@ impl<Tx> StorageApi<Tx> {
             response_tx,
         })
         .await
+    }
+
+    /// Read the header of a stored block. The header leads the block's
+    /// encoding, so the rest is left undecoded, its transactions unchecked.
+    pub async fn try_get_block_header(&self, id: &HeaderId) -> Result<Option<Header>, DynError> {
+        self.get_block_bytes(id)
+            .await?
+            .map(|bytes| Header::decode(&bytes, &()).map(|(_, header)| header))
+            .transpose()
+            .map_err(Into::into)
     }
 
     pub async fn get_block_parent(&self, id: &HeaderId) -> Option<HeaderId> {
@@ -206,34 +270,18 @@ impl<Tx> StorageApi<Tx> {
             .await?;
         Ok(())
     }
-}
 
-impl<Tx: Serialize + Hashable<Hash: Into<TxHash>>> StorageApi<Tx> {
-    /// Store an item under its externally supplied transaction hash.
-    pub async fn store_transaction(&self, hash: TxHash, transaction: Tx) -> Result<(), DynError> {
-        let transactions = [(hash, transaction.to_bytes()?)].into();
-        self.relay
-            .send(StorageMsg::StoreTransactions { transactions })
-            .await?;
-        Ok(())
-    }
-}
-
-impl<Tx> StorageApi<Tx>
-where
-    Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
-{
-    /// Stores `block` in its canonical encoding, the one chain sync serves.
+    /// Stores `block`, a block in its canonical encoding, the one chain sync
+    /// serves, with its `events`, encoded. Encoding a block takes time, so the
+    /// caller does it where that's no trouble.
     pub async fn store_block_data(
         &self,
         id: HeaderId,
         parent_id: HeaderId,
-        block: Block<Tx>,
-        events: Events,
+        block: Bytes,
+        events: Bytes,
         immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), DynError> {
-        let block = Bytes::from(block.encode_to_vec());
-        let events = Bytes::try_from(events)?;
         self.request(|response_tx| StorageMsg::StoreBlockData {
             header_id: id,
             parent_id,
@@ -244,6 +292,27 @@ where
         })
         .await?
         .map_err(Into::into)
+    }
+}
+
+impl<Tx: Serialize + Hashable<Hash: Into<TxHash>>> StorageApi<Tx> {
+    /// Store items under their externally supplied transaction hashes, in one
+    /// write.
+    pub async fn store_keyed_transactions<Transactions>(
+        &self,
+        transactions: Transactions,
+    ) -> Result<(), DynError>
+    where
+        Transactions: IntoIterator<Item = (TxHash, Tx)>,
+    {
+        let transactions = transactions
+            .into_iter()
+            .map(|(hash, transaction)| transaction.to_bytes().map(|bytes| (hash, bytes)))
+            .collect::<Result<_, _>>()?;
+        self.relay
+            .send(StorageMsg::StoreTransactions { transactions })
+            .await?;
+        Ok(())
     }
 }
 
@@ -269,35 +338,15 @@ where
             .transpose()
             .map_err(Into::into)
     }
-
-    pub async fn remove_block(&self, id: HeaderId) -> Result<Option<Block<Tx>>, DynError> {
-        let bytes = self
-            .request(|response_tx| StorageMsg::RemoveBlock {
-                header_id: id,
-                response_tx,
-            })
-            .await?;
-        bytes
-            .map(|bytes| decode_stored_block(&bytes))
-            .transpose()
-            .map_err(Into::into)
-    }
-
-    pub async fn remove_blocks(
-        &self,
-        ids: impl Iterator<Item = HeaderId>,
-    ) -> impl Iterator<Item = Result<Option<Block<Tx>>, DynError>> {
-        join_all(ids.map(|id| self.remove_block(id)))
-            .await
-            .into_iter()
-    }
 }
 
-/// Decodes a block this node stored. The node checked its blocks against
-/// their era before storing them, so they are read under the most uncles,
-/// transaction bytes, transactions and inscription bytes the maximums' types
-/// allow, as they're assumed to be within the era's limits.
-fn decode_stored_block<Tx>(bytes: &[u8]) -> Result<Block<Tx>, DecodeError>
+/// Decodes a block this node stored.
+///
+/// The node checked its blocks against their era before storing them, so they
+/// are read under the most uncles, transaction bytes, transactions and
+/// inscription bytes the maximums' types allow, as they're assumed to be
+/// within the era's limits.
+pub fn decode_stored_block<Tx>(bytes: &[u8]) -> Result<Block<Tx>, DecodeError>
 where
     Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
 {

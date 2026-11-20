@@ -1,4 +1,7 @@
-use std::num::{NonZero, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128};
+use std::{
+    num::{NonZero, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128},
+    ops::RangeInclusive,
+};
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use lb_core::{
@@ -64,6 +67,16 @@ impl Config {
     pub const fn epoch_length(&self) -> u64 {
         self.epoch_config
             .epoch_length(self.consensus_config.base_period_length())
+    }
+
+    /// The slots of the genesis epoch, when this is the config of the genesis
+    /// era.
+    #[must_use]
+    pub fn genesis_epoch_slots(&self) -> RangeInclusive<Slot> {
+        Slot::genesis()
+            ..=self
+                .epoch_config
+                .last_slot(Epoch::genesis(), self.base_period_length())
     }
 
     /// `N_b`: the number of blocks a full epoch is expected to produce.

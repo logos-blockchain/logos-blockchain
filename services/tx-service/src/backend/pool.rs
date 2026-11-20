@@ -91,7 +91,7 @@ impl AdmissionLimits {
         }
         for op in item.op_refs_iter() {
             if let OpRef::ChannelInscribe(inscription) = op {
-                let size = inscription.inscription.len();
+                let size = inscription.inscriptions_len();
                 if size > self.max_op_data_size {
                     return Err(MempoolError::InscriptionTooLarge {
                         size,
@@ -152,6 +152,17 @@ pub struct IncludedItem {
 
 /// Transactions are keyed by their hash.
 pub type ItemKey<Item> = <Item as Hashable>::Hash;
+
+/// An item that passed the pool's checks, to admit once it's stored.
+struct Admitted<Item, BlockId>
+where
+    Item: Hashable,
+{
+    key: ItemKey<Item>,
+    item: Item,
+    block_slots: BlockSlots<BlockId>,
+    timestamp: u64,
+}
 
 pub struct Mempool<BlockId, Item, Storage, RuntimeServiceId>
 where
@@ -276,68 +287,12 @@ where
         key: Self::Key,
         item: I,
     ) -> Result<(), MempoolError> {
-        let item = item.into();
-        // A transaction no block of the era could carry is refused, whether it
-        // is new or was admitted under an earlier era.
-        self.settings
-            .admission
-            .get(self.era_in_force)
-            .expect("The pool is only ever in a scheduled era.")
-            .parameters
-            .admit(&item)?;
-
-        self.release_retained().await;
-
-        if self.pending_items.contains_key(&key) || self.included_in_canonical.contains_key(&key) {
-            return Err(MempoolError::ExistingItem);
-        }
-
-        let timestamp = current_timestamp_millis();
-
-        let fork_digest = item.fork_digest();
-        let accepted = self
-            .settings
-            .accepted_fork_digests
-            .get(self.era_in_force)
-            .is_some_and(|era| era.parameters.accepts(&fork_digest));
-        if !accepted {
-            return Err(MempoolError::UnacceptedForkDigest(fork_digest));
-        }
-
-        // By the time a transaction arrives the chain may already be past the
-        // point where a block could include it; such a transaction is refused
-        // rather than admitted and evicted on the next sweep.
-        let block_slots = self.resolve_claim_anchors(&item).await;
-        if self.evictor.is_expired(&item, timestamp, &block_slots) {
-            return Err(MempoolError::Expired);
-        }
-
+        let admission = self.check_admission(key, item.into()).await?;
         self.storage_adapter
-            .store_item(key, item.clone())
+            .store_items([(key, admission.item.clone())])
             .await
             .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
-
-        // If `item` is admitted again after being retired, remove it from
-        // `removed_items` and use the original admission time stored there.
-        let removed_item = self.removed_items.remove(&key);
-        let admitted_at = removed_item.unwrap_or(timestamp);
-        self.index_by_prefix(&key);
-        self.evictor.on_add(&key, &item, timestamp, &block_slots);
-        let index = self.insert_pending(key, admitted_at);
-        self.last_item_timestamp = timestamp;
-        tracing::debug!(
-            target: LOG_TARGET,
-            admitted_at,
-            index,
-            readmission = removed_item.is_some(),
-            pending_items = self.pending_items.len(),
-            last_item_timestamp = self.last_item_timestamp,
-            "Added item to mempool",
-        );
-
-        metrics::mempool_transactions_added();
-        metrics::mempool_transactions_pending(self.pending_items.len());
-
+        self.admit(admission);
         Ok(())
     }
 
@@ -383,9 +338,13 @@ where
                 .select_retirements(current_timestamp_millis(), &self.pending_items),
             "evicted",
         );
-        self.release_retained().await;
+        self.release_retained_internal().await;
 
         metrics::mempool_transactions_pending(self.pending_items.len());
+    }
+
+    async fn release_retained(&mut self) -> bool {
+        self.release_retained_internal().await
     }
 
     async fn on_canonical_chain_updated(
@@ -425,7 +384,7 @@ where
         metrics::mempool_transactions_pending(self.pending_items.len());
 
         let now = current_timestamp_millis();
-        let mut readmitted = Vec::with_capacity(reorged.len());
+        let mut admitted = Vec::with_capacity(reorged.len());
         for TxInBlock { tx: item, slot } in reorged {
             let key = item.hash();
             // A tx older than the TTL is not admitted again.
@@ -438,8 +397,8 @@ where
             if self.is_expired(admitted_at, now) {
                 continue;
             }
-            match self.add_item(key, item.clone()).await {
-                Ok(()) => readmitted.push(item),
+            match self.check_admission(key, item).await {
+                Ok(admission) => admitted.push(admission),
                 // Already pending: the pool didn't hold it when its block
                 // entered the canonical chain, and received it afterwards.
                 Err(MempoolError::ExistingItem) => {}
@@ -449,7 +408,33 @@ where
                 ),
             }
         }
-        readmitted
+
+        if admitted.is_empty() {
+            return Vec::new();
+        }
+
+        let items = admitted
+            .iter()
+            .map(|admission| (admission.key, admission.item.clone()));
+        if let Err(error) = self.storage_adapter.store_items(items).await {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Could not store the reorged items admitted again: {error:?}"
+            );
+            return Vec::new();
+        }
+        admitted
+            .into_iter()
+            .filter_map(|admission| {
+                // A transaction carried by two reorged blocks is admitted once.
+                if self.pending_items.contains_key(&admission.key) {
+                    return None;
+                }
+                let item = admission.item.clone();
+                self.admit(admission);
+                Some(item)
+            })
+            .collect()
     }
 
     async fn on_processed_block(&mut self, block_id: BlockId, slot: Slot, lib_slot: Slot) {
@@ -606,6 +591,84 @@ where
     Storage::Error: Debug,
     RuntimeServiceId: Send + Sync,
 {
+    /// The checks an item goes through before it's admitted.
+    async fn check_admission(
+        &self,
+        key: ItemKey<Item>,
+        item: Item,
+    ) -> Result<Admitted<Item, BlockId>, MempoolError> {
+        // A transaction no block of the era could carry is refused, whether it
+        // is new or was admitted under an earlier era.
+        self.settings
+            .admission
+            .get(self.era_in_force)
+            .expect("The pool is only ever in a scheduled era.")
+            .parameters
+            .admit(&item)?;
+
+        if self.pending_items.contains_key(&key) || self.included_in_canonical.contains_key(&key) {
+            return Err(MempoolError::ExistingItem);
+        }
+
+        let fork_digest = item.fork_digest();
+        let accepted = self
+            .settings
+            .accepted_fork_digests
+            .get(self.era_in_force)
+            .is_some_and(|era| era.parameters.accepts(&fork_digest));
+        if !accepted {
+            return Err(MempoolError::UnacceptedForkDigest(fork_digest));
+        }
+
+        // By the time a transaction arrives the chain may already be past the
+        // point where a block could include it; such a transaction is refused
+        // rather than admitted and evicted on the next sweep.
+        let timestamp = current_timestamp_millis();
+        let block_slots = self.resolve_claim_anchors(&item).await;
+        if self.evictor.is_expired(&item, timestamp, &block_slots) {
+            return Err(MempoolError::Expired);
+        }
+
+        Ok(Admitted {
+            key,
+            item,
+            block_slots,
+            timestamp,
+        })
+    }
+
+    /// Make a stored item pending.
+    fn admit(
+        &mut self,
+        Admitted {
+            key,
+            item,
+            block_slots,
+            timestamp,
+        }: Admitted<Item, BlockId>,
+    ) {
+        // If `item` is admitted again after being retired, remove it from
+        // `removed_items` and use the original admission time stored there.
+        let removed_item = self.removed_items.remove(&key);
+        let admitted_at = removed_item.unwrap_or(timestamp);
+        self.index_by_prefix(&key);
+        self.evictor.on_add(&key, &item, timestamp, &block_slots);
+        let index = self.insert_pending(key, admitted_at);
+        self.last_item_timestamp = timestamp;
+        tracing::debug!(
+            target: LOG_TARGET,
+            admitted_at,
+            index,
+            readmission = removed_item.is_some(),
+            pending_items = self.pending_items.len(),
+            last_item_timestamp = self.last_item_timestamp,
+            "Added item to mempool",
+        );
+
+        metrics::mempool_transactions_added();
+        metrics::mempool_transactions_pending(self.pending_items.len());
+    }
+
     /// Record `key` in the prefix index, under the prefix a block proposal
     /// would use to refer to it, unless it is already there.
     ///
@@ -715,8 +778,9 @@ where
     }
 
     /// Release the retired items the evictor selects for release, in
-    /// [`Self::removed_items`] or [`Self::included_in_canonical`].
-    async fn release_retained(&mut self) {
+    /// [`Self::removed_items`] or [`Self::included_in_canonical`]. Returns
+    /// whether any was released.
+    async fn release_retained_internal(&mut self) -> bool {
         let releases = self.evictor.select_releases(
             current_timestamp_millis(),
             &self.removed_items,
@@ -730,12 +794,13 @@ where
             "the evictor must only select retired items for release"
         );
         if !self.delete_retained(&releases).await {
-            return;
+            return false;
         }
         for key in &releases {
             self.removed_items.remove(key);
             self.included_in_canonical.remove(key);
         }
+        !releases.is_empty()
     }
 
     /// Delete the bodies of retired `keys`, drop them from the prefix index

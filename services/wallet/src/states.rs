@@ -7,7 +7,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Value,
-        notes::{NoteCommitment, NoteNullifier},
+        notes::{InputNullifiers, NoteCommitment, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{
             MantleTxBuilder,
@@ -20,8 +20,10 @@ use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_log_targets::wallet;
 use lb_note_encryption::DeliveryMessage;
+use lb_storage_service::api::StorageApi;
 use lb_wallet::{
-    KnownNote, KnownNotes, WalletBlock, WalletError, WalletState, delivery::delivered_commitment,
+    KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState,
+    delivery::delivered_commitment,
 };
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
@@ -239,10 +241,6 @@ pub struct RecoveryState {
     /// [`WalletState`] at the last known LIB.
     /// `None` until the first recovery state update.
     lib_wallet_state: Option<(HeaderId, WalletState)>,
-    // openings the wallet adopts once their commitments are appended
-    known_notes: KnownNotes,
-    // the reward keys `0..next_reward_key_index` are derived again at start
-    next_reward_key_index: u64,
 }
 
 impl RecoveryState {
@@ -258,13 +256,11 @@ impl overwatch::services::state::ServiceState for RecoveryState {
     fn from_settings(_settings: &Self::Settings) -> Result<Self, Self::Error> {
         Ok(Self {
             lib_wallet_state: None,
-            known_notes: KnownNotes::new(),
-            next_reward_key_index: 0,
         })
     }
 }
 
-/// Provides operations on the states that must be synced to [`RecoveryState`].
+/// Tracks wallet state, pending spends and derived reward keys.
 pub struct ServiceState<'u> {
     next_reward_key_index: u64,
     wallet: Wallet,
@@ -273,10 +269,6 @@ pub struct ServiceState<'u> {
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
     fee_margin_percent: u64,
-    // The leader reward notes the LIB does not hold yet. Nothing on chain
-    // opens them, so the service writes them to storage itself, and confirmed,
-    // before handing one out.
-    reward_notes: KnownNotes,
     pending_deliveries: PendingDeliveries,
     // The staking keys the wallet named to senders, other than its public
     // keys: a note delivered under one of them is its own. The service writes
@@ -287,17 +279,13 @@ pub struct ServiceState<'u> {
 impl<'u> ServiceState<'u> {
     // Restores the wallet persisted at its LIB.
     pub fn from_lib_wallet_state(
-        state: RecoveryState,
+        known_notes: KnownNotes,
+        next_reward_key_index: u64,
         lib: HeaderId,
         wallet_state: WalletState,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
-        let RecoveryState {
-            known_notes,
-            next_reward_key_index,
-            ..
-        } = state;
         let wallet =
             Wallet::from_lib_wallet_state(known_keys(settings), known_notes, lib, wallet_state);
         Self::with_wallet(wallet, lib, next_reward_key_index, settings, updater)
@@ -305,24 +293,14 @@ impl<'u> ServiceState<'u> {
 
     // A fresh wallet follows the note sets from the genesis block.
     pub fn from_genesis(
-        state: RecoveryState,
+        known_notes: KnownNotes,
+        next_reward_key_index: u64,
         settings: &WalletServiceSettings,
         genesis: HeaderId,
         genesis_notes: &[Note],
         genesis_service_notes: &[Note],
-        genesis_known_notes: impl IntoIterator<Item = KnownNote>,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Result<Self, WalletError> {
-        let RecoveryState {
-            mut known_notes,
-            next_reward_key_index,
-            ..
-        } = state;
-        known_notes.extend(
-            genesis_known_notes
-                .into_iter()
-                .map(|known_note| (known_note.note.commitment(), known_note)),
-        );
         let wallet = Wallet::from_genesis(
             known_keys(settings),
             known_notes,
@@ -354,7 +332,6 @@ impl<'u> ServiceState<'u> {
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
             fee_margin_percent: settings.fee_margin_percent,
-            reward_notes: KnownNotes::new(),
             pending_deliveries: PendingDeliveries::default(),
             named_staking_keys: Vec::new(),
         }
@@ -418,10 +395,19 @@ impl<'u> ServiceState<'u> {
         self.next_reward_key_index
     }
 
-    pub fn next_reward_key_index(&mut self) -> u64 {
+    pub async fn store_reward_key_count<Tx>(
+        &self,
+        storage: &StorageApi<Tx>,
+    ) -> Result<(), WalletServiceError> {
+        storage
+            .store_wallet_reward_key_count(self.next_reward_key_index)
+            .await
+            .map_err(WalletServiceError::PersistedState)
+    }
+
+    pub const fn next_reward_key_index(&mut self) -> u64 {
         let index = self.next_reward_key_index;
         self.next_reward_key_index = index.saturating_add(1);
-        self.update_state();
         index
     }
 
@@ -429,44 +415,25 @@ impl<'u> ServiceState<'u> {
         self.wallet.add_known_key(pk, key_id);
     }
 
-    pub fn add_known_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
-        self.wallet.add_known_notes(notes);
-        self.update_state();
-    }
-
-    pub const fn reward_notes(&self) -> &KnownNotes {
-        &self.reward_notes
-    }
-
-    // The reward notes written before a restart, known again.
-    pub fn restore_reward_notes(&mut self, notes: KnownNotes) {
-        self.add_known_notes(notes.values().copied());
-        self.reward_notes = notes;
-    }
-
-    pub fn add_reward_note(&mut self, note: KnownNote) {
-        self.add_known_notes([note]);
-        self.reward_notes.insert(note.note.commitment(), note);
-    }
-
-    // Forgets the reward notes the LIB holds, which the LIB wallet state
-    // persists from then on, and tells whether there were any. A note the LIB
-    // only holds once it is already spent stays.
-    pub fn forget_reward_notes_at_lib(&mut self) -> bool {
-        let Ok(lib_state) = self.wallet.wallet_state_at(self.lib) else {
-            return false;
-        };
-        let count = self.reward_notes.len();
-        self.reward_notes
-            .retain(|commitment, _| !lib_state.notes.contains_key(commitment));
-        self.reward_notes.len() != count
+    /// Stores opening records before registering the notes in memory.
+    pub async fn store_known_notes<Tx>(
+        &mut self,
+        storage: &StorageApi<Tx>,
+        notes: &[KnownNote],
+    ) -> Result<(), WalletServiceError> {
+        storage
+            .store_wallet_known_notes(notes)
+            .await
+            .map_err(WalletServiceError::PersistedState)?;
+        self.wallet.add_known_notes(notes.iter().copied());
+        Ok(())
     }
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
         self.wallet.apply_block(block)?;
         // Note reservations are released after `pending_note_expiry_blocks`
-        // (see `evict_expired`), not on spent.
-        self.update_state();
+        // (see `evict_expired`), not on spent. The recovery state, the LIB's
+        // wallet state, stays as it is.
         Ok(())
     }
 
@@ -511,6 +478,10 @@ impl<'u> ServiceState<'u> {
 
         self.lib = new_lib;
         self.wallet.prune_states(new_lib);
+        // The notes final at the new LIB are never adopted again.
+        self.wallet
+            .forget_final_known_notes(new_lib)
+            .expect("WalletState at LIB must exist");
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.pending_deliveries
@@ -594,6 +565,22 @@ impl<'u> ServiceState<'u> {
         )
     }
 
+    pub fn note_set_spend(
+        &self,
+        tip: HeaderId,
+        spend: NoteSetSpend,
+    ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
+        self.wallet.spend_state(tip)?.note_set_spend(
+            spend,
+            self.wallet.known_notes(),
+            &self.pending_notes.nullifiers(),
+        )
+    }
+
+    pub fn is_pending_note(&self, nullifier: &NoteNullifier) -> bool {
+        self.pending_notes.notes.contains_key(nullifier)
+    }
+
     pub fn reserve_pending_notes(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {
         self.pending_notes.reserve(nullifiers);
     }
@@ -610,8 +597,6 @@ impl<'u> ServiceState<'u> {
 
         self.updater.update(Some(RecoveryState {
             lib_wallet_state: Some((self.lib, lib_wallet_state)),
-            known_notes: self.wallet.known_notes().clone(),
-            next_reward_key_index: self.next_reward_key_index,
         }));
     }
 }
@@ -625,40 +610,15 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
 
 #[cfg(test)]
 mod tests {
-    use core::{num::NonZero, time::Duration};
-
-    use lb_core::{era::ForkDigest, mantle::note_set::NoteSetIndex};
     use lb_groth16::Field as _;
 
     use super::*;
-    use crate::{DEFAULT_FEE_MARGIN_PERCENT, ServiceEraSchedule, tests::GAS_PROFILE};
+    use crate::{
+        DEFAULT_FEE_MARGIN_PERCENT,
+        tests::{GAS_PROFILE, era_schedule},
+    };
 
     const EXPIRY_BLOCKS: u64 = 4;
-
-    /// A schedule of one era, with epochs of 100 slots and a `k` of 5.
-    fn era_schedule() -> ServiceEraSchedule {
-        use lb_time::era::{EraEntriesAfterGenesis, EraSchedule, EraTiming};
-        use time::OffsetDateTime;
-
-        use crate::WalletEraSettings;
-
-        let timing = EraTiming {
-            slot_duration: Duration::from_secs(1),
-            epoch_length: NonZero::new(100).unwrap(),
-        };
-        EraSchedule::new(
-            OffsetDateTime::UNIX_EPOCH,
-            timing,
-            EraEntriesAfterGenesis::empty(),
-        )
-        .unwrap()
-        .map(|_| WalletEraSettings {
-            epoch_length: timing.epoch_length,
-            security_param: NonZero::new(5).unwrap(),
-            fork_digest: ForkDigest::new([0x11; 32]),
-            gas_profile: GAS_PROFILE,
-        })
-    }
 
     #[test]
     fn a_delivery_message_is_kept_until_its_commitment_is_forgotten() {
@@ -781,24 +741,6 @@ mod tests {
     }
 
     #[test]
-    fn recovery_state_keeps_the_known_notes_and_the_reward_key_index() {
-        let note = KnownNote {
-            note: Note::new(10, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
-            note_set: NoteSetIndex::Ledger,
-            nullifier: NoteNullifier(Fr::from(3u64)),
-        };
-        let state = RecoveryState {
-            lib_wallet_state: None,
-            known_notes: HashMap::from([(note.note.commitment(), note)]),
-            next_reward_key_index: 4,
-        };
-        let decoded: RecoveryState =
-            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
-        assert_eq!(decoded.known_notes, state.known_notes);
-        assert_eq!(decoded.next_reward_key_index, 4);
-    }
-
-    #[test]
     fn pending_note_does_not_expire_without_lib_progress() {
         let nullifier = NoteNullifier(Fr::ONE);
         let mut pending_notes = PendingNotes::default();
@@ -851,17 +793,19 @@ mod tests {
             fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
             era_schedule: era_schedule(),
         };
-        let recovery = RecoveryState {
-            lib_wallet_state: None,
-            known_notes: HashMap::new(),
-            next_reward_key_index: 0,
-        };
         let genesis = HeaderId::from([0; 32]);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
-        let mut state =
-            ServiceState::from_genesis(recovery, &settings, genesis, &[], &[], [], &updater)
-                .unwrap();
+        let mut state = ServiceState::from_genesis(
+            KnownNotes::new_sync(),
+            0,
+            &settings,
+            genesis,
+            &[],
+            &[],
+            &updater,
+        )
+        .unwrap();
 
         let split_input = NoteNullifier(Fr::ONE);
         let in_flight = NoteNullifier(Fr::from(2u64));
@@ -925,19 +869,20 @@ mod tests {
         };
 
         // Fresh wallet: initialized from the genesis note sets.
-        let recovery = RecoveryState {
-            lib_wallet_state: None,
-            known_notes: HashMap::new(),
-            next_reward_key_index: 0,
-        };
-
         let genesis = HeaderId::from([0; 32]);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state =
-            ServiceState::from_genesis(recovery, &settings, genesis, &[], &[], [], &updater)
-                .unwrap();
+        let mut state = ServiceState::from_genesis(
+            KnownNotes::new_sync(),
+            0,
+            &settings,
+            genesis,
+            &[],
+            &[],
+            &updater,
+        )
+        .unwrap();
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).
@@ -947,71 +892,5 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
-    }
-
-    #[test]
-    fn reward_notes_are_kept_until_the_lib_holds_them() {
-        use std::sync::Arc;
-
-        use lb_services_utils::overwatch::RecoveryData;
-
-        let settings = WalletServiceSettings {
-            known_keys: HashMap::new(),
-            voucher_master_key_id: "voucher-master".into(),
-            recovery_data: RecoveryData::default(),
-            pending_note_expiry_blocks: 10,
-            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
-            era_schedule: era_schedule(),
-        };
-        let recovery = RecoveryState {
-            lib_wallet_state: None,
-            known_notes: HashMap::new(),
-            next_reward_key_index: 0,
-        };
-        let known_note = |value| KnownNote {
-            note: Note::new(value, Fr::ONE, ZkPublicKey::new(Fr::from(2u64))),
-            note_set: NoteSetIndex::Ledger,
-            nullifier: NoteNullifier(Fr::from(value)),
-        };
-        // the LIB holds `on_chain`, while `pending` is in a block not final yet
-        let on_chain = known_note(10);
-        let pending = known_note(20);
-        let (sender, _receiver) = tokio::sync::watch::channel(None);
-        let updater = StateUpdater::new(Arc::new(sender));
-        let mut state = ServiceState::from_genesis(
-            recovery,
-            &settings,
-            HeaderId::from([0; 32]),
-            &[on_chain.note],
-            &[],
-            [on_chain],
-            &updater,
-        )
-        .unwrap();
-
-        state.add_reward_note(pending);
-        assert!(!state.forget_reward_notes_at_lib());
-        assert_eq!(
-            state.reward_notes(),
-            &HashMap::from([(pending.note.commitment(), pending)])
-        );
-        assert!(
-            state
-                .wallet()
-                .known_notes()
-                .contains_key(&pending.note.commitment())
-        );
-
-        // restored after a restart, the notes are known again, and the one the
-        // LIB holds is forgotten
-        state.restore_reward_notes(HashMap::from([
-            (on_chain.note.commitment(), on_chain),
-            (pending.note.commitment(), pending),
-        ]));
-        assert!(state.forget_reward_notes_at_lib());
-        assert_eq!(
-            state.reward_notes(),
-            &HashMap::from([(pending.note.commitment(), pending)])
-        );
     }
 }

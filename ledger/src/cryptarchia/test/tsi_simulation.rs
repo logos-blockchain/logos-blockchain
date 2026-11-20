@@ -247,6 +247,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Note) -> Ledger<HeaderId> {
             config,
             GENESIS_POW_REWARD_POOL,
             cryptarchia_ledger.epoch_state(),
+            &config.genesis_epoch_slots(),
         ),
         cryptarchia_ledger,
     };

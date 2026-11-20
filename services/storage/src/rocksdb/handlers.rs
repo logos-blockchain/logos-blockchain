@@ -44,6 +44,12 @@ pub fn handle_request(msg: StorageMsg, backend: &RocksBackend) -> Result<(), Sto
             value,
             reply_channel,
         } => return handle_store_confirmed(backend, key, value, reply_channel),
+        StorageMsg::BulkStoreConfirmed {
+            items,
+            reply_channel,
+        } => {
+            return handle_bulk_store_confirmed(backend, items, reply_channel);
+        }
         StorageMsg::Remove { key, reply_channel } => {
             return handle_remove(backend, &key, reply_channel);
         }
@@ -74,10 +80,10 @@ pub fn handle_request(msg: StorageMsg, backend: &RocksBackend) -> Result<(), Sto
             response_tx,
         ),
 
-        StorageMsg::RemoveBlock {
-            header_id,
+        StorageMsg::RemoveBlocks {
+            header_ids,
             response_tx,
-        } => handle_remove_block(backend, header_id, response_tx),
+        } => handle_remove_blocks(backend, &header_ids, response_tx),
 
         StorageMsg::GetBlockParent {
             header_id,
@@ -203,6 +209,22 @@ fn handle_store_confirmed(
     result
 }
 
+fn handle_bulk_store_confirmed(
+    backend: &RocksBackend,
+    items: HashMap<Bytes, Bytes>,
+    reply_channel: Sender<Result<(), String>>,
+) -> Result<(), StorageServiceError> {
+    let result = backend
+        .bulk_store(items)
+        .map_err(|error| StorageServiceError::BackendError(error.into()));
+    reply_channel
+        .send(result.as_ref().map_err(ToString::to_string).copied())
+        .map_err(|_| StorageServiceError::ReplyError {
+            message: "Bulk store confirmed".to_owned(),
+        })?;
+    result
+}
+
 /// Handle execute message
 fn handle_execute(
     backend: &RocksBackend,
@@ -307,21 +329,24 @@ fn handle_get_block_events(
     Ok(())
 }
 
-fn handle_remove_block(
+fn handle_remove_blocks(
     backend: &RocksBackend,
-    header_id: HeaderId,
-    response_tx: Sender<Option<Bytes>>,
+    header_ids: &[HeaderId],
+    response_tx: Sender<Result<(), String>>,
 ) -> Result<(), StorageServiceError> {
     let result = backend
-        .remove_block(header_id)
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+        .remove_blocks(header_ids)
+        .map_err(|e| StorageServiceError::BackendError(e.into()));
+
+    let response = result.as_ref().map_err(ToString::to_string).copied();
+
     response_tx
-        .send(result)
+        .send(response)
         .map_err(|_| StorageServiceError::ReplyError {
-            message: format!(
-                "Failed to send reply for remove block request by header_id: {header_id}"
-            ),
-        })
+            message: "Failed to send reply for remove blocks request".to_owned(),
+        })?;
+
+    result
 }
 
 fn handle_store_immutable_block_ids(

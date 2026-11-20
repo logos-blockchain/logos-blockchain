@@ -2,7 +2,10 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     num::{NonZero, NonZeroU64},
     pin::Pin,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -230,10 +233,17 @@ async fn txs_by_prefix(
     mempool_outbound: &OutboundRelay<<MockMempoolService as ServiceData>::Message>,
     prefix: TxHashPrefix,
 ) -> Vec<Ops> {
+    txs_by_prefixes(mempool_outbound, vec![prefix]).await
+}
+
+async fn txs_by_prefixes(
+    mempool_outbound: &OutboundRelay<<MockMempoolService as ServiceData>::Message>,
+    prefixes: Vec<TxHashPrefix>,
+) -> Vec<Ops> {
     let (reply_channel, reply) = tokio::sync::oneshot::channel();
     mempool_outbound
-        .send(MempoolMsg::GetTransactionsByPrefix {
-            prefix,
+        .send(MempoolMsg::GetTransactionsByPrefixes {
+            prefixes,
             reply_channel,
         })
         .await
@@ -250,6 +260,8 @@ async fn txs_by_prefix(
 #[derive(Clone, Default)]
 struct InMemoryStorageAdapter {
     items: Arc<Mutex<BTreeMap<TxHash, Ops>>>,
+    /// How many writes went to storage.
+    writes: Arc<AtomicUsize>,
     /// Slots of the blocks "stored" alongside the transactions.
     block_slots: Arc<Mutex<HashMap<HeaderId, Slot>>>,
     /// Blocks whose lookup fails instead of answering.
@@ -295,11 +307,16 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
 
     async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
-    async fn store_item(&mut self, key: Self::Key, item: Self::Item) -> Result<(), Self::Error> {
+    async fn store_items<Items>(&mut self, items: Items) -> Result<(), Self::Error>
+    where
+        Items: IntoIterator<Item = (Self::Key, Self::Item)> + Send,
+        Items::IntoIter: Send,
+    {
         self.items
             .lock()
             .expect("in-memory storage adapter lock should not be poisoned")
-            .insert(key, item);
+            .extend(items);
+        self.writes.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -377,7 +394,11 @@ impl MempoolStorageAdapter<RuntimeServiceId> for FailingStorageAdapter {
 
     async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
-    async fn store_item(&mut self, _key: Self::Key, _item: Self::Item) -> Result<(), Self::Error> {
+    async fn store_items<Items>(&mut self, _items: Items) -> Result<(), Self::Error>
+    where
+        Items: IntoIterator<Item = (Self::Key, Self::Item)> + Send,
+        Items::IntoIter: Send,
+    {
         Err(MempoolError::StorageError(
             "test storage failure".to_owned(),
         ))
@@ -720,6 +741,47 @@ async fn an_inscription_beyond_the_era_limit_is_refused() {
         error,
         MempoolError::InscriptionTooLarge { size, max }
             if max == ADMISSION_LIMITS.max_op_data_size && size == max + 1
+    ));
+}
+
+#[tokio::test]
+async fn inscription_and_step_data_count_together_for_admission() {
+    const MAX_DATA_SIZE: usize = 64;
+    let settings = MempoolSettings {
+        admission: era_schedule().map(|_| AdmissionLimits {
+            max_op_data_size: MAX_DATA_SIZE,
+            ..ADMISSION_LIMITS
+        }),
+        ..default_settings()
+    };
+    let mut pool = InMemoryPool::new(settings, Era::genesis(), InMemoryStorageAdapter::default());
+
+    let sample = InscriptionOp::sample_with_step();
+    let step_data_size: usize = sample.steps().map(|step| step.inscription().len()).sum();
+    let inscribing = |total_size| {
+        Ops::new(
+            FORK_DIGEST,
+            [Op::ChannelInscribe(InscriptionOp {
+                inscription: Inscription::new_unchecked(vec![b'x'; total_size - step_data_size]),
+                ..sample.clone()
+            })],
+        )
+    };
+
+    let at_limit = inscribing(MAX_DATA_SIZE);
+    pool.add_item(at_limit.hash(), at_limit)
+        .await
+        .expect("combined data at the era limit should be admitted");
+
+    let over_limit = inscribing(MAX_DATA_SIZE + 1);
+    let error = pool
+        .add_item(over_limit.hash(), over_limit)
+        .await
+        .expect_err("step data puts the inscription over the era limit");
+    assert!(matches!(
+        error,
+        MempoolError::InscriptionTooLarge { size, max }
+            if max == MAX_DATA_SIZE && size == MAX_DATA_SIZE + 1
     ));
 }
 
@@ -1242,6 +1304,110 @@ async fn included_tx_remains_resolvable_after_recovery() {
     assert_eq!(stored_items(&pool, tx_id).await, vec![tx]);
 }
 
+/// Admitting an item is too frequent to scan the retired ones for: an overdue
+/// one waits for the sweep.
+#[tokio::test]
+async fn an_admission_leaves_retired_items_to_the_sweep() {
+    let storage = InMemoryStorageAdapter::default();
+    let mut pool = InMemoryPool::new(default_settings(), Era::genesis(), storage.clone());
+    let retired = tx("retired");
+    pool.add_item(retired.hash(), retired.clone())
+        .await
+        .expect("tx should be added");
+    pool.remove(&[retired.hash()]).await;
+    // Past its release age, which the release in `remove` did not see.
+    let mut saved_state = pool.save();
+    *saved_state
+        .removed_items
+        .get_mut(&retired.hash())
+        .expect("tx should be removed") = 0;
+    let mut pool =
+        InMemoryPool::recover(default_settings(), Era::genesis(), saved_state, storage).await;
+
+    let admitted = tx("admitted");
+    pool.add_item(admitted.hash(), admitted)
+        .await
+        .expect("tx should be added");
+    assert_eq!(
+        keys_with_prefix(&pool, retired.hash()),
+        vec![retired.hash()]
+    );
+
+    assert!(pool.release_retained().await);
+    assert_eq!(keys_with_prefix(&pool, retired.hash()), vec![]);
+    assert!(!pool.release_retained().await, "nothing left to release");
+}
+
+/// What a reorg brings back takes one write, however much of it there is.
+#[tokio::test]
+async fn reorged_items_are_stored_in_one_write() {
+    let storage = InMemoryStorageAdapter::default();
+    let mut pool = InMemoryPool::new(default_settings(), Era::genesis(), storage.clone());
+    let reorged = vec![tx("first"), tx("second"), tx("third")];
+
+    let readmitted = pool
+        .on_canonical_chain_updated(
+            HashMap::new(),
+            reorged
+                .iter()
+                .cloned()
+                .map(|tx| TxInBlock {
+                    tx,
+                    slot: Slot::from(10u64),
+                })
+                .collect(),
+        )
+        .await;
+
+    assert_eq!(readmitted, reorged);
+    assert_eq!(pool.pending_item_count(), reorged.len());
+    assert_eq!(storage.writes.load(Ordering::SeqCst), 1);
+}
+
+/// A block that reorgs nothing has nothing to store.
+#[tokio::test]
+async fn an_update_without_reorged_items_stores_nothing() {
+    let storage = InMemoryStorageAdapter::default();
+    let mut pool = InMemoryPool::new(default_settings(), Era::genesis(), storage.clone());
+    let included = tx("included");
+    pool.add_item(included.hash(), included.clone())
+        .await
+        .expect("tx should be added");
+    let writes = storage.writes.load(Ordering::SeqCst);
+
+    let readmitted = pool
+        .on_canonical_chain_updated(
+            HashMap::from([(included.hash(), Slot::from(10u64))]),
+            Vec::new(),
+        )
+        .await;
+
+    assert_eq!(readmitted, vec![]);
+    assert_eq!(storage.writes.load(Ordering::SeqCst), writes);
+}
+
+/// A transaction carried twice by the reorged blocks comes back once.
+#[tokio::test]
+async fn a_reorged_item_carried_twice_is_admitted_once() {
+    let mut pool = InMemoryPool::new(
+        default_settings(),
+        Era::genesis(),
+        InMemoryStorageAdapter::default(),
+    );
+    let item = tx("twice");
+    let in_block = || TxInBlock {
+        tx: item.clone(),
+        slot: Slot::from(10u64),
+    };
+
+    let readmitted = pool
+        .on_canonical_chain_updated(HashMap::new(), vec![in_block(), in_block()])
+        .await;
+
+    assert_eq!(readmitted, vec![item]);
+    assert_eq!(pool.pending_item_count(), 1);
+}
+
 /// A tx retired long after its admission is released on the next prune, since
 /// its release age counts from its admission, not from its retirement.
 #[tokio::test]
@@ -1695,13 +1861,13 @@ fn test_mock_mempool() {
 
                 if items.len() == exp_txns.len() {
                     assert_eq!(exp_txns, items);
-                    exist.store(true, std::sync::atomic::Ordering::SeqCst);
+                    exist.store(true, Ordering::SeqCst);
                     break;
                 }
             }
         });
 
-        while !exist2.load(std::sync::atomic::Ordering::SeqCst) {
+        while !exist2.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(200));
         }
 
@@ -1729,6 +1895,50 @@ fn test_mock_mempool() {
             .expect("Recovery state should exist.");
         assert_eq!(recovered_state.pool().unwrap().pending_items.len(), 2);
         assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
+    });
+}
+
+/// One lookup covers all the prefixes it's given, a repeated one included.
+#[test]
+fn a_prefix_lookup_returns_each_match_once() {
+    run_with_mock_pool_node(Vec::new(), |settings, _temp_dir| {
+        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
+            .map_err(|e| eprintln!("Error encountered: {e}"))
+            .unwrap();
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
+        let mempool_outbound = app
+            .runtime()
+            .handle()
+            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
+
+        let (first, second) = (tx("first"), tx("second"));
+        for tx in [&first, &second] {
+            app.runtime()
+                .handle()
+                .block_on(add_tx(&mempool_outbound, tx.clone()))
+                .expect("tx should be added");
+        }
+
+        let prefixes = vec![
+            first.hash().key_prefix(),
+            second.hash().key_prefix(),
+            first.hash().key_prefix(),
+        ];
+        let mut found = app
+            .runtime()
+            .handle()
+            .block_on(txs_by_prefixes(&mempool_outbound, prefixes))
+            .iter()
+            .map(Ops::hash)
+            .collect::<Vec<_>>();
+        found.sort_unstable();
+        let mut expected = vec![first.hash(), second.hash()];
+        expected.sort_unstable();
+        assert_eq!(found, expected);
     });
 }
 

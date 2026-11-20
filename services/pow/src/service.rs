@@ -2815,7 +2815,7 @@ mod tests {
         // A chain of 40 blocks, each appending one commitment.
         let mut wallet = Wallet::<u8>::from_genesis(
             [],
-            KnownNotes::new(),
+            KnownNotes::new_sync(),
             HeaderId::from([0; 32]),
             &[Note::new(5, Fr::from(9u64), ZkPublicKey::zero())],
             &[],
@@ -2831,6 +2831,7 @@ mod tests {
                 commitments: vec![NoteCommitment(Fr::from(appended))],
             }],
             revealed: vec![],
+            withdrawals: vec![],
         };
         for id in 1..=40 {
             wallet.apply_block(&block(id, id - 1, id.into())).unwrap();

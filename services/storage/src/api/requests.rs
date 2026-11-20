@@ -38,6 +38,11 @@ pub enum StorageMsg {
         value: Bytes,
         reply_channel: Sender<Result<(), String>>,
     },
+    /// One atomic batch, answered once all entries have been written.
+    BulkStoreConfirmed {
+        items: HashMap<Bytes, Bytes>,
+        reply_channel: Sender<Result<(), String>>,
+    },
     Remove {
         key: Bytes,
         reply_channel: Sender<Option<Bytes>>,
@@ -59,9 +64,9 @@ pub enum StorageMsg {
         immutable_ids: BTreeMap<Slot, HeaderId>,
         response_tx: Sender<Result<(), String>>,
     },
-    RemoveBlock {
-        header_id: HeaderId,
-        response_tx: Sender<Option<Bytes>>,
+    RemoveBlocks {
+        header_ids: Vec<HeaderId>,
+        response_tx: Sender<Result<(), String>>,
     },
     GetBlockParent {
         header_id: HeaderId,
@@ -116,10 +121,11 @@ impl StorageMsg {
             | Self::GetTransactions { .. } => true,
             Self::Store { .. }
             | Self::StoreConfirmed { .. }
+            | Self::BulkStoreConfirmed { .. }
             | Self::Remove { .. }
             | Self::Execute { .. }
             | Self::StoreBlockData { .. }
-            | Self::RemoveBlock { .. }
+            | Self::RemoveBlocks { .. }
             | Self::StoreImmutableBlockIds { .. }
             | Self::StoreTransactions { .. }
             | Self::RemoveTransactions { .. } => false,
@@ -151,13 +157,17 @@ impl Debug for StorageMsg {
             Self::StoreConfirmed { key, value, .. } => {
                 write!(f, "StoreConfirmed {{ {key:?}, {value:?}}}")
             }
+            Self::BulkStoreConfirmed { items, .. } => f
+                .debug_struct("BulkStoreConfirmed")
+                .field("entries", &items.len())
+                .finish(),
             Self::Remove { key, .. } => {
                 write!(f, "Remove {{ {key:?} }}")
             }
             Self::Execute { .. } => write!(f, "Execute transaction"),
             Self::GetBlock { .. } => write!(f, "GetBlock {{ .. }}"),
             Self::StoreBlockData { .. } => write!(f, "StoreBlockData {{ .. }}"),
-            Self::RemoveBlock { .. } => write!(f, "RemoveBlock {{ .. }}"),
+            Self::RemoveBlocks { .. } => write!(f, "RemoveBlocks {{ .. }}"),
             Self::GetBlockParent { .. } => write!(f, "GetBlockParent {{ .. }}"),
             Self::GetBlockEvents { .. } => write!(f, "GetBlockEvents {{ .. }}"),
             Self::StoreImmutableBlockIds { .. } => write!(f, "StoreImmutableBlockIds {{ .. }}"),
