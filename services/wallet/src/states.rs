@@ -18,7 +18,7 @@ use lb_core::{
     },
 };
 use lb_groth16::Fr;
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{PK0, ZkPublicKey};
 use lb_log_targets::wallet;
 use lb_storage_service::api::StorageApi;
 use lb_wallet::{KnownNote, KnownNotes, NoteSetSpend, WalletBlock, WalletError, WalletState};
@@ -26,7 +26,10 @@ use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::{KeyId, ReservationHandoff, ReservationJob, WalletServiceError, WalletServiceSettings};
+use crate::{
+    KeyId, LeadershipKeyIds, LeadershipPublicKeys, ReservationHandoff, ReservationJob,
+    WalletServiceError, WalletServiceSettings,
+};
 
 pub type Wallet = lb_wallet::Wallet<KeyId>;
 
@@ -40,7 +43,7 @@ pub type Wallet = lb_wallet::Wallet<KeyId>;
 /// block; eviction only covers transactions that never land. Releasing too
 /// early merely reintroduces a conflicting tx, the same failure mode as
 /// having no reservation at all.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct PendingNotes {
     notes: HashMap<(NoteSetIndex, NoteNullifier), Reservation>,
     groups: HashMap<[u8; 32], HashSet<(NoteSetIndex, NoteNullifier)>>,
@@ -383,7 +386,7 @@ impl PendingNotes {
 
 // Prevent older commitment-keyed checkpoints from being read as set-aware
 // state. Their memberships may already have been conflated.
-const WALLET_SNAPSHOT_FORMAT: u64 = 0x5345_5457_414c_4c31;
+const WALLET_SNAPSHOT_FORMAT: u64 = 0x5345_5457_414c_4c32;
 
 fn snapshot_format<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let format = u64::deserialize(deserializer)?;
@@ -401,12 +404,30 @@ pub struct RecoveryState {
     format: u64,
     /// [`WalletState`] at the last known LIB.
     /// `None` until the first recovery state update.
-    lib_wallet_state: Option<(HeaderId, WalletState)>,
+    lib_wallet_state: Option<(HeaderId, WalletState, WalletState)>,
 }
 
 impl RecoveryState {
-    pub const fn take_lib_wallet_state(&mut self) -> Option<(HeaderId, WalletState)> {
+    pub const fn take_lib_wallet_state(&mut self) -> Option<(HeaderId, WalletState, WalletState)> {
         self.lib_wallet_state.take()
+    }
+}
+
+/// Authoritative opening and reward records loaded from durable storage.
+pub struct RecoveredOpenings {
+    pub spending: KnownNotes,
+    pub leadership: KnownNotes,
+    pub reward_key_count: u64,
+}
+
+#[cfg(test)]
+impl Default for RecoveredOpenings {
+    fn default() -> Self {
+        Self {
+            spending: KnownNotes::new_sync(),
+            leadership: KnownNotes::new_sync(),
+            reward_key_count: 0,
+        }
     }
 }
 
@@ -422,10 +443,13 @@ impl overwatch::services::state::ServiceState for RecoveryState {
     }
 }
 
-/// Tracks wallet state, pending spends and derived reward keys.
+/// Provides operations on the states that must be synced to [`RecoveryState`].
+#[derive(Clone)]
 pub struct ServiceState<'u> {
     next_reward_key_index: u64,
     wallet: Wallet,
+    leadership_wallet: Wallet,
+    leadership_keys: HashMap<LeadershipPublicKeys, LeadershipKeyIds>,
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
     pending_notes: PendingNotes,
@@ -436,28 +460,87 @@ pub struct ServiceState<'u> {
 impl<'u> ServiceState<'u> {
     // Restores the wallet persisted at its LIB.
     pub fn from_lib_wallet_state(
-        known_notes: KnownNotes,
-        next_reward_key_index: u64,
+        records: RecoveredOpenings,
         lib: HeaderId,
-        wallet_state: WalletState,
+        mut wallet_state: WalletState,
+        leadership_state: WalletState,
         settings: &WalletServiceSettings,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
-        let wallet =
+        let RecoveredOpenings {
+            spending: mut known_notes,
+            leadership: leadership_known_notes,
+            reward_key_count,
+        } = records;
+        known_notes = known_notes
+            .iter()
+            .filter(|(_, known)| known.note.public_key != *PK0)
+            .map(|(id, known)| (*id, *known))
+            .collect();
+        wallet_state.notes = wallet_state
+            .notes
+            .iter()
+            .filter(|(_, known)| known.note.public_key != *PK0)
+            .map(|(commitment, known)| (*commitment, known.clone()))
+            .collect();
+        let mut leadership_wallet =
+            Wallet::from_lib_wallet_state([], leadership_known_notes, lib, leadership_state);
+        leadership_wallet
+            .forget_final_known_notes(lib)
+            .expect("leadership state at LIB must exist");
+        let mut wallet =
             Wallet::from_lib_wallet_state(known_keys(settings), known_notes, lib, wallet_state);
-        Self::with_wallet(wallet, lib, next_reward_key_index, settings, updater)
+        wallet
+            .forget_final_known_notes(lib)
+            .expect("wallet state at LIB must exist");
+        Self::with_wallet(
+            wallet,
+            leadership_wallet,
+            lib,
+            reward_key_count,
+            settings,
+            updater,
+        )
     }
 
     // A fresh wallet follows the note sets from the genesis block.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Genesis initializes both tracked note collections"
+    )]
     pub fn from_genesis(
-        known_notes: KnownNotes,
-        next_reward_key_index: u64,
+        records: RecoveredOpenings,
         settings: &WalletServiceSettings,
         genesis: HeaderId,
         genesis_notes: &[Note],
         genesis_service_notes: &[Note],
+        genesis_known_notes: impl IntoIterator<Item = KnownNote>,
+        genesis_leadership_notes: impl IntoIterator<Item = KnownNote>,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Result<Self, WalletError> {
+        let RecoveredOpenings {
+            spending: mut known_notes,
+            leadership: mut leadership_known_notes,
+            reward_key_count,
+        } = records;
+        for known in genesis_known_notes {
+            known_notes.insert_mut(known.id(), known);
+        }
+        known_notes = known_notes
+            .iter()
+            .filter(|(_, known)| known.note.public_key != *PK0)
+            .map(|(id, known)| (*id, *known))
+            .collect();
+        for known in genesis_leadership_notes {
+            leadership_known_notes.insert_mut(known.id(), known);
+        }
+        let leadership_wallet = Wallet::from_genesis(
+            [],
+            leadership_known_notes,
+            genesis,
+            genesis_notes,
+            genesis_service_notes,
+        )?;
         let wallet = Wallet::from_genesis(
             known_keys(settings),
             known_notes,
@@ -467,8 +550,9 @@ impl<'u> ServiceState<'u> {
         )?;
         Ok(Self::with_wallet(
             wallet,
+            leadership_wallet,
             genesis,
-            next_reward_key_index,
+            reward_key_count,
             settings,
             updater,
         ))
@@ -476,6 +560,7 @@ impl<'u> ServiceState<'u> {
 
     fn with_wallet(
         wallet: Wallet,
+        leadership_wallet: Wallet,
         lib: HeaderId,
         next_reward_key_index: u64,
         settings: &WalletServiceSettings,
@@ -484,6 +569,12 @@ impl<'u> ServiceState<'u> {
         Self {
             next_reward_key_index,
             wallet,
+            leadership_wallet,
+            leadership_keys: settings
+                .leadership_keys
+                .iter()
+                .map(|credential| (credential.public, credential.keys.clone()))
+                .collect(),
             lib,
             updater,
             pending_notes: PendingNotes::default(),
@@ -526,22 +617,66 @@ impl<'u> ServiceState<'u> {
         self.wallet.add_known_key(pk, key_id);
     }
 
-    /// Stores opening records before registering the notes in memory.
+    /// Persist spendable openings before exposing them to callers.
     pub async fn store_known_notes<Tx>(
         &mut self,
         storage: &StorageApi<Tx>,
         notes: &[KnownNote],
     ) -> Result<(), WalletServiceError> {
+        let leadership = notes
+            .iter()
+            .copied()
+            .filter(|known| {
+                self.leadership_keys.contains_key(&LeadershipPublicKeys {
+                    nullifier_public_key: known.note.public_key,
+                    staking_public_key: known.note.stake_public_key,
+                })
+            })
+            .collect::<Vec<_>>();
         storage
-            .store_wallet_known_notes(notes)
+            .store_wallet_openings(notes, &leadership)
             .await
             .map_err(WalletServiceError::PersistedState)?;
-        self.wallet.add_known_notes(notes.iter().copied());
+        self.add_known_notes(notes.iter().copied());
         Ok(())
     }
 
+    pub fn add_leadership_key(&mut self, key_id: LeadershipKeyIds, public: LeadershipPublicKeys) {
+        self.leadership_keys.insert(public, key_id);
+    }
+
+    pub fn add_known_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
+        let notes: Vec<_> = notes.into_iter().collect();
+        self.leadership_wallet
+            .add_known_notes(notes.iter().copied().filter(|known| {
+                self.leadership_keys.contains_key(&LeadershipPublicKeys {
+                    nullifier_public_key: known.note.public_key,
+                    staking_public_key: known.note.stake_public_key,
+                })
+            }));
+        self.wallet.add_known_notes(
+            notes
+                .into_iter()
+                .filter(|known| known.note.public_key != *PK0),
+        );
+    }
+
+    pub fn add_leadership_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
+        self.leadership_wallet.add_known_notes(notes);
+        self.update_state();
+    }
+
+    pub const fn leadership_wallet(&self) -> &Wallet {
+        &self.leadership_wallet
+    }
+
+    pub const fn leadership_keys(&self) -> &HashMap<LeadershipPublicKeys, LeadershipKeyIds> {
+        &self.leadership_keys
+    }
+
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
-        self.wallet.apply_block(block)?;
+        self.wallet
+            .apply_block_pair(&mut self.leadership_wallet, block)?;
         // Note reservations are released after `pending_note_expiry_blocks`
         // (see `evict_expired`), not on spent. The recovery state, the LIB's
         // wallet state, stays as it is.
@@ -556,7 +691,9 @@ impl<'u> ServiceState<'u> {
         // advancing rather than panicking, keeping `self.lib` pointing
         // at a block whose state exists. A later block application or
         // LIB update advances the LIB once the gap is filled.
-        if !self.wallet.has_processed_block(new_lib) {
+        if !self.wallet.has_processed_block(new_lib)
+            || !self.leadership_wallet.has_processed_block(new_lib)
+        {
             warn!(
                 target: wallet::SERVICE,
                 ?new_lib,
@@ -572,6 +709,10 @@ impl<'u> ServiceState<'u> {
         self.wallet
             .forget_final_known_notes(new_lib)
             .expect("WalletState at LIB must exist");
+        self.leadership_wallet.prune_states(new_lib);
+        self.leadership_wallet
+            .forget_final_known_notes(new_lib)
+            .expect("Leadership state at LIB must exist");
         self.pending_notes
             .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.update_state();
@@ -748,15 +889,25 @@ impl<'u> ServiceState<'u> {
     }
 
     fn update_state(&self) {
+        self.updater.update(Some(self.snapshot()));
+    }
+
+    pub fn snapshot(&self) -> RecoveryState {
         let lib_wallet_state = self
             .wallet()
             .wallet_state_at(self.lib)
             .expect("WalletState at LIB must exist");
 
-        self.updater.update(Some(RecoveryState {
+        RecoveryState {
             format: WALLET_SNAPSHOT_FORMAT,
-            lib_wallet_state: Some((self.lib, lib_wallet_state)),
-        }));
+            lib_wallet_state: Some((
+                self.lib,
+                lib_wallet_state,
+                self.leadership_wallet
+                    .wallet_state_at(self.lib)
+                    .expect("Leadership state at LIB must exist"),
+            )),
+        }
     }
 }
 
@@ -764,6 +915,7 @@ fn known_keys(settings: &WalletServiceSettings) -> impl Iterator<Item = (ZkPubli
     settings
         .known_keys
         .iter()
+        .filter(|(_, pk)| **pk != *PK0)
         .map(|(key_id, pk)| (*pk, key_id.clone()))
 }
 
@@ -781,6 +933,59 @@ mod tests {
     const EXPIRY_BLOCKS: u64 = 4;
 
     #[test]
+    fn failed_leadership_transition_does_not_advance_spending_wallet() {
+        use std::sync::Arc;
+
+        use lb_services_utils::overwatch::RecoveryData;
+
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::new(),
+            leadership_keys: Vec::new(),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
+            era_schedule: era_schedule(),
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = ServiceState::from_genesis(
+            RecoveredOpenings::default(),
+            &settings,
+            genesis,
+            &[],
+            &[],
+            [],
+            [],
+            &updater,
+        )
+        .unwrap();
+        let first = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 0.into(),
+            updates: vec![],
+            revealed: vec![],
+            withdrawals: vec![],
+        };
+        state.wallet.apply_block(&first).unwrap();
+        let next = WalletBlock {
+            id: HeaderId::from([2; 32]),
+            parent: first.id,
+            epoch: 0.into(),
+            updates: vec![],
+            revealed: vec![],
+            withdrawals: vec![],
+        };
+        assert!(state.apply_block(&next).is_err());
+        assert!(!state.wallet.has_processed_block(next.id));
+        assert!(!state.leadership_wallet.has_processed_block(next.id));
+        assert!(state.wallet.has_processed_block(first.id));
+        assert!(!state.leadership_wallet.has_processed_block(first.id));
+    }
+
+    #[test]
     fn older_checkpoint_format_is_rejected() {
         use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 
@@ -794,6 +999,47 @@ mod tests {
         .to_bytes()
         .unwrap();
         assert!(RecoveryState::from_bytes(&old).is_err());
+    }
+
+    #[test]
+    fn checkpoint_requires_both_wallet_states_and_excludes_opening_records() {
+        use std::sync::Arc;
+
+        use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+        use lb_services_utils::overwatch::RecoveryData;
+
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::new(),
+            leadership_keys: Vec::new(),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
+            era_schedule: era_schedule(),
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = ServiceState::from_genesis(
+            RecoveredOpenings::default(),
+            &settings,
+            genesis,
+            &[],
+            &[],
+            [],
+            [],
+            &updater,
+        )
+        .unwrap();
+        let before = state.snapshot().to_bytes().unwrap();
+        let known = KnownNote {
+            note: Note::new(7, Fr::from(9u64), ZkPublicKey::new(Fr::from(3u64))),
+            note_set: NoteSetIndex::Ledger,
+            nullifier: NoteNullifier(Fr::from(5u64)),
+        };
+        state.add_known_notes([known]);
+        assert_eq!(before, state.snapshot().to_bytes().unwrap());
+        assert!(RecoveryState::from_bytes(&before[..before.len() - 1]).is_err());
     }
 
     #[test]
@@ -1111,6 +1357,7 @@ mod tests {
         };
         let owner = key.to_public_key();
         let settings = WalletServiceSettings {
+            leadership_keys: Vec::new(),
             known_keys: HashMap::from([("owner".into(), owner)]),
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
@@ -1121,7 +1368,7 @@ mod tests {
         let genesis = HeaderId::from([0; 32]);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
-        let mut state = ServiceState::from_genesis(
+        let mut state = crate::tests::state_from_genesis(
             [(ledger.id(), ledger), (sdp.id(), sdp)]
                 .into_iter()
                 .collect(),
@@ -1184,6 +1431,7 @@ mod tests {
 
         let funding_pk = ZkPublicKey::new(Fr::ONE);
         let settings = WalletServiceSettings {
+            leadership_keys: Vec::new(),
             known_keys: HashMap::from([("funding".into(), funding_pk)]),
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
@@ -1194,7 +1442,7 @@ mod tests {
         let genesis = HeaderId::from([0; 32]);
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
-        let mut state = ServiceState::from_genesis(
+        let mut state = crate::tests::state_from_genesis(
             KnownNotes::new_sync(),
             0,
             &settings,
@@ -1297,6 +1545,7 @@ mod tests {
         use lb_services_utils::overwatch::RecoveryData;
 
         let settings = WalletServiceSettings {
+            leadership_keys: Vec::new(),
             known_keys: HashMap::new(),
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
@@ -1310,7 +1559,7 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state = ServiceState::from_genesis(
+        let mut state = crate::tests::state_from_genesis(
             KnownNotes::new_sync(),
             0,
             &settings,
@@ -1329,5 +1578,466 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
+    }
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        clippy::cognitive_complexity,
+        reason = "The lifecycle covers both forks and recovery"
+    )]
+    fn leadership_notes_follow_spends_forks_and_recovery_without_becoming_spendable() {
+        use std::sync::Arc;
+
+        use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+        use lb_core::{crypto::ZkHasher, mantle::note_set::NoteSetUpdate};
+        use lb_key_management_system_service::keys::kdf_public_key;
+        use lb_services_utils::overwatch::RecoveryData;
+        use tokio::sync::watch;
+
+        use crate::LeadershipCredentials;
+        let public = LeadershipPublicKeys {
+            nullifier_public_key: kdf_public_key(&Fr::from(7u64)),
+            staking_public_key: kdf_public_key(&Fr::from(9u64)),
+        };
+        let note = Note {
+            stake_public_key: public.staking_public_key,
+            ..Note::new(10, Fr::ONE, public.nullifier_public_key)
+        };
+        let known = KnownNote {
+            note,
+            note_set: NoteSetIndex::Ledger,
+            nullifier: NoteNullifier(Fr::from(3u64)),
+        };
+        let service_known = KnownNote {
+            note_set: NoteSetIndex::Sdp,
+            ..known
+        };
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::new(),
+            leadership_keys: vec![LeadershipCredentials {
+                keys: LeadershipKeyIds {
+                    nullifier: "nf".into(),
+                    staking: "stake".into(),
+                },
+                public,
+            }],
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
+            era_schedule: era_schedule(),
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, receiver) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = ServiceState::from_genesis(
+            RecoveredOpenings::default(),
+            &settings,
+            genesis,
+            &[note],
+            &[note],
+            [],
+            [known, service_known],
+            &updater,
+        )
+        .unwrap();
+        assert!(
+            state
+                .wallet()
+                .balance(genesis, note.public_key)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            state
+                .leadership_wallet()
+                .wallet_state_at(genesis)
+                .unwrap()
+                .aged_notes()
+                .unwrap()
+                .len(),
+            2
+        );
+        let pending = KnownNote {
+            note: Note {
+                nonce: Fr::from(20u64),
+                ..note
+            },
+            nullifier: NoteNullifier(Fr::from(21u64)),
+            ..known
+        };
+        let mutable_only = KnownNote {
+            note: Note {
+                nonce: Fr::from(22u64),
+                ..note
+            },
+            nullifier: NoteNullifier(Fr::from(23u64)),
+            ..known
+        };
+        state.add_leadership_notes([pending, mutable_only]);
+        let genesis_state = state.leadership_wallet().wallet_state_at(genesis).unwrap();
+        let block = |id, nullifiers| WalletBlock {
+            id: HeaderId::from([id; 32]),
+            parent: genesis,
+            epoch: 0.into(),
+            updates: vec![NoteSetUpdate {
+                note_set: NoteSetIndex::Ledger,
+                nullifiers,
+                commitments: vec![],
+            }],
+            revealed: vec![],
+            withdrawals: vec![],
+        };
+        let spent = block(1, vec![known.nullifier]);
+        let mut fork = block(2, vec![]);
+        fork.updates[0]
+            .commitments
+            .push(mutable_only.note.commitment());
+        state.apply_block(&spent).unwrap();
+        state.apply_block(&fork).unwrap();
+        assert_eq!(
+            state
+                .leadership_wallet()
+                .wallet_state_at(spent.id)
+                .unwrap()
+                .aged_notes()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            state
+                .leadership_wallet()
+                .wallet_state_at(fork.id)
+                .unwrap()
+                .aged_notes()
+                .unwrap()
+                .len(),
+            2
+        );
+        let mut spent_state = state.clone();
+        spent_state.advance_lib(spent.id, 1);
+        assert!(
+            !spent_state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&known.id())
+        );
+        assert!(
+            !spent_state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&service_known.id())
+        );
+        assert!(
+            spent_state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&pending.id())
+        );
+        assert!(
+            spent_state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&mutable_only.id())
+        );
+        assert_eq!(
+            spent_state
+                .leadership_wallet()
+                .wallet_state_at(spent.id)
+                .unwrap()
+                .aged_notes()
+                .unwrap()
+                .len(),
+            1
+        );
+        let mut spent_checkpoint = spent_state.snapshot();
+        let spent_records = RecoveredOpenings {
+            leadership: KnownNotes::from_iter([
+                (known.id(), known),
+                (service_known.id(), service_known),
+                (pending.id(), pending),
+            ]),
+            ..RecoveredOpenings::default()
+        };
+        let (spent_lib, spending_state, leadership_state) =
+            spent_checkpoint.take_lib_wallet_state().unwrap();
+        let spent_restored = ServiceState::from_lib_wallet_state(
+            spent_records,
+            spent_lib,
+            spending_state,
+            leadership_state,
+            &settings,
+            &updater,
+        );
+        assert!(
+            !spent_restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&known.id())
+        );
+        assert!(
+            !spent_restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&service_known.id())
+        );
+        assert!(
+            spent_restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&pending.id())
+        );
+        let surviving = spent_restored
+            .leadership_wallet()
+            .wallet_state_at(spent_lib)
+            .unwrap()
+            .aged_notes()
+            .unwrap();
+        assert_eq!(surviving.len(), 1);
+        assert_eq!(surviving[0].0.note_set, NoteSetIndex::Sdp);
+        state.advance_lib(genesis, 0);
+        assert!(
+            !state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&known.id())
+        );
+        assert!(
+            !state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&service_known.id())
+        );
+        assert!(
+            state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&pending.id())
+        );
+        assert!(
+            state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&mutable_only.id())
+        );
+        state.advance_lib(fork.id, 1);
+        assert!(
+            !state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&mutable_only.id())
+        );
+        assert!(
+            state
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&pending.id())
+        );
+        let saved = receiver.borrow().clone().unwrap();
+        // Changing configured credentials keeps the existing LIB checkpoint;
+        // it does not reconstruct previously untracked memberships.
+        let mut changed_settings = settings.clone();
+        changed_settings
+            .leadership_keys
+            .push(LeadershipCredentials {
+                keys: LeadershipKeyIds {
+                    nullifier: "nf2".into(),
+                    staking: "stake2".into(),
+                },
+                public: LeadershipPublicKeys {
+                    nullifier_public_key: kdf_public_key(&Fr::from(11u64)),
+                    staking_public_key: kdf_public_key(&Fr::from(13u64)),
+                },
+            });
+        let mut saved_with_new_key = saved.clone();
+        assert_eq!(
+            saved_with_new_key.take_lib_wallet_state().unwrap().0,
+            fork.id
+        );
+        let restored = RecoveryState::from_bytes(&saved.to_bytes().unwrap()).unwrap();
+        let mut restored = restored;
+        let after_checkpoint = KnownNote {
+            note: Note {
+                nonce: Fr::from(31u64),
+                ..note
+            },
+            nullifier: NoteNullifier(Fr::from(32u64)),
+            ..known
+        };
+        let records = RecoveredOpenings {
+            leadership: KnownNotes::from_iter([
+                (known.id(), known),
+                (service_known.id(), service_known),
+                (mutable_only.id(), mutable_only),
+                (pending.id(), pending),
+                (after_checkpoint.id(), after_checkpoint),
+            ]),
+            ..RecoveredOpenings::default()
+        };
+        let (lib, wallet_state, leadership_state) = restored.take_lib_wallet_state().unwrap();
+        let restored = ServiceState::from_lib_wallet_state(
+            records,
+            lib,
+            wallet_state,
+            leadership_state,
+            &changed_settings,
+            &updater,
+        );
+        assert!(
+            !restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&known.id())
+        );
+        assert!(
+            !restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&service_known.id())
+        );
+        assert!(
+            !restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&mutable_only.id())
+        );
+        assert!(
+            restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&pending.id())
+        );
+        assert!(
+            restored
+                .leadership_wallet()
+                .known_notes()
+                .contains_key(&after_checkpoint.id())
+        );
+        assert_eq!(
+            restored
+                .leadership_wallet()
+                .wallet_state_at(lib)
+                .unwrap()
+                .aged_notes()
+                .unwrap()
+                .len(),
+            2
+        );
+        let restored_state = restored.leadership_wallet().wallet_state_at(lib).unwrap();
+        for (owned, path) in restored_state.aged_notes().unwrap() {
+            assert_eq!(owned.nullifier, known.nullifier);
+            assert!(
+                path.verify::<ZkHasher>(note.commitment().0, genesis_state.root_of(owned.note_set))
+            );
+            assert!(
+                owned.path.verify::<ZkHasher>(
+                    note.commitment().0,
+                    restored_state.root_of(owned.note_set),
+                )
+            );
+        }
+        assert!(
+            restored
+                .wallet()
+                .balance(lib, note.public_key)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            restored.leadership_keys().get(&public).unwrap().nullifier,
+            "nf"
+        );
+    }
+
+    #[test]
+    fn newly_created_leadership_note_ages_before_selection() {
+        use std::sync::Arc;
+
+        use lb_core::mantle::note_set::NoteSetUpdate;
+        use lb_key_management_system_service::keys::kdf_public_key;
+        use lb_services_utils::overwatch::RecoveryData;
+        use tokio::sync::watch;
+
+        use crate::LeadershipCredentials;
+
+        let public = LeadershipPublicKeys {
+            nullifier_public_key: kdf_public_key(&Fr::from(7u64)),
+            staking_public_key: kdf_public_key(&Fr::from(9u64)),
+        };
+        let note = Note {
+            stake_public_key: public.staking_public_key,
+            ..Note::new(10, Fr::ONE, public.nullifier_public_key)
+        };
+        let known = KnownNote {
+            note,
+            note_set: NoteSetIndex::Ledger,
+            nullifier: NoteNullifier(Fr::from(3u64)),
+        };
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::new(),
+            leadership_keys: vec![LeadershipCredentials {
+                keys: LeadershipKeyIds {
+                    nullifier: "nf".into(),
+                    staking: "stake".into(),
+                },
+                public,
+            }],
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
+            era_schedule: era_schedule(),
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _receiver) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = ServiceState::from_genesis(
+            RecoveredOpenings::default(),
+            &settings,
+            genesis,
+            &[],
+            &[],
+            [],
+            [],
+            &updater,
+        )
+        .unwrap();
+        let mut late = state.clone();
+        state.add_leadership_notes([known]);
+        let child = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 0.into(),
+            updates: vec![NoteSetUpdate {
+                note_set: NoteSetIndex::Ledger,
+                nullifiers: vec![],
+                commitments: vec![note.commitment()],
+            }],
+            revealed: vec![],
+            withdrawals: vec![],
+        };
+        state.apply_block(&child).unwrap();
+        late.apply_block(&child).unwrap();
+        late.add_leadership_notes([known]);
+        assert_eq!(
+            late.leadership_wallet()
+                .wallet_state_at(child.id)
+                .unwrap()
+                .aged_notes_at(2.into())
+                .unwrap()
+                .len(),
+            0
+        );
+        let tracked = state.leadership_wallet().wallet_state_at(child.id).unwrap();
+        assert_eq!(tracked.aged_notes_at(1.into()).unwrap().len(), 0);
+        assert_eq!(tracked.aged_notes_at(2.into()).unwrap().len(), 1);
+        assert!(
+            state
+                .wallet()
+                .balance(child.id, note.public_key)
+                .unwrap()
+                .is_none()
+        );
     }
 }

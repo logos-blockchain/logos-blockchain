@@ -14,6 +14,8 @@ use thiserror::Error;
 pub enum WalletError {
     #[error("Requested wallet state for unknown block: {0}")]
     UnknownBlock(HeaderId),
+    #[error("Spending and leadership wallet states disagree about block {0}")]
+    InconsistentTracking(HeaderId),
     #[error("Wallet does not have enough funds, available={available}")]
     InsufficientFunds { available: u64 },
     #[error("Change key {0:?} must be one of this wallet's funding keys")]

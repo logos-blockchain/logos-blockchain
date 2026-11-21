@@ -23,6 +23,7 @@ impl ServiceConfig {
     ) -> WalletServiceSettings {
         WalletServiceSettings {
             known_keys: self.user.known_keys,
+            leadership_keys: self.user.leadership_keys,
             voucher_master_key_id: self.user.voucher_master_key_id,
             recovery_data,
             pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,

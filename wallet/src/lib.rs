@@ -19,7 +19,11 @@ use lb_core::{
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex, NoteSetUpdate},
         notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
-        ops::{OpRef, transfer::TransferOp},
+        ops::{
+            ChannelInscribeProof, OpProofRef, OpRef, StepProof,
+            channel::inscribe::{InscriptionOp, Step},
+            transfer::TransferOp,
+        },
         traits::{MantleTx, SignedMantleTx},
         transactions::{
             builder::{FundingNote, MantleTxBuilder, PriorityFee, ZkTransferOpening},
@@ -201,6 +205,23 @@ impl WalletBlock {
     where
         Tx: SignedMantleTx<Preverified, StandardMode, Hash = TxHash> + Clone,
     {
+        let mut revealed = revealed_notes(
+            events,
+            block.transactions_iter().flat_map(MantleTx::op_refs_iter),
+        );
+        for tx in block.transactions_iter() {
+            for (op, proof) in tx
+                .signed_ops()
+                .op_refs_iter()
+                .zip(tx.signed_ops().op_proof_refs_iter())
+            {
+                if let (OpRef::ChannelInscribe(inscription), OpProofRef::ChannelInscribe(proof)) =
+                    (op, proof)
+                {
+                    revealed.extend(revealed_program_notes(inscription, proof));
+                }
+            }
+        }
         Self {
             id: block.header().id(),
             parent: block.header().parent(),
@@ -212,10 +233,7 @@ impl WalletBlock {
                     _ => None,
                 })
                 .collect(),
-            revealed: revealed_notes(
-                events,
-                block.transactions_iter().flat_map(MantleTx::op_refs_iter),
-            ),
+            revealed,
             withdrawals: block
                 .transactions_iter()
                 .flat_map(MantleTx::op_refs_iter)
@@ -227,6 +245,25 @@ impl WalletBlock {
                 .collect(),
         }
     }
+}
+
+fn revealed_program_notes(
+    inscription: &InscriptionOp,
+    proof: &ChannelInscribeProof,
+) -> Vec<(NoteSetIndex, Note)> {
+    let mut revealed = Vec::new();
+    for (step, proof) in inscription.steps().zip(&proof.step_proofs) {
+        if let (Step::Program(step), StepProof::ProgramStep(proof)) = (step, proof) {
+            for (opening, commitment) in proof.program_notes.iter().zip(step.program_outputs.iter())
+            {
+                let note = opening.note(step.program_id);
+                if note.commitment() == *commitment {
+                    revealed.push((NoteSetIndex::Channel(inscription.channel_id), note));
+                }
+            }
+        }
+    }
+    revealed
 }
 
 // The openings a block reveals: the PoW and Blend reward notes from the events,
@@ -1017,6 +1054,34 @@ impl<KeyId> Wallet<KeyId> {
         Ok(())
     }
 
+    /// Apply a block to two independently tracked wallets as one transition.
+    /// Both new states are prepared before either wallet is changed.
+    pub fn apply_block_pair(
+        &mut self,
+        other: &mut Self,
+        block: &WalletBlock,
+    ) -> Result<(), WalletError> {
+        match (
+            self.has_processed_block(block.id),
+            other.has_processed_block(block.id),
+        ) {
+            (true, true) => return Ok(()),
+            (false, false) => (),
+            _ => return Err(WalletError::InconsistentTracking(block.id)),
+        }
+        let first = self
+            .wallet_state_at(block.parent)?
+            .apply_block(&self.known_notes, block)?;
+        let second = other
+            .wallet_state_at(block.parent)?
+            .apply_block(&other.known_notes, block)?;
+        self.wallet_states.insert(block.id, first);
+        self.parents.insert(block.id, block.parent);
+        other.wallet_states.insert(block.id, second);
+        other.parents.insert(block.id, block.parent);
+        Ok(())
+    }
+
     pub fn balance(
         &self,
         tip: HeaderId,
@@ -1288,11 +1353,7 @@ mod tests {
         mantle::{
             Op,
             gas::GasCost,
-            ops::{
-                channel::inscribe::{Inscription, InscriptionOp},
-                pow::PowNullifier,
-                sdp::SDPDeclareOp,
-            },
+            ops::{channel::inscribe::Inscription, pow::PowNullifier, sdp::SDPDeclareOp},
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
     };
@@ -2037,6 +2098,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(opening.inputs, vec![large]);
+    }
+
+    #[test]
+    fn program_step_reveals_only_the_openings_matching_its_commitments() {
+        use lb_core::mantle::ops::{
+            ChannelInscribeProof, ProgramNoteOpening, StepProof, StepProofShape,
+            channel::{
+                inscribe::{MiniBlock, MiniBlocks},
+                program_step::ProgramStep,
+            },
+        };
+        use lb_key_management_system_keys::keys::{Ed25519Signature, PK0};
+
+        let mut step = ProgramStep::sample();
+        let opening = ProgramNoteOpening {
+            value: 12,
+            nonce: Fr::from(3u64),
+            stake_public_key: pk(7),
+            data: Fr::from(4u64),
+        };
+        let note = opening.note(step.program_id);
+        assert_eq!(note.public_key, *PK0);
+        step.program_outputs = [note.commitment()].into();
+        let mut inscription = InscriptionOp::sample();
+        inscription.mini_blocks = MiniBlocks::try_from(vec![
+            MiniBlock::try_from(vec![Step::Program(step)]).unwrap(),
+        ])
+        .unwrap();
+        let mut proof = StepProof::sample_for(StepProofShape::ProgramStep { program_notes: 1 });
+        let StepProof::ProgramStep(program_proof) = &mut proof else {
+            panic!("expected program proof")
+        };
+        program_proof.program_notes[0] = opening;
+        let mut proof =
+            ChannelInscribeProof::new(Ed25519Signature::from_bytes(&[0u8; 64]), vec![proof]);
+        assert_eq!(
+            revealed_program_notes(&inscription, &proof),
+            vec![(NoteSetIndex::Channel(inscription.channel_id), note)]
+        );
+        let StepProof::ProgramStep(program_proof) = &mut proof.step_proofs[0] else {
+            panic!("expected program proof")
+        };
+        program_proof.program_notes[0].data = Fr::from(9u64);
+        assert_eq!(revealed_program_notes(&inscription, &proof), []);
     }
 
     #[test]

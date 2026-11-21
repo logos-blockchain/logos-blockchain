@@ -9,7 +9,7 @@ use lb_binary_codec::{
 use lb_dynamic_merkle::{MerkleNode, MerklePath};
 use lb_groth16::{COMPRESSED_PROOF_SIZE, FR_BYTES_SIZE, Fr, fr_from_bytes, serde::serde_fr};
 use lb_imt::store::LowLeaf;
-use lb_key_management_system_keys::keys::kdf_public_key;
+use lb_key_management_system_keys::keys::{ZkPublicKey, kdf_public_key};
 use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use serde::{Deserialize, Serialize};
@@ -254,7 +254,8 @@ pub fn check_winning(
     nullifier_key: Fr,
     staking_secret_key: Fr,
 ) -> bool {
-    note.public_key == kdf_public_key(&nullifier_key)
+    note.stake_public_key != ZkPublicKey::zero()
+        && note.public_key == kdf_public_key(&nullifier_key)
         && note.stake_public_key == kdf_public_key(&staking_secret_key)
         && public_inputs.check_winning(note.value, note.commitment().0, staking_secret_key)
 }
@@ -596,7 +597,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use ark_ff::Field as _;
-    use lb_key_management_system_keys::keys::{UnsecuredZkKey, ZkPublicKey};
+    use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use lb_pol::LotteryConstants;
     use lb_utils::math::ProperFraction;
     use rand::RngCore as _;
@@ -870,6 +871,17 @@ mod tests {
         ));
         assert!(check_winning(
             &staked,
+            public,
+            nullifier_key,
+            staking_secret_key
+        ));
+
+        let unstaked = notes::Note {
+            stake_public_key: ZkPublicKey::zero(),
+            ..note
+        };
+        assert!(!check_winning(
+            &unstaked,
             public,
             nullifier_key,
             staking_secret_key

@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 
 use lb_key_management_system_service::{backend::preload::KeyId, keys::ZkPublicKey};
-use lb_wallet_service::{default_fee_margin_percent, default_pending_note_expiry_blocks};
+use lb_wallet_service::{
+    LeadershipCredentials, default_fee_margin_percent, default_pending_note_expiry_blocks,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     #[serde(default)]
     pub known_keys: HashMap<KeyId, ZkPublicKey>,
+    #[serde(default)]
+    pub leadership_keys: Vec<LeadershipCredentials>,
     /// The master key the fresh key of each mining run is derived from. The
     /// name is kept from the leader vouchers.
     pub voucher_master_key_id: KeyId,
@@ -32,6 +36,7 @@ impl Config {
     ) -> Self {
         Self {
             known_keys: HashMap::new(),
+            leadership_keys: Vec::new(),
             voucher_master_key_id,
             pending_note_expiry_blocks: default_pending_note_expiry_blocks(),
             fee_margin_percent: default_fee_margin_percent(),

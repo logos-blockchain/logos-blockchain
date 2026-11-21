@@ -52,7 +52,7 @@ use lb_tx_service::{
     storage::MempoolStorageAdapter,
 };
 use lb_utils::tokio::task::{spawn, spawn_blocking};
-use lb_wallet_service::api::{WalletApi, WalletApiError};
+use lb_wallet_service::api::{WalletApi, WalletApiError, WalletServiceData};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
@@ -278,7 +278,7 @@ pub struct CryptarchiaLeader<
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
     ChainNetwork: ChainNetworkServiceData,
-    Wallet: lb_wallet_service::api::WalletServiceData,
+    Wallet: WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
 }
@@ -317,7 +317,7 @@ where
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
     ChainNetwork: ChainNetworkServiceData,
-    Wallet: lb_wallet_service::api::WalletServiceData,
+    Wallet: WalletServiceData,
 {
     type Settings = LeaderSettings;
     type State = overwatch::services::state::NoState<Self::Settings>;
@@ -382,7 +382,7 @@ where
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item> + 'static,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
-    Wallet: lb_wallet_service::api::WalletServiceData + 'static,
+    Wallet: WalletServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Clone
         + Send
@@ -658,7 +658,7 @@ where
     TimeBackend::Settings: Clone + Send + Sync,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item> + 'static,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
-    Wallet: lb_wallet_service::api::WalletServiceData + 'static,
+    Wallet: WalletServiceData + Send + Sync + 'static,
     RuntimeServiceId: Debug
         + Display
         + Sync
@@ -894,6 +894,7 @@ where
         let private = kms
             .build_private_inputs(
                 winning.note.key_id.clone(),
+                winning.note.note.note,
                 winning.public_inputs,
                 wallet_inputs,
                 reward.value,

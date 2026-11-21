@@ -16,7 +16,7 @@ use lb_core::{
     sdp::blend::{PolEpochState, PolEpochStateSource},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_key_management_system_service::{api::KmsServiceApi, backend::preload::KeyId};
+use lb_key_management_system_service::api::KmsServiceApi;
 use lb_ledger::{
     EpochState,
     config::{EraScheduledConfig, config_for_epoch},
@@ -26,7 +26,7 @@ use lb_pol::PolWalletInputsData;
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
 use lb_wallet_service::{
-    AgedNote,
+    AgedNote, LeadershipKeyIds as KeyId,
     api::{WalletApi, WalletServiceData},
 };
 use overwatch::{
@@ -504,7 +504,7 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
                     }
                 };
                 match kms
-                    .build_private_inputs(note.key_id.clone(), public_inputs, wallet, 0)
+                    .build_private_inputs(note.key_id.clone(), note.note.note, public_inputs, wallet, 0)
                     .await
                 {
                     Ok(leader_private) => return Some(leader_private),
@@ -583,7 +583,10 @@ mod pol_tests {
     ) {
         let config = test_config();
         let kms = DummyKms;
-        let key_id = KeyId::from("0");
+        let key_id = KeyId {
+            nullifier: "0".into(),
+            staking: "0".into(),
+        };
         let sk = UnsecuredZkKey::new(Fr::from(0u64));
         let pk = sk.to_public_key();
 
@@ -682,6 +685,137 @@ mod pol_tests {
             winners.is_empty(),
             "no winning slots should be emitted when starting past the epoch end",
         );
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Both consumers and the frozen-epoch spend use the real KMS"
+    )]
+    async fn both_leadership_consumers_use_the_same_distinct_kms_credentials() {
+        use lb_core::proofs::leader_proof::Groth16LeaderProof;
+        use lb_key_management_system_service::{
+            backend::{
+                KMSBackend as _,
+                preload::{PreloadKMSBackend, PreloadKMSBackendSettings},
+            },
+            keys::{Key, ZkKey, kdf_public_key},
+            message::KMSMessage,
+        };
+
+        let (config, _, _, _, mut epoch_state) = scan_test_fixtures();
+        let nf_sk = Fr::from(7u64);
+        let staking_sk = Fr::from(19u64);
+        let note = Note {
+            stake_public_key: kdf_public_key(&staking_sk),
+            ..Note::new(1000, Fr::from(11u64), kdf_public_key(&nf_sk))
+        };
+        let (_, aged_path) = CommitmentMmr::new()
+            .push_with_paths(note.commitment(), &mut [])
+            .unwrap();
+        let latest = LedgerState::from_notes([note], &config, &genesis_parameters())
+            .latest_note_sets()
+            .clone();
+        epoch_state.note_sets = latest.clone();
+        let key_id = KeyId {
+            nullifier: "leader-nf".into(),
+            staking: "leader-stake".into(),
+        };
+        let aged = vec![AgedNote {
+            note: OwnedNote {
+                note,
+                note_set: NoteSetIndex::Ledger,
+                nullifier: derive_note_nullifier(&note.commitment(), &nf_sk),
+                path: aged_path.clone(),
+            },
+            aged_path,
+            key_id: key_id.clone(),
+        }];
+        let backend = PreloadKMSBackend::new(PreloadKMSBackendSettings {
+            keys: [
+                (
+                    key_id.nullifier.clone(),
+                    Key::Zk(ZkKey::from_direct_secret(nf_sk)),
+                ),
+                (
+                    key_id.staking.clone(),
+                    Key::Zk(ZkKey::from_direct_secret(staking_sk)),
+                ),
+            ]
+            .into(),
+        });
+        let (sender, mut receiver) = mpsc::channel(8);
+        tokio::spawn(async move {
+            while let Some(message) = receiver.recv().await {
+                if let KMSMessage::ExecuteMultiple {
+                    key_ids,
+                    operator,
+                    reply_channel,
+                } = message
+                {
+                    drop(reply_channel.send(backend.execute_multiple(&key_ids, operator).await));
+                }
+            }
+        });
+        let kms =
+            KmsServiceApi::<PreloadKmsService<TestRuntimeServiceId>, TestRuntimeServiceId>::new(
+                OutboundRelay::new(sender),
+            );
+        let eras = single_era(config);
+        let start = eras.starting_slot_for_epoch(epoch_state.epoch);
+        let mut scan =
+            epoch_winning_slots_stream(&eras, epoch_state.clone(), &aged, kms.clone(), start);
+        let scanned = loop {
+            let future = scan
+                .next()
+                .await
+                .expect("the easy lottery has a winning slot");
+            if let Some(private) = future.await {
+                break private;
+            }
+        };
+        let slot = Slot::from(scanned.input().chain.slot_number);
+        let scanned_public = public_inputs_for_slot(&epoch_state, slot, &latest);
+        let scan_proof = Groth16LeaderProof::prove(scanned).unwrap();
+        assert!(scan_proof.verify(&scanned_public, Fr::from(0u64)));
+
+        // PoQ uses the frozen epoch inputs even after a later spend. A block
+        // proposal must instead construct an unspent witness at the live root.
+        let spent = latest
+            .clone()
+            .update_ledger(
+                latest
+                    .ledger()
+                    .clone()
+                    .execute_spending(&[aged[0].note.nullifier])
+                    .unwrap(),
+            )
+            .end_block(2, 1024)
+            .unwrap();
+        let mut after_spend =
+            epoch_winning_slots_stream(&eras, epoch_state.clone(), &aged, kms.clone(), slot);
+        assert!(after_spend.next().await.unwrap().await.is_some());
+        assert!(
+            find_winning_note(&aged, &epoch_state, &spent, slot, &kms)
+                .await
+                .is_none()
+        );
+
+        let winning = find_winning_note(&aged, &epoch_state, &latest, slot, &kms)
+            .await
+            .unwrap();
+        let private = kms
+            .build_private_inputs(
+                winning.note.key_id,
+                note,
+                winning.public_inputs,
+                winning.wallet_inputs,
+                0,
+            )
+            .await
+            .unwrap();
+        let proposal_proof = Groth16LeaderProof::prove(private).unwrap();
+        assert!(proposal_proof.verify(&winning.public_inputs, Fr::from(0u64)));
     }
 
     /// A winning note whose witness fails leaves the slot to the next winning
@@ -915,6 +1049,7 @@ mod pol_tests {
         async fn build_private_inputs(
             &self,
             _: Self::KeyId,
+            _: Note,
             public_inputs: LeaderPublic,
             wallet: PolWalletInputsData,
             reward_value: Value,
@@ -936,6 +1071,10 @@ mod pol_tests {
 
     #[derive(Debug)]
     struct TestRuntimeServiceId;
+
+    impl AsServiceId<PreloadKmsService<Self>> for TestRuntimeServiceId {
+        const SERVICE_ID: Self = Self;
+    }
 
     impl Display for TestRuntimeServiceId {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
