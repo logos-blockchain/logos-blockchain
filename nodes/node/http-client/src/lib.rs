@@ -316,9 +316,13 @@ impl CommonHttpClient {
         base_url: Url,
         declaration_id: DeclarationId,
     ) -> Result<Option<Declaration>, Error> {
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "Literal axum route placeholder, not a format argument."
+        )]
         let path = MANTLE_SDP_FINALIZED_DECLARATION
             .trim_start_matches('/')
-            .replace(":declaration_id", &declaration_id.to_string());
+            .replace("{declaration_id}", &declaration_id.to_string());
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
@@ -349,9 +353,13 @@ impl CommonHttpClient {
         service_type: ServiceType,
     ) -> Result<Option<HashMap<DeclarationId, Declaration>>, Error> {
         let service_discriminant = u8::from(service_type);
+        #[expect(
+            clippy::literal_string_with_formatting_args,
+            reason = "Literal axum route placeholder, not a format argument."
+        )]
         let path = MANTLE_SDP_FINALIZED_DECLARATIONS
             .trim_start_matches('/')
-            .replace(":service_type", &service_discriminant.to_string());
+            .replace("{service_type}", &service_discriminant.to_string());
         let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
 
         let mut request = self.client.get(request_url);
