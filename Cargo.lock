@@ -4977,6 +4977,7 @@ dependencies = [
  "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.8",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
