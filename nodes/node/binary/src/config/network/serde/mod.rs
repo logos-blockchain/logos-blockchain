@@ -4,6 +4,7 @@ use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use serde::{Deserialize, Serialize};
 
 pub mod chainsync;
+pub mod connection_limits;
 pub mod gossipsub;
 pub mod identify;
 pub mod kademlia;
@@ -57,6 +58,9 @@ pub struct SwarmConfig {
 
     #[serde(default)]
     pub nat: nat::Config,
+
+    #[serde(default)]
+    pub connection_limits: connection_limits::Config,
 }
 
 impl SwarmConfig {
@@ -82,6 +86,7 @@ impl Default for SwarmConfig {
             identify: identify::Config::default(),
             chain_sync: chainsync::Config::default(),
             nat: nat::Config::default(),
+            connection_limits: connection_limits::Config::default(),
         }
     }
 }

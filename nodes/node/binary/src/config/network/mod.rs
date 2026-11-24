@@ -95,6 +95,7 @@ impl ServiceConfig {
                             .inbound_download_stream_timeout,
                     },
                     nat_config: user.backend.swarm.nat.into(),
+                    connection_limits_config: user.backend.swarm.connection_limits.into(),
                 },
                 era_schedule: eras.map(|era| {
                     let EraRuleset::V1(parameters) = &era.parameters.ruleset;

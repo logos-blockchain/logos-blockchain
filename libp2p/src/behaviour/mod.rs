@@ -7,16 +7,22 @@ use std::{collections::HashMap, error::Error};
 
 use lb_cryptarchia_sync::ChainSyncError;
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
-use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad};
+use libp2p::{
+    PeerId, StreamProtocol, autonat,
+    connection_limits::{self, ConnectionLimits},
+    identify, identity, kad,
+};
 use rand_010::SeedableRng;
 use thiserror::Error;
 
 use crate::{
-    IdentifySettings, KademliaSettings, NatSettings, behaviour::gossipsub::compute_message_id,
+    ConnectionLimitsSettings, IdentifySettings, KademliaSettings, NatSettings,
+    behaviour::gossipsub::compute_message_id,
 };
 
 pub mod chainsync;
 pub mod gossipsub;
+pub mod ip_limits;
 pub mod kademlia;
 pub mod nat;
 
@@ -27,6 +33,7 @@ pub(crate) struct BehaviourConfig {
     pub kademlia_config: KademliaSettings,
     pub identify_config: IdentifySettings,
     pub nat_config: NatSettings,
+    pub connection_limits_config: ConnectionLimitsSettings,
     pub kad_protocol_name: StreamProtocol,
     pub identify_protocol_name: StreamProtocol,
     pub chain_sync_protocol_name: StreamProtocol,
@@ -47,16 +54,21 @@ pub enum BehaviourError {
 // A module of its own so the expectation covers only the derived code.
 #[expect(
     unreachable_code,
-    reason = "The `NetworkBehaviour` derive forwards `chain_sync`'s `Infallible` handler events. Remove when updating to a version that fixes this."
+    reason = "The `NetworkBehaviour` derive forwards the `Infallible` handler events of `chain_sync` and of the connection limits. Remove when updating to a version that fixes this."
 )]
 mod composed {
-    use libp2p::{autonat, identify, kad, swarm::NetworkBehaviour};
+    use libp2p::{autonat, connection_limits, identify, kad, swarm::NetworkBehaviour};
     use rand_010::SeedableRng;
 
-    use super::nat;
+    use super::{ip_limits, nat};
 
     #[derive(NetworkBehaviour)]
     pub struct Behaviour<Rng: rand_010::Rng + SeedableRng + Send + 'static> {
+        // The limits come first: the swarm offers a new connection to each
+        // behaviour in field order, so one over a limit is refused before the
+        // others set anything up for it.
+        pub(crate) ip_limits: ip_limits::Behaviour,
+        pub(crate) connection_limits: connection_limits::Behaviour,
         pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
         // todo: support persistent store if needed
         pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
@@ -80,12 +92,27 @@ impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> Behaviour<Rng> {
             chain_sync_config,
             chain_sync_max_block_size,
             nat_config,
+            connection_limits_config,
             kad_protocol_name,
             identify_protocol_name,
             chain_sync_protocol_name,
             public_key,
             max_data_size_by_topic,
         } = config;
+
+        let ip_limits = ip_limits::Behaviour::new(connection_limits_config.max_incoming_per_ip);
+        let connection_limits = connection_limits::Behaviour::new(
+            ConnectionLimits::default()
+                .with_max_pending_incoming(Some(
+                    connection_limits_config.max_pending_incoming.get(),
+                ))
+                .with_max_established_incoming(Some(
+                    connection_limits_config.max_established_incoming.get(),
+                ))
+                .with_max_established_per_peer(Some(
+                    connection_limits_config.max_established_per_peer.get(),
+                )),
+        );
 
         let peer_id = PeerId::from(public_key.clone());
         let gossipsub_config = gossipsub::configure_topic_size_limits(
@@ -125,6 +152,8 @@ impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> Behaviour<Rng> {
         );
 
         Ok(Self {
+            ip_limits,
+            connection_limits,
             gossipsub,
             kademlia,
             identify,
@@ -170,6 +199,12 @@ mod tests {
                 kademlia_config: KademliaSettings::default(),
                 identify_config: IdentifySettings::default(),
                 nat_config: NatSettings::default(),
+                connection_limits_config: ConnectionLimitsSettings {
+                    max_pending_incoming: 128.try_into().unwrap(),
+                    max_established_incoming: 512.try_into().unwrap(),
+                    max_established_per_peer: 8.try_into().unwrap(),
+                    max_incoming_per_ip: 8.try_into().unwrap(),
+                },
                 kad_protocol_name: StreamProtocol::new("/test/kad/1.0.0"),
                 identify_protocol_name: StreamProtocol::new("/test/identify/1.0.0"),
                 chain_sync_protocol_name: StreamProtocol::new("/test/chainsync/1.0.0"),

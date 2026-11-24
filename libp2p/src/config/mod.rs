@@ -1,3 +1,4 @@
+pub use connection_limits::Settings as ConnectionLimitsSettings;
 pub use identify::Settings as IdentifySettings;
 pub use kademlia::{CachingSettings, KBucketInserts, Settings as KademliaSettings};
 pub use lb_cryptarchia_sync::Config as ChainSyncSettings;
@@ -11,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::protocol_name::StreamProtocol;
 
 pub mod gossipsub;
+
+mod connection_limits;
 mod identify;
 mod kademlia;
 mod nat;
@@ -49,6 +52,9 @@ pub struct SwarmConfig {
     /// Nat config
     #[serde(default)]
     pub nat_config: nat::Settings,
+
+    /// Connection limits config
+    pub connection_limits_config: connection_limits::Settings,
 }
 
 pub mod secret_key_serde {
@@ -97,6 +103,12 @@ mod tests {
                     inbound_download_stream_timeout: Duration::from_secs(120),
                 },
                 nat_config: nat::Settings::default(),
+                connection_limits_config: connection_limits::Settings {
+                    max_pending_incoming: 128.try_into().unwrap(),
+                    max_established_incoming: 512.try_into().unwrap(),
+                    max_established_per_peer: 8.try_into().unwrap(),
+                    max_incoming_per_ip: 8.try_into().unwrap(),
+                },
             }
         }
     }

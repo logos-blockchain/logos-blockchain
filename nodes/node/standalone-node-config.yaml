@@ -69,6 +69,11 @@ network:
           retry_interval: 30s
         gateway_monitor:
           check_interval: 5m
+      connection_limits:
+        max_pending_incoming: 128
+        max_established_incoming: 512
+        max_established_per_peer: 8
+        max_incoming_per_ip: 8
     initial_peers: [ ]
 blend:
   non_ephemeral_signing_key_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
