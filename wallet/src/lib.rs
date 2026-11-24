@@ -730,6 +730,34 @@ where
         }
     }
 
+    /// Replaces the notes of the wallet state at `block` with those `ledger`,
+    /// the ledger state of that block, holds for the known keys.
+    ///
+    /// The notes of a wallet state are those of the keys that were known as
+    /// its blocks were applied, so a state restored under other keys misses
+    /// the notes of the keys added since, and keeps those of the keys removed.
+    /// What the wallet tracks of the vouchers, which a ledger state cannot
+    /// give back, is kept.
+    pub fn rescan_notes(
+        &mut self,
+        block: HeaderId,
+        ledger: &LedgerState,
+    ) -> Result<(), WalletError> {
+        let state = self
+            .wallet_states
+            .get_mut(&block)
+            .ok_or(WalletError::UnknownBlock(block))?;
+        let scanned = WalletState::from_ledger(&self.known_keys, ledger);
+        *state = WalletState {
+            epoch: state.epoch,
+            vouchers: state.vouchers.clone(),
+            voucher_paths: state.voucher_paths.clone(),
+            voucher_paths_snapshot: state.voucher_paths_snapshot.clone(),
+            ..scanned
+        };
+        Ok(())
+    }
+
     #[must_use]
     pub const fn known_keys(&self) -> &HashMap<ZkPublicKey, KeyId> {
         &self.known_keys
@@ -961,6 +989,71 @@ mod tests {
     }
 
     type TestVoucherId = (u64, u64);
+
+    /// A wallet restored from a state saved under other keys holds the notes
+    /// of those keys, until it reads its notes from the ledger again.
+    #[test]
+    fn rescanning_notes_follows_the_known_keys_and_keeps_the_vouchers() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let (voucher_cm, voucher_nf) = voucher(100, 0);
+        let genesis = HeaderId::from([0; 32]);
+        let ledger = LedgerState::from_utxos(
+            [
+                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 1, Note::new(20, bob)),
+            ],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
+
+        // Saved while only Alice's key was known, at a block that carries one
+        // of the wallet's vouchers and leaves the notes as they were.
+        let mut saved = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1u64)],
+            Vouchers::new([(voucher_cm, voucher_nf, (100, 0))]),
+            genesis,
+            &ledger,
+        );
+        let lib = HeaderId::from([1; 32]);
+        saved
+            .apply_block(&WalletBlock {
+                id: lib,
+                parent: genesis,
+                epoch: 0.into(),
+                voucher_cm,
+                header_ops: vec![],
+                txs: BlockTransactions::empty(),
+            })
+            .unwrap();
+        let saved_state = saved.wallet_state_at(lib).unwrap();
+        assert!(saved_state.voucher_paths.contains_key(&voucher_cm));
+
+        // Restored with Bob's key in place of Alice's.
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_wallet_state(
+            [(bob, 2u64)],
+            Vouchers::new([(voucher_cm, voucher_nf, (100, 0))]),
+            lib,
+            saved_state.clone(),
+        );
+        let restored = wallet.wallet_state_at(lib).unwrap();
+        assert_eq!(restored.utxos_owned_by_pks([alice]).len(), 1);
+        assert_eq!(restored.utxos_owned_by_pks([bob]).len(), 0);
+
+        wallet.rescan_notes(lib, &ledger).unwrap();
+        let rescanned = wallet.wallet_state_at(lib).unwrap();
+        assert_eq!(rescanned.utxos_owned_by_pks([alice]).len(), 0);
+        assert_eq!(rescanned.utxos_owned_by_pks([bob]).len(), 1);
+        assert_eq!(rescanned.utxos.size(), 1);
+        assert_eq!(rescanned.vouchers.len(), saved_state.vouchers.len());
+        assert!(rescanned.voucher_paths.contains_key(&voucher_cm));
+
+        assert!(matches!(
+            wallet.rescan_notes(genesis, &ledger),
+            Err(WalletError::UnknownBlock(block)) if block == genesis
+        ));
+    }
 
     #[test]
     fn test_initialization() {

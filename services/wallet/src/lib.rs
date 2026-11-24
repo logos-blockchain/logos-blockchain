@@ -545,9 +545,10 @@ where
         );
         let voucher_master_key_id = settings.voucher_master_key_id;
 
-        Self::backfill_missing_blocks(
-            cryptarchia_info.tip,
+        Self::catch_up_with_chain(
             &mut state,
+            (lib, &lib_ledger),
+            cryptarchia_info.tip,
             &storage,
             &cryptarchia_api,
             &settings.era_schedule,
@@ -1538,6 +1539,72 @@ where
             state.wallet(),
         )
         .await
+    }
+
+    /// Brings the notes of a wallet restored from a saved state in line with
+    /// the configured keys, which may not be the ones it was saved under: a
+    /// saved state holds the notes of the keys known as its blocks were
+    /// applied.
+    ///
+    /// The wallet is first brought to the chain's LIB, whose ledger state
+    /// `lib_ledger` is; the notes it holds there are then replaced with the
+    /// ledger's for the configured keys. The blocks after the LIB are applied
+    /// on top of that by the caller. A wallet that cannot be brought to the
+    /// LIB keeps the notes it was saved with.
+    async fn rescan_restored_notes(
+        state: &mut ServiceState<'_>,
+        lib: HeaderId,
+        lib_ledger: &LedgerState,
+        storage: &StorageApi<Tx>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
+        era_schedule: &ServiceEraSchedule,
+    ) {
+        if !state.is_restored() {
+            // Built from `lib_ledger` for the configured keys already.
+            return;
+        }
+        let rescanned =
+            match Self::backfill_missing_blocks(lib, state, storage, cryptarchia_api, era_schedule)
+                .await
+            {
+                Ok(()) => state
+                    .rescan_notes(lib, lib_ledger)
+                    .map_err(WalletServiceError::from),
+                Err(err) => Err(err),
+            };
+        if let Err(err) = rescanned {
+            warn!(
+                target: LOG_TARGET,
+                ?lib,
+                saved_lib = ?state.lib(),
+                err = ?err,
+                "Failed to read the wallet's notes from the LIB ledger state: the notes of keys \
+                 configured since the wallet's state was saved are missing"
+            );
+        }
+    }
+
+    /// Brings the wallet, as it starts, to the chain's `tip`: its notes are
+    /// first read again from the ledger state of the LIB, should it have been
+    /// restored from a saved state.
+    async fn catch_up_with_chain(
+        state: &mut ServiceState<'_>,
+        (lib, lib_ledger): (HeaderId, &LedgerState),
+        tip: HeaderId,
+        storage: &StorageApi<Tx>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
+        era_schedule: &ServiceEraSchedule,
+    ) -> Result<(), WalletServiceError> {
+        Self::rescan_restored_notes(
+            state,
+            lib,
+            lib_ledger,
+            storage,
+            cryptarchia_api,
+            era_schedule,
+        )
+        .await;
+        Self::backfill_missing_blocks(tip, state, storage, cryptarchia_api, era_schedule).await
     }
 
     async fn backfill_if_not_in_sync(
