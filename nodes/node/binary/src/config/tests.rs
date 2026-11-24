@@ -34,7 +34,7 @@ use crate::{
         },
         storage::{
             ServiceConfig as StorageServiceConfig,
-            serde::{Config as StorageConfig, RocksDbSettings},
+            serde::{Config as StorageConfig, RocksDbSettings, STATE_VERSION},
         },
         tracing::serde::{
             console::{Layer as ConsoleLayer, TokioConfig},
@@ -292,10 +292,9 @@ fn service_settings_receive_recovery_data() {
         user: user_config.storage.clone(),
     }
     .into_rocks_backend_settings(&user_config.state);
-    assert!(
-        storage_service_settings
-            .db_path
-            .starts_with(Path::new(STATE_PATH).join("db"))
+    assert_eq!(
+        storage_service_settings.db_path,
+        Path::new(STATE_PATH).join(format!("db-v{STATE_VERSION}"))
     );
 }
 

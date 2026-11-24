@@ -11,10 +11,11 @@ pub struct ServiceConfig {
 impl ServiceConfig {
     #[must_use]
     pub fn into_rocks_backend_settings(self, state_config: &StateConfig) -> RocksBackendSettings {
+        let backend = self.user.backend;
         RocksBackendSettings {
-            column_family: self.user.backend.column_family,
-            db_path: state_config.base_folder.join(self.user.backend.folder_name),
-            read_only: self.user.backend.read_only,
+            db_path: backend.db_path(&state_config.base_folder),
+            column_family: backend.column_family,
+            read_only: backend.read_only,
         }
     }
 }
