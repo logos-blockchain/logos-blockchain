@@ -656,6 +656,12 @@ mod tests {
                 },
                 ..Default::default()
             }),
+            connection_limits_config: lb_libp2p::ConnectionLimitsSettings {
+                max_pending_incoming: 128.try_into().unwrap(),
+                max_established_incoming: 512.try_into().unwrap(),
+                max_established_per_peer: 8.try_into().unwrap(),
+                max_incoming_per_ip: 8.try_into().unwrap(),
+            },
         }
     }
 
