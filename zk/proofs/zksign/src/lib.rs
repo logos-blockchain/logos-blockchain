@@ -132,10 +132,9 @@ pub fn batch_verify(
         .map(|(_, pi)| pi.as_inputs().to_vec())
         .collect();
 
-    let expanded_proofs: Vec<Groth16Proof> = proofs_and_inputs
-        .iter()
-        .map(|(p, _)| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
-        .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
+    let expanded_proofs: Vec<Groth16Proof> =
+        lb_groth16::par_try_map(proofs_and_inputs, |(p, _)| Groth16Proof::try_from(p))
+            .map_err(|_| VerifyError::Expansion)?;
 
     Ok(groth16_batch_verify(
         verification_key::ZKSIGN_VK.as_ref(),

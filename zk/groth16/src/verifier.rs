@@ -1,11 +1,18 @@
 use core::fmt::{Display, Formatter};
 use std::{error::Error, fmt, ops::Mul as _};
 
-use ark_ec::{CurveGroup as _, VariableBaseMSM as _, pairing::Pairing};
-use ark_ff::{UniformRand as _, Zero as _};
+use ark_ec::{
+    CurveGroup as _, VariableBaseMSM as _,
+    pairing::{MillerLoopOutput, Pairing},
+};
+use ark_ff::{One as _, UniformRand as _, Zero as _};
 use ark_groth16::{Groth16, r1cs_to_qap::LibsnarkReduction};
 use ark_relations::r1cs::SynthesisError;
 use rand::thread_rng;
+use rayon::iter::{
+    IndexedParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _,
+};
+use rayon::slice::ParallelSlice as _;
 
 use crate::{proof::Proof, verification_key::PreparedVerificationKey};
 
@@ -37,6 +44,31 @@ pub fn groth16_verify<E: Pairing>(
         .map_err(VerificationError)
 }
 
+/// Maps `items` in order on the threads of the global `rayon` pool.
+///
+/// For the work that precedes a batch verification and grows with its proofs,
+/// such as expanding them. Fails with the error of one of the items that
+/// failed.
+pub fn par_try_map<T, U, Err>(
+    items: &[T],
+    map: impl Fn(&T) -> Result<U, Err> + Sync + Send,
+) -> Result<Vec<U>, Err>
+where
+    T: Sync,
+    U: Send,
+    Err: Send,
+{
+    items.par_iter().map(map).collect()
+}
+
+/// The proofs a thread takes at a time: fewer are not worth handing over.
+const PROOFS_PER_THREAD: usize = 2;
+
+/// Verifies `proofs` as one batch, on the threads of the global `rayon` pool.
+///
+/// The work that grows with the number of proofs is split over the threads:
+/// a scalar multiplication and a Miller loop for each proof. Their products
+/// are combined into the single final exponentiation of the batch.
 pub fn groth16_batch_verify<E: Pairing>(
     vk: &PreparedVerificationKey<E>,
     proofs: &[Proof<E>],
@@ -50,10 +82,6 @@ pub fn groth16_batch_verify<E: Pairing>(
 
     let pis_c: Vec<E::G1Affine> = proofs.iter().map(|proof| proof.pi_c).collect();
 
-    let batched_pi_c = E::G1::msm(&pis_c, &ri)
-        .expect("msm fails only when slice length differ")
-        .into_affine();
-
     let batched_public_inputs: Vec<E::ScalarField> = std::iter::once(r_sum)
         .chain((0..vk.gamma_abc_g1().len() - 1).map(|i| {
             ri.iter()
@@ -63,23 +91,46 @@ pub fn groth16_batch_verify<E: Pairing>(
         }))
         .collect();
 
-    let batched_ic = E::G1::msm(vk.gamma_abc_g1(), &batched_public_inputs)
-        .expect("msm fails only when slice length differ")
-        .into_affine();
+    let (proofs_loop, vk_loop) = rayon::join(
+        || {
+            proofs
+                .par_chunks(PROOFS_PER_THREAD)
+                .zip(ri.par_chunks(PROOFS_PER_THREAD))
+                .map(|(proofs, ri)| {
+                    let (g1_terms, g2_terms): (Vec<E::G1Prepared>, Vec<E::G2Prepared>) = proofs
+                        .iter()
+                        .zip(ri)
+                        .map(|(proof, r)| {
+                            (proof.pi_a.mul(*r).into_affine().into(), proof.pi_b.into())
+                        })
+                        .unzip();
+                    E::multi_miller_loop(g1_terms, g2_terms).0
+                })
+                .reduce(E::TargetField::one, |a, b| a * b)
+        },
+        || {
+            let batched_pi_c = E::G1::msm(&pis_c, &ri)
+                .expect("msm fails only when slice length differ")
+                .into_affine();
+            let batched_ic = E::G1::msm(vk.gamma_abc_g1(), &batched_public_inputs)
+                .expect("msm fails only when slice length differ")
+                .into_affine();
+            let g1_terms: [E::G1Prepared; 3] = [
+                (-vk.alpha_g1().mul(r_sum)).into_affine().into(),
+                batched_ic.into(),
+                batched_pi_c.into(),
+            ];
+            let g2_terms: [E::G2Prepared; 3] = [
+                vk.beta_g2().into(),
+                vk.gamma_g2_neg_pc().clone(),
+                vk.delta_g2_neg_pc().clone(),
+            ];
+            E::multi_miller_loop(g1_terms, g2_terms).0
+        },
+    );
 
-    let (g1_terms, g2_terms): (Vec<_>, Vec<_>) = proofs
-        .iter()
-        .enumerate()
-        .map(|(i, proof)| (proof.pi_a.mul(ri[i]).into_affine(), proof.pi_b.into()))
-        .chain([
-            ((-vk.alpha_g1().mul(r_sum)).into(), vk.beta_g2().into()),
-            (batched_ic, vk.gamma_g2_neg_pc().clone()),
-            (batched_pi_c, vk.delta_g2_neg_pc().clone()),
-        ])
-        .unzip();
-
-    let check = E::multi_pairing(g1_terms, g2_terms);
-    check.is_zero()
+    E::final_exponentiation(MillerLoopOutput(proofs_loop * vk_loop))
+        .is_some_and(|check| check.is_zero())
 }
 
 #[cfg(test)]
