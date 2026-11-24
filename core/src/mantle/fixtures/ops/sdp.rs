@@ -21,7 +21,7 @@ codec_fixtures!(
 );
 codec_fixtures!(ServiceType, Self::BlendNetwork => "00");
 codec_fixtures!(MinStake, Self { threshold: 1 } => "0100000000000000");
-codec_fixtures!(InactivityPeriod, encode_only, Self::new(Epoch::new(2)).unwrap() => "02000000");
+codec_fixtures!(InactivityPeriod, encode_only, Self::new(Epoch::new(3)).unwrap() => "03000000");
 codec_fixtures!(ProviderId, Self(Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap()) => "0101010101010101010101010101010101010101010101010101010101010101");
 codec_fixtures!(DeclarationId, Self([0u8; _]) => "0000000000000000000000000000000000000000000000000000000000000000");
 codec_fixtures!(

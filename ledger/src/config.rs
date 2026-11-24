@@ -1046,7 +1046,7 @@ mod tests {
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            inactivity_period: 2.try_into().unwrap(),
+                            inactivity_period: 3.try_into().unwrap(),
                         },
                     )]
                     .into(),
@@ -1136,7 +1136,7 @@ mod tests {
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            inactivity_period: 2.try_into().unwrap(),
+                            inactivity_period: 3.try_into().unwrap(),
                         },
                     )]
                     .into(),
@@ -1242,7 +1242,7 @@ mod tests {
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            inactivity_period: 2.try_into().unwrap(),
+                            inactivity_period: 3.try_into().unwrap(),
                         },
                     )]
                     .into(),

@@ -80,7 +80,7 @@
       # One entry per service type, in the order they are declared: the Blend
       # network.
       service_params:
-        - inactivity_period: 2
+        - inactivity_period: 3
       min_stake:
         threshold: 1000000000
     # The execution market: the most execution gas a block may consume, G_max,

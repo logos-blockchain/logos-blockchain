@@ -74,6 +74,6 @@ pub fn create_provider_id(byte: u8) -> ProviderId {
 
 pub fn create_service_parameters() -> ServiceParameters {
     ServiceParameters {
-        inactivity_period: 2.try_into().unwrap(),
+        inactivity_period: 3.try_into().unwrap(),
     }
 }

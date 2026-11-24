@@ -53,7 +53,7 @@ cryptarchia:
       slot_window: 300
   sdp_config:
     service_params:
-    - inactivity_period: 2
+    - inactivity_period: 3
     min_stake:
       threshold: 1000000000
   execution_market:

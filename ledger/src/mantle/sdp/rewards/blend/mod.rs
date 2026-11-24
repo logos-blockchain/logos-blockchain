@@ -37,9 +37,12 @@ const LOG_TARGET: &str = ledger::mantle::sdp::rewards::BLEND;
 /// Activity proofs for the epoch `E-1` must be submitted during epoch `E`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Rewards<ProofsVerifier> {
-    /// State before the first target epoch is finalized, or if the target
-    /// epoch has less than the minimum required number of declarations.
-    /// No activity messages are accepted in this state.
+    /// State before the first target epoch is finalized, after a multi-epoch
+    /// jump, or if the target epoch has less than the minimum required number
+    /// of declarations.
+    /// No reward is calculated in this state, so activity messages are
+    /// accepted without verifying their proofs: they only keep their
+    /// declarations active.
     WithoutTargetEpoch {
         current_epoch_state: CurrentEpochState,
         current_epoch_tracker: CurrentEpochTracker,
@@ -68,13 +71,12 @@ where
     ) -> Result<Self, Error> {
         match self {
             Self::WithoutTargetEpoch { .. } => {
-                // Reject all activity messages.
                 debug!(
                     target: LOG_TARGET,
                     ?provider_id,
-                    "rejecting activity proof because target epoch is not set",
+                    "accepting activity proof without a reward because target epoch is not set",
                 );
-                Err(Error::TargetEpochNotSet)
+                Ok(self.clone())
             }
             Self::WithTargetEpoch {
                 target_epoch_state,
@@ -202,7 +204,7 @@ impl<ProofsVerifier> Rewards<ProofsVerifier> {
         }
     }
 
-    /// Create a new uninitialized [`Rewards`] that doesn't accept activity
+    /// Create a new uninitialized [`Rewards`] that doesn't reward activity
     /// messages until the first epoch update.
     #[must_use]
     pub fn new(settings: &RewardsParameters, epoch_state: &EpochState) -> Self {
@@ -704,8 +706,8 @@ mod tests {
     }
 
     // If the SDP snapshot of the target epoch has fewer providers than the
-    // minimum network size, all activity messages for the epoch must be
-    // rejected, and no rewards should be calculated at the next epoch
+    // minimum network size, activity messages for the epoch must be accepted
+    // without a reward, and no rewards should be calculated at the next epoch
     // transition.
     #[test]
     fn test_blend_network_too_small() {
@@ -725,9 +727,9 @@ mod tests {
             Rewards::WithoutTargetEpoch { .. }
         ));
 
-        // provider1 submits an activity proof, but it should be rejected
-        // since the network is too small.
-        let err = rewards_tracker
+        // provider1 submits an activity proof, which is accepted without
+        // being recorded for a reward since the network is too small.
+        let accepted = rewards_tracker
             .update_active(
                 provider1,
                 &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
@@ -737,8 +739,8 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
             )
-            .unwrap_err();
-        assert_eq!(err, Error::TargetEpochNotSet);
+            .unwrap();
+        assert_eq!(accepted, rewards_tracker);
 
         // No reward should be calculated after epoch 1.
         let epoch2 = new_epoch_state_with_same_snapshot(2, 2, &epoch1);
@@ -942,9 +944,9 @@ mod tests {
     }
 
     /// On a multi-epoch jump, `update_epoch` must transition to
-    /// `WithoutTargetEpoch` (rejecting upcoming activity messages), because
-    /// it is too late to accept activity messages for the last epoch and
-    /// we cannot verify activity proofs for the skipped epochs.
+    /// `WithoutTargetEpoch` (rewarding no upcoming activity message), because
+    /// it is too late to reward the last epoch and we cannot verify activity
+    /// proofs for the skipped epochs.
     #[test]
     fn test_blend_multi_epoch_jump() {
         let provider1 = create_provider_id(1);
@@ -988,19 +990,20 @@ mod tests {
         // No new target epoch is set up.
         assert!(matches!(new_state, Rewards::WithoutTargetEpoch { .. }));
 
-        // Activity messages are rejected in WithoutTargetEpoch.
-        let err = new_state
+        // Activity messages are accepted in WithoutTargetEpoch, without being
+        // recorded for a reward.
+        let accepted = new_state
             .update_active(
                 provider1,
                 &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
-                    epoch: 1.into(),
+                    epoch: 2.into(),
                     proof_of_quota: new_proof_of_quota_unchecked(1),
                     signing_key: new_signing_key(1),
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
             )
-            .unwrap_err();
-        assert_eq!(err, Error::TargetEpochNotSet);
+            .unwrap();
+        assert_eq!(accepted, new_state);
     }
 
     /// Any activity message with a Hamming distance larger than the activity

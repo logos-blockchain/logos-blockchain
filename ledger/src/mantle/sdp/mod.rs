@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn withdrawn_declaration_releases_its_note_and_provider_binding() {
         let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         });
         let (zk_key, utxo) = utxo_with_sk();
         let note_id = utxo.id();
@@ -932,18 +932,18 @@ mod tests {
     #[test]
     fn failed_activity_does_not_return_partially_updated_ledger() {
         let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         });
-        let epoch0 = dummy_epoch_state(0.into());
         let ledger = dummy_sdp_ledger(0.into(), &config);
         let (_utxo_sk, utxo) = utxo_with_sk();
         let signing_key = create_signing_key();
+        let provider_id = ProviderId(signing_key.public_key());
         let zk_key = create_zk_key(1);
         let declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             service_note_id: utxo.id(),
             zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
+            provider_id,
             locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
         };
         let sample_proof = ZkAndEd25519Proof::sample();
@@ -954,31 +954,45 @@ mod tests {
         let (ledger, _) = ledger
             .try_apply_sdp_declaration(&utxo_tree(vec![utxo]), declare_signed_operation, &config)
             .unwrap();
-        let original = ledger.clone();
-        let active_op = SDPActiveOp {
-            declaration_id: operation_id,
-            nonce: Nonce::new(Epoch::new(0), 1),
-            metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
-                &zk_key,
-                &epoch0,
-                &epoch0,
-                &config.service_rewards_params.blend,
-            ))),
-        };
-        let placeholder_proof = ZkSignature::sample();
-        let active_signed_operation =
-            SignedOperation::new(active_op, placeholder_proof).into_state_trusted();
 
-        // The freshly-created rewards state has no target epoch yet, so reward
-        // calculation fails after operation execution has produced its updated
-        // declaration context. The consuming API must not return that partial
-        // state to its caller.
+        // Move to epoch 1, whose target epoch 0 holds the declaration.
+        let epoch0 = next_epoch_state(0.into(), &ledger, &config);
+        let epoch1 = next_epoch_state(1.into(), &ledger, &config);
+        let (ledger, _) = ledger
+            .try_apply_header(&config, &config, &epoch0, &epoch1)
+            .unwrap();
+
+        let activity_proof = generate_activity_proof(
+            &zk_key,
+            &epoch0,
+            &epoch1,
+            &config.service_rewards_params.blend,
+        );
+        let active_signed_operation = |sequence| {
+            let active_op = SDPActiveOp {
+                declaration_id: operation_id,
+                nonce: Nonce::new(Epoch::new(0), sequence),
+                metadata: ActivityMetadata::Blend(Box::new(activity_proof.clone())),
+            };
+            SignedOperation::new(active_op, ZkSignature::sample()).into_state_trusted()
+        };
+        let (ledger, _) = ledger
+            .apply_active_msg(active_signed_operation(1), &config)
+            .unwrap();
+        let original = ledger.clone();
+
+        // The reward calculation rejects the duplicate after operation
+        // execution has produced its updated declaration context. The
+        // consuming API must not return that partial state to its caller.
         assert_eq!(
             ledger
                 .clone()
-                .apply_active_msg(active_signed_operation, &config)
+                .apply_active_msg(active_signed_operation(2), &config)
                 .unwrap_err(),
-            Error::RewardsError(RewardsError::TargetEpochNotSet)
+            Error::RewardsError(RewardsError::DuplicateActiveMessage {
+                epoch: 0.into(),
+                provider_id: Box::new(provider_id),
+            })
         );
         assert_eq!(ledger, original);
     }
@@ -988,7 +1002,7 @@ mod tests {
     #[test]
     fn active_declarations_filters_out_inactive() {
         let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());
@@ -1025,10 +1039,10 @@ mod tests {
             .map(|(sdp_ledger, _)| sdp_ledger)
             .unwrap();
 
-        // Advance to epoch 6 without an activity message. The declaration is
-        // inactive past epoch 5 (active=3, inactivity=2 -> 3+2 < 6).
+        // Advance to epoch 7 without an activity message. The declaration is
+        // inactive past epoch 6 (active=3, inactivity=3 -> 3+3 < 7).
         let mut ledger = ledger;
-        for epoch in 2..=6 {
+        for epoch in 2..=7 {
             let new_epoch_state = next_epoch_state(epoch.into(), &ledger, &config);
             (ledger, _) = ledger
                 .try_apply_header(&config, &config, &last_epoch_state, &new_epoch_state)
@@ -1038,15 +1052,15 @@ mod tests {
 
         // The declaration is still present in the live ledger ...
         assert!(ledger.get_declaration(&declaration_id).is_some());
-        // ... but active_declarations at epoch 6 must filter it out.
+        // ... but active_declarations at epoch 7 must filter it out.
         assert!(
-            !epoch_snapshot_contains(&declaration_id, 6.into(), &ledger, &config),
-            "inactive declaration must be excluded from the epoch-6 active snapshot"
+            !epoch_snapshot_contains(&declaration_id, 7.into(), &ledger, &config),
+            "inactive declaration must be excluded from the epoch-7 active snapshot"
         );
-        // whereas active_declarations at epoch 5 must include it.
+        // whereas active_declarations at epoch 6 must include it.
         assert!(
-            epoch_snapshot_contains(&declaration_id, 5.into(), &ledger, &config),
-            "declaration must be included in the epoch-5 active snapshot"
+            epoch_snapshot_contains(&declaration_id, 6.into(), &ledger, &config),
+            "declaration must be included in the epoch-6 active snapshot"
         );
     }
 
@@ -1056,7 +1070,7 @@ mod tests {
     #[test]
     fn active_declarations_includes_genesis_at_epochs_0_and_1() {
         let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         });
 
         // Build an SDP ledger with a declaration at epoch 0.
@@ -1191,7 +1205,7 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "Test.")]
     fn active_message_refreshes_declaration() {
         let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         });
 
         // Init ledger with no declaration
@@ -1283,8 +1297,8 @@ mod tests {
             Epoch::new(4) // epoch when the activity message is submitted/accepted
         );
 
-        // Move forward to epoch 7 where declaration will become inactive
-        // (active=4, inactivity=2 -> 4+2 < 7).
+        // Move forward to epoch 8 where declaration will become inactive
+        // (active=4, inactivity=3 -> 4+3 < 8).
         let epoch5 = next_epoch_state(5.into(), &ledger, &config);
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch4, &epoch5)
@@ -1297,6 +1311,10 @@ mod tests {
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch6, &epoch7)
             .unwrap();
+        let epoch8 = next_epoch_state(8.into(), &ledger, &config);
+        (ledger, _) = ledger
+            .try_apply_header(&config, &config, &epoch7, &epoch8)
+            .unwrap();
         // Nevertheless, the declaration should be still present because no
         // withdrawal message was submitted.
         let declarations = ledger
@@ -1306,22 +1324,22 @@ mod tests {
             declarations.get(&declaration_id).unwrap().active,
             Epoch::new(4) // not changed
         );
-        // but active_declarations at epoch 7 must filter it out.
+        // but active_declarations at epoch 8 must filter it out.
         assert!(
-            !epoch_snapshot_contains(&declaration_id, 7.into(), &ledger, &config),
-            "inactive declaration must be excluded from the epoch-7 active snapshot"
+            !epoch_snapshot_contains(&declaration_id, 8.into(), &ledger, &config),
+            "inactive declaration must be excluded from the epoch-8 active snapshot"
         );
-        // whereas active_declarations at epoch 6 must include it.
+        // whereas active_declarations at epoch 7 must include it.
         assert!(
-            epoch_snapshot_contains(&declaration_id, 6.into(), &ledger, &config),
-            "declaration must be included in the epoch-6 active snapshot"
+            epoch_snapshot_contains(&declaration_id, 7.into(), &ledger, &config),
+            "declaration must be included in the epoch-7 active snapshot"
         );
     }
 
     #[test]
     fn rewards_distributed_to_active_provider() {
         let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         });
 
         // Init ledger with no declaration.
@@ -1967,7 +1985,7 @@ mod tests {
     )]
     fn last_served_epoch_is_rewarded_before_removal() {
         let config = setup(ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         });
 
         let epoch0 = dummy_epoch_state(0.into());

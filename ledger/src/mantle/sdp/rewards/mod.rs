@@ -32,6 +32,10 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     ///
     /// Called when a provider submits an active message with metadata
     /// (e.g., activity proofs containing opinions about other providers).
+    ///
+    /// An error rejects the active message, and with it the refresh of its
+    /// declaration's activity, so it is only for a fault of the message. A
+    /// message no reward can be calculated for is still accepted.
     fn update_active(
         &self,
         declaration_id: ProviderId,
@@ -47,9 +51,10 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     ///
     /// On a multi-epoch jump — when `last_epoch_state` is more than one
     /// epoch behind `next_epoch_state` — the implementation must transition
-    /// to a state that rejects all activity messages, because it is too late
-    /// to accept activity messages for the last epoch and we cannot verify
-    /// activity proofs for the skipped epochs.
+    /// to a state that rewards no activity message, because it is too late
+    /// to reward the last epoch and we cannot verify activity proofs for the
+    /// skipped epochs. That state still accepts activity messages, which keep
+    /// their declarations active (see [`Self::update_active`]).
     /// Rewards already earned during the last epoch must still be distributed.
     ///
     /// The internal calculation logic is opaque to the SDP ledger and
@@ -74,8 +79,6 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    #[error("Target epoch is not set")]
-    TargetEpochNotSet,
     #[error("Invalid epoch: expected {expected}, got {got}")]
     InvalidEpoch { expected: Epoch, got: Epoch },
     #[error("Invalid opinion length: expected {expected}, got {got}")]

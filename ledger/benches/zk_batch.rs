@@ -292,7 +292,7 @@ fn config() -> Config {
             service_params: Arc::new(HashMap::from([(
                 ServiceType::BlendNetwork,
                 ServiceParameters {
-                    inactivity_period: 2.try_into().unwrap(),
+                    inactivity_period: 3.try_into().unwrap(),
                 },
             )])),
             service_rewards_params: ServiceRewardsParameters {

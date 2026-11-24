@@ -125,7 +125,7 @@ async fn sdp_blend_activity() {
     );
 }
 
-const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
+const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(3);
 
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
     config

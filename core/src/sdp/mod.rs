@@ -57,17 +57,20 @@ pub type NumberOfEpochs = Epoch;
 /// Number of epochs without an activity message before a declaration is
 /// considered inactive
 ///
-/// Invariant: must be at least [`SNAPSHOT_FINALIZATION_DELAY`].
-/// Otherwise, the declaration may be excluded from the active set before
-/// the [`Declaration::active`] value (refreshed by an activity message)
-/// is reflected in the next snapshot.
+/// Invariant: must exceed [`SNAPSHOT_FINALIZATION_DELAY`]. The active set of
+/// epoch `n` reads the declarations as they stood at the end of epoch
+/// `n - SNAPSHOT_FINALIZATION_DELAY`, so only an activity message included
+/// from epoch `n - period` up to that one refreshes [`Declaration::active`]
+/// in time to keep a declaration in it. Below the delay, that leaves no epoch
+/// for the message. At the delay, it leaves one: a declaration that misses
+/// one message drops out of the set.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BinaryEncode)]
 #[serde(try_from = "NumberOfEpochs")]
 pub struct InactivityPeriod(NumberOfEpochs);
 
 impl InactivityPeriod {
     pub const fn new(period: NumberOfEpochs) -> Result<Self, InactivityPeriodTooSmall> {
-        if period.into_inner() < SNAPSHOT_FINALIZATION_DELAY.into_inner() {
+        if period.into_inner() <= SNAPSHOT_FINALIZATION_DELAY.into_inner() {
             Err(InactivityPeriodTooSmall { period })
         } else {
             Ok(Self(period))
@@ -98,7 +101,7 @@ impl TryFrom<NumberOfEpochs> for InactivityPeriod {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "inactivity_period must be >= SNAPSHOT_FINALIZATION_DELAY ({SNAPSHOT_FINALIZATION_DELAY:?}); got {period:?}"
+    "inactivity_period must be > SNAPSHOT_FINALIZATION_DELAY ({SNAPSHOT_FINALIZATION_DELAY:?}); got {period:?}"
 )]
 pub struct InactivityPeriodTooSmall {
     pub period: NumberOfEpochs,
@@ -752,9 +755,26 @@ mod tests {
 
     use super::declaration_id_preimage;
     use crate::sdp::{
-        Declaration, DeclarationId, DeclarationMessage, Locator, Locators, Nonce, ProviderId,
-        ServiceType,
+        Declaration, DeclarationId, DeclarationMessage, InactivityPeriod, InactivityPeriodTooSmall,
+        Locator, Locators, Nonce, ProviderId, SNAPSHOT_FINALIZATION_DELAY, ServiceType,
     };
+
+    #[test]
+    fn inactivity_period_exceeds_the_snapshot_finalization_delay() {
+        let delay = SNAPSHOT_FINALIZATION_DELAY.into_inner();
+        for period in 0..=delay {
+            assert_eq!(
+                InactivityPeriod::try_from(period),
+                Err(InactivityPeriodTooSmall {
+                    period: period.into()
+                })
+            );
+        }
+        assert_eq!(
+            InactivityPeriod::try_from(delay + 1).map(InactivityPeriod::into_inner),
+            Ok(Epoch::new(delay + 1))
+        );
+    }
 
     #[test]
     fn locator_rejects_multiaddr_with_peer_id() {

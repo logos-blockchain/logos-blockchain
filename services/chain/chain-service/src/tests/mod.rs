@@ -996,7 +996,7 @@ fn ledger_config_with_uncles(
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
-            inactivity_period: 2.try_into().unwrap(),
+            inactivity_period: 3.try_into().unwrap(),
         },
     );
     let epoch_config = EpochConfig {

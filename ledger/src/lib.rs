@@ -2716,7 +2716,7 @@ mod tests {
     }
 
     /// Tests the snapshot-finalization-delay scenario behind the
-    /// `inactivity_period >= SNAPSHOT_FINALIZATION_DELAY` invariant:
+    /// `inactivity_period > SNAPSHOT_FINALIZATION_DELAY` invariant:
     ///
     ///   - A declaration is created at epoch 3 — `active = created +
     ///     SNAPSHOT_FINALIZATION_DELAY = 5`.
@@ -2726,9 +2726,9 @@ mod tests {
     ///     the activity message landed. The snapshot sees the decl with
     ///     `active=5`, not 6.
     ///
-    /// With `inactivity_period = SNAPSHOT_FINALIZATION_DELAY = 2`, the
-    /// filter at epoch 7 is `5 + 2 ≥ 7` → INCLUDED. The decl survives the
-    /// finalization-delay gap.
+    /// With `inactivity_period = 3`, the smallest allowed, the filter at epoch
+    /// 7 is `5 + 3 ≥ 7` → INCLUDED. The decl survives the finalization-delay
+    /// gap.
     #[test]
     fn snapshot_includes_decl_when_active_refresh_lags_finalization() {
         let leader_utxo = utxo();
@@ -2776,7 +2776,7 @@ mod tests {
             Epoch::new(7)
         );
         let decl = declaration_in_snapshot(&ledger, &h_7, &declare.id()).expect(
-            "decl must be in the epoch-7 because inactivity_period >= SNAPSHOT_FINALIZATION_DELAY",
+            "decl must be in the epoch-7 because inactivity_period > SNAPSHOT_FINALIZATION_DELAY",
         );
         assert_eq!(
             decl.active,
@@ -2792,13 +2792,79 @@ mod tests {
             Epoch::new(8)
         );
         let decl = declaration_in_snapshot(&ledger, &h_8, &declare.id()).expect(
-            "decl must be in the epoch-7 because inactivity_period >= SNAPSHOT_FINALIZATION_DELAY",
+            "decl must be in the epoch-8 because inactivity_period > SNAPSHOT_FINALIZATION_DELAY",
         );
         assert_eq!(
             decl.active,
             Epoch::new(6),
             "decl must have active=6 because the snapshot was taken at the end of epoch 6 after the activity message was accepted"
         );
+    }
+
+    /// No activity is rewarded in the epoch a multi-epoch jump lands on, but
+    /// an active message included in it must still refresh the declaration:
+    ///
+    ///   - A declaration is created at epoch 3 — `active = 5`.
+    ///   - The chain jumps from epoch 5 to epoch 7, skipping epoch 6.
+    ///   - The provider reports its epoch-6 activity at epoch 7, which sets
+    ///     `active = 7`.
+    ///   - The snapshot for epoch 9, built at the 7→8 transition, holds the
+    ///     declaration: `7 + 3 >= 9`. Had the report been rejected, `active`
+    ///     would still be 5, and `5 + 3 < 9`.
+    #[test]
+    fn active_message_after_an_epoch_jump_keeps_the_declaration_active() {
+        let leader_utxo = utxo();
+        let (_sdp_utxo_key, sdp_utxo) = utxo_with_sk();
+        let new_utxo_1 = utxo();
+        let new_utxo_2 = utxo();
+        let config = config();
+        let epoch_length = config.epoch_length();
+        let (mut ledger, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
+
+        let h_1 = update_ledger(&mut ledger, genesis, epoch_length, leader_utxo).unwrap();
+        let h_2 = update_ledger(&mut ledger, h_1, 2 * epoch_length, leader_utxo).unwrap();
+        let (h_3, declare, zk_key) = apply_and_add_utxo_and_declaration(
+            &mut ledger,
+            h_2,
+            3 * epoch_length,
+            leader_utxo,
+            new_utxo_1,
+            sdp_utxo,
+        );
+        let h_4 = update_ledger(&mut ledger, h_3, 4 * epoch_length, leader_utxo).unwrap();
+        let h_5 = update_ledger(&mut ledger, h_4, 5 * epoch_length, leader_utxo).unwrap();
+
+        // Jump from epoch 5 to epoch 7. The provider blended through epoch 6
+        // under the epoch state the chain had set for it, and reports it.
+        let epoch6 = ledger.states[&h_5]
+            .cryptarchia_ledger
+            .next_epoch_state
+            .clone();
+        let h_7 = apply_and_add_utxo_and_activity(
+            &mut ledger,
+            h_5,
+            7 * epoch_length,
+            &epoch6,
+            leader_utxo,
+            new_utxo_2,
+            declare.id(),
+            &zk_key,
+            Nonce::new(Epoch::new(3), 1),
+        );
+        assert_eq!(
+            ledger.states[&h_7]
+                .mantle_ledger
+                .sdp
+                .blend_reward_estimate(&declare.provider_id),
+            None,
+            "no epoch is paid out right after the jump"
+        );
+
+        let h_8 = update_ledger(&mut ledger, h_7, 8 * epoch_length, leader_utxo).unwrap();
+        let h_9 = update_ledger(&mut ledger, h_8, 9 * epoch_length, leader_utxo).unwrap();
+        let decl = declaration_in_snapshot(&ledger, &h_9, &declare.id())
+            .expect("the report included at epoch 7 keeps the declaration active at epoch 9");
+        assert_eq!(decl.active, Epoch::new(7));
     }
 
     // TODO: Update this test to work with the new SDP API

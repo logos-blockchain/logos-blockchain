@@ -1081,7 +1081,7 @@ pub mod tests {
         service_params.insert(
             ServiceType::BlendNetwork,
             ServiceParameters {
-                inactivity_period: 2.try_into().unwrap(),
+                inactivity_period: 3.try_into().unwrap(),
             },
         );
 
@@ -1785,18 +1785,18 @@ pub mod tests {
             sdp_utxo,
         );
 
-        // Advance to epoch 5 (one-by-one).
-        // With inactivity_period=2, the declaration goes inactive at epoch 5.
+        // Advance to epoch 6 (one-by-one).
+        // With inactivity_period=3, the declaration goes inactive at epoch 6.
         // It shouldn't be in the snapshot, but should still exist in the live
         // SDP ledger because the user has not yet withdrawn it.
         let mut ledger = ledger0.clone();
         let mut head = head0;
-        for epoch in 1..=5u64 {
+        for epoch in 1..=6u64 {
             head = update_ledger(&mut ledger, head, epoch * epoch_length, leader_utxo).unwrap();
         }
         assert_eq!(
             ledger.states[&head].cryptarchia_ledger.epoch_state.epoch,
-            Epoch::new(5)
+            Epoch::new(6)
         );
         assert!(
             ledger.states[&head]
@@ -1811,12 +1811,12 @@ pub mod tests {
             "inactive declaration must be filtered out of the EpochState snapshot"
         );
 
-        // Jump from epoch 0 to 5, and check the same conditions
+        // Jump from epoch 0 to 6, and check the same conditions
         let mut ledger = ledger0;
-        head = update_ledger(&mut ledger, head0, 5 * epoch_length, leader_utxo).unwrap();
+        head = update_ledger(&mut ledger, head0, 6 * epoch_length, leader_utxo).unwrap();
         assert_eq!(
             ledger.states[&head].cryptarchia_ledger.epoch_state.epoch,
-            Epoch::new(5)
+            Epoch::new(6)
         );
         assert!(
             ledger.states[&head]
