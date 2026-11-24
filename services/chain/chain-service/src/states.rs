@@ -1,15 +1,23 @@
-use std::{collections::HashSet, time::SystemTime};
+use std::{collections::HashSet, sync::Arc, time::SystemTime};
 
-use lb_binary_codec::bincode::DeserializeOp as _;
+use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{era::ForkDigest, header::HeaderId};
 use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_ledger::LedgerState;
-use lb_services_utils::overwatch::{RecoveryData, recovery::StorageRecoverySettings as _};
-use lb_storage_service::recovery::recovery_key;
+use lb_services_utils::overwatch::RecoveryData;
+use lb_storage_service::{
+    KeyValuePair,
+    recovery::{StorageRecoverySettings as _, recovery_key},
+};
+use lb_utils::tokio::task::spawn_blocking;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 
 use crate::{Cryptarchia, CryptarchiaSettings, Error, StartingState};
+
+// About an hour at the testnet template's one-second slots and 1/30 activation.
+const CHECKPOINT_INTERVAL_BLOCKS: u64 = 120;
+pub const RECOVERY_PROGRESS_KEY_SUFFIX: &[u8] = b"cryptarchia-progress-v1";
 
 /// The slot of the chain's tip, and the fork digest its era has under the
 /// schedule the tip was applied with.
@@ -28,27 +36,36 @@ impl TipEra {
     }
 }
 
-/// The tip era of the state the chain service last saved, if it saved one,
-/// read from `recovery_data` without taking the state, which the service loads
-/// when it starts.
+/// The last saved tip era, read without consuming the recovery data the
+/// chain service will load when it starts.
 ///
 /// # Errors
 ///
 /// If the saved state cannot be read or decoded.
 pub fn saved_tip_era(recovery_data: &RecoveryData) -> Result<Option<TipEra>, DynError> {
-    let Some(bytes) = recovery_data.get(&recovery_key(CryptarchiaSettings::RECOVERY_KEY_SUFFIX))?
-    else {
-        return Ok(None);
-    };
-    let state = CryptarchiaConsensusState::from_bytes(&bytes).map_err(|error| {
+    let decode_error = |error| -> DynError {
         format!(
             "The saved chain state cannot be read ({error}). Remove the node's state and sync \
              again."
         )
-    })?;
+        .into()
+    };
+
+    if let Some(bytes) = recovery_data.get(&recovery_key(RECOVERY_PROGRESS_KEY_SUFFIX))? {
+        let progress = RecoveryProgress::from_bytes(&bytes).map_err(decode_error)?;
+        return Ok(Some(progress.tip_era));
+    }
+
+    let Some(bytes) = recovery_data.get(&recovery_key(CryptarchiaSettings::RECOVERY_KEY_SUFFIX))?
+    else {
+        return Ok(None);
+    };
+
+    let state = CryptarchiaConsensusState::from_bytes(&bytes).map_err(decode_error)?;
     Ok(Some(state.tip_era))
 }
 
+/// Full LIB checkpoint. Its field layout matches existing node databases.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CryptarchiaConsensusState {
     pub(crate) tip: HeaderId,
@@ -73,6 +90,17 @@ pub struct CryptarchiaConsensusState {
 }
 
 impl CryptarchiaConsensusState {
+    pub(crate) fn load(settings: &CryptarchiaSettings) -> Result<Self, Error> {
+        match settings
+            .recovery_data
+            .take(&recovery_key(CryptarchiaSettings::RECOVERY_KEY_SUFFIX))
+            .map_err(|error| Error::Storage(error.to_string()))?
+        {
+            Some(bytes) => Ok(Self::from_bytes(&bytes)?),
+            None => Self::from_settings(settings),
+        }
+    }
+
     #[must_use]
     pub const fn tip(&self) -> HeaderId {
         self.tip
@@ -88,12 +116,13 @@ impl CryptarchiaConsensusState {
         cryptarchia: &Cryptarchia,
         storage_blocks_to_remove: HashSet<HeaderId>,
         fork_digests: &EraSchedule<ForkDigest>,
-    ) -> Result<Self, DynError> {
+    ) -> Result<Self, Error> {
         let lib = cryptarchia.consensus.lib_branch();
         let Some(lib_ledger_state) = cryptarchia.ledger.state(&lib.id()).cloned() else {
-            return Err(DynError::from(
-                "Ledger state associated with LIB not found, something is corrupted",
-            ));
+            return Err(Error::Storage(format!(
+                "Ledger state for LIB {} is missing",
+                lib.id()
+            )));
         };
         let lib_block_length = lib.length();
         let lib_block_slot = lib.slot();
@@ -155,14 +184,137 @@ pub struct LastEngineState {
     pub state: lb_cryptarchia_engine::State,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct RecoveryProgress {
+    pub(crate) tip: HeaderId,
+    tip_era: TipEra,
+    pub(crate) lib: HeaderId,
+    pub(crate) lib_block_length: u64,
+    pub(crate) storage_blocks_to_remove: HashSet<HeaderId>,
+    pub(crate) last_engine_state: Option<LastEngineState>,
+}
+
+impl RecoveryProgress {
+    pub(crate) fn from_checkpoint(checkpoint: &CryptarchiaConsensusState) -> Self {
+        Self {
+            tip: checkpoint.tip,
+            tip_era: checkpoint.tip_era,
+            lib: checkpoint.lib,
+            lib_block_length: checkpoint.lib_block_length,
+            storage_blocks_to_remove: checkpoint.storage_blocks_to_remove.clone(),
+            last_engine_state: checkpoint.last_engine_state.clone(),
+        }
+    }
+
+    pub(crate) fn load(
+        checkpoint: &CryptarchiaConsensusState,
+        recovery_data: &RecoveryData,
+    ) -> Result<Self, Error> {
+        let Some(bytes) = recovery_data
+            .take(&recovery_key(RECOVERY_PROGRESS_KEY_SUFFIX))
+            .map_err(|error| Error::Storage(error.to_string()))?
+        else {
+            return Ok(Self::from_checkpoint(checkpoint));
+        };
+
+        Ok(Self::from_bytes(&bytes)?)
+    }
+
+    fn from_chain(
+        cryptarchia: &Cryptarchia,
+        storage_blocks_to_remove: HashSet<HeaderId>,
+        fork_digests: &EraSchedule<ForkDigest>,
+    ) -> Self {
+        let tip = cryptarchia.tip_branch();
+
+        Self {
+            tip: tip.id(),
+            tip_era: TipEra::at(tip.slot(), fork_digests),
+            lib: cryptarchia.lib(),
+            lib_block_length: cryptarchia.lib_branch().length(),
+            storage_blocks_to_remove,
+            last_engine_state: Some(LastEngineState {
+                timestamp: SystemTime::now(),
+                state: *cryptarchia.state(),
+            }),
+        }
+    }
+}
+
+pub struct RecoveryRecorder {
+    checkpoint_lib_height: Option<u64>,
+    fork_digests: Arc<EraSchedule<ForkDigest>>,
+}
+
+impl RecoveryRecorder {
+    pub(crate) fn new(
+        checkpoint: &CryptarchiaConsensusState,
+        fork_digests: Arc<EraSchedule<ForkDigest>>,
+    ) -> Self {
+        Self {
+            checkpoint_lib_height: checkpoint
+                .last_engine_state
+                .is_some()
+                .then_some(checkpoint.lib_block_length),
+            fork_digests,
+        }
+    }
+
+    pub(crate) async fn prepare(
+        &self,
+        cryptarchia: &Cryptarchia,
+        storage_blocks_to_remove: HashSet<HeaderId>,
+    ) -> Result<(Vec<KeyValuePair>, Option<u64>), Error> {
+        let mut entries = Vec::new();
+        let lib_height = cryptarchia.lib_branch().length();
+        let checkpoint_due = self
+            .checkpoint_lib_height
+            .is_none_or(|height| lib_height.saturating_sub(height) >= CHECKPOINT_INTERVAL_BLOCKS);
+
+        let checkpoint_lib_height = if checkpoint_due {
+            let state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+                cryptarchia,
+                storage_blocks_to_remove.clone(),
+                &self.fork_digests,
+            )?;
+
+            let bytes = spawn_blocking("logos/chain/encode-checkpoint", move || state.to_bytes())
+                .await
+                .map_err(|error| {
+                    Error::Storage(format!("Could not encode chain checkpoint: {error}"))
+                })??;
+
+            entries.push(KeyValuePair {
+                key: recovery_key(CryptarchiaSettings::RECOVERY_KEY_SUFFIX),
+                value: bytes,
+            });
+
+            Some(lib_height)
+        } else {
+            None
+        };
+
+        let progress =
+            RecoveryProgress::from_chain(cryptarchia, storage_blocks_to_remove, &self.fork_digests);
+        entries.push(KeyValuePair {
+            key: recovery_key(RECOVERY_PROGRESS_KEY_SUFFIX),
+            value: progress.to_bytes()?,
+        });
+
+        Ok((entries, checkpoint_lib_height))
+    }
+
+    pub(crate) const fn committed(&mut self, checkpoint_lib_height: Option<u64>) {
+        if let Some(height) = checkpoint_lib_height {
+            self.checkpoint_lib_height = Some(height);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::{NonZero, NonZeroU32, NonZeroU64},
-        sync::Arc,
-    };
+    use std::num::{NonZero, NonZeroU32, NonZeroU64};
 
-    use lb_binary_codec::bincode::SerializeOp as _;
     use lb_core::{
         era::AcceptedForkDigests,
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -183,6 +335,129 @@ mod tests {
     /// The same fork digest for every era of `eras`.
     fn fork_digests<Parameters>(eras: &EraSchedule<Parameters>) -> EraSchedule<ForkDigest> {
         eras.map(|_| ForkDigest::from(FORK_DIGEST))
+    }
+
+    fn recovery_test_chain() -> Cryptarchia {
+        let config = crate::tests::ledger_config(NonZero::<u32>::MIN);
+        let ledger = LedgerState::from_utxos([], &config, 0, &ConsensusExcludedKeys::empty());
+
+        Cryptarchia::from_genesis(
+            HeaderId::from([0; 32]),
+            ledger,
+            single_era(config),
+            Bootstrapping,
+        )
+    }
+
+    #[tokio::test]
+    async fn checkpoints_roll_over_by_finalized_block_count() {
+        let chain = recovery_test_chain();
+        let fork_digests = Arc::new(fork_digests(chain.ledger.era_schedule()));
+        let mut saved = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+            &chain,
+            HashSet::new(),
+            &fork_digests,
+        )
+        .unwrap();
+        saved.last_engine_state = None;
+        let mut fresh = RecoveryRecorder::new(&saved, Arc::clone(&fork_digests));
+
+        let (entries, checkpoint_height) = fresh.prepare(&chain, HashSet::new()).await.unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(checkpoint_height, Some(0));
+
+        fresh.committed(checkpoint_height);
+        let (entries, checkpoint_height) = fresh.prepare(&chain, HashSet::new()).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(checkpoint_height, None);
+
+        saved.last_engine_state = Some(LastEngineState {
+            timestamp: SystemTime::UNIX_EPOCH,
+            state: Bootstrapping,
+        });
+        let mut restarted = RecoveryRecorder::new(&saved, fork_digests);
+
+        let at_height = |id, height| {
+            Cryptarchia::from_lib(
+                HeaderId::from([id; 32]),
+                saved.lib,
+                saved.lib_ledger_state.clone(),
+                saved.genesis_id,
+                Arc::clone(chain.ledger.era_schedule()),
+                Bootstrapping,
+                Slot::new(height),
+                height,
+                UncleSlots::default(),
+            )
+        };
+        let below_interval = at_height(1, CHECKPOINT_INTERVAL_BLOCKS - 1);
+
+        let (entries, checkpoint_height) = restarted
+            .prepare(&below_interval, HashSet::new())
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(checkpoint_height, None);
+
+        let at_interval = at_height(2, CHECKPOINT_INTERVAL_BLOCKS);
+        let past_interval = at_height(3, CHECKPOINT_INTERVAL_BLOCKS + 1);
+
+        // Preparing a checkpoint can be retried until the write is confirmed.
+        for candidate in [&at_interval, &at_interval, &past_interval] {
+            let (entries, checkpoint_height) =
+                restarted.prepare(candidate, HashSet::new()).await.unwrap();
+            assert_eq!(entries.len(), 2);
+            assert_eq!(checkpoint_height, Some(candidate.lib_branch().length()));
+        }
+
+        restarted.committed(Some(CHECKPOINT_INTERVAL_BLOCKS));
+        let (entries, checkpoint_height) = restarted
+            .prepare(&past_interval, HashSet::new())
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(checkpoint_height, None);
+    }
+
+    #[test]
+    fn loads_progress_or_uses_the_legacy_checkpoint() {
+        let chain = recovery_test_chain();
+        let legacy = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+            &chain,
+            HashSet::new(),
+            &fork_digests(chain.ledger.era_schedule()),
+        )
+        .unwrap();
+        let checkpoint_key = recovery_key(CryptarchiaSettings::RECOVERY_KEY_SUFFIX).to_vec();
+        let checkpoint_bytes = legacy.to_bytes().unwrap();
+        let legacy_data =
+            RecoveryData::new([(checkpoint_key.clone(), checkpoint_bytes.clone())].into());
+
+        let recovered = RecoveryProgress::load(&legacy, &legacy_data).unwrap();
+        assert_eq!(recovered.tip, legacy.tip);
+        assert_eq!(recovered.lib, legacy.lib);
+        assert_eq!(saved_tip_era(&legacy_data).unwrap(), Some(legacy.tip_era));
+
+        let mut progress = RecoveryProgress::from_checkpoint(&legacy);
+        progress.tip = [1; 32].into();
+        progress.tip_era = TipEra {
+            slot: Slot::from(100),
+            fork_digest: ForkDigest::from([0x33; 32]),
+        };
+        let progress_key = recovery_key(RECOVERY_PROGRESS_KEY_SUFFIX).to_vec();
+        let data = RecoveryData::new(
+            [
+                (checkpoint_key, checkpoint_bytes),
+                (progress_key, progress.to_bytes().unwrap()),
+            ]
+            .into(),
+        );
+
+        assert_eq!(saved_tip_era(&data).unwrap(), Some(progress.tip_era));
+
+        let recovered = RecoveryProgress::load(&legacy, &data).unwrap();
+        assert_eq!(recovered.tip, progress.tip);
+        assert_eq!(recovered.tip_era, progress.tip_era);
     }
 
     /// A reward config with claiming disabled, standing in for a real

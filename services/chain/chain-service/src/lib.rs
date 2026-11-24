@@ -20,7 +20,7 @@ use std::{
 };
 
 use educe::Educe;
-use futures::{Stream, TryStreamExt as _};
+use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
@@ -47,18 +47,17 @@ use lb_ledger::{
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
-    overwatch::{RecoveryData, RecoveryOperator},
+    overwatch::{RecoveryData, recovery::StorageRecoverySettings},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{
-    StorageService,
-    api::StorageApi,
-    recovery::{StorageRecoveryBackend, StorageRecoverySettings},
-};
+use lb_storage_service::{StorageService, api::StorageApi};
 use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData},
+    services::{
+        AsServiceId, ServiceCore, ServiceData,
+        state::{NoOperator, NoState},
+    },
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_with::serde_as;
@@ -80,9 +79,9 @@ use crate::{
     notifier::ChainOnlineNotifier,
     relays::CryptarchiaConsensusRelays,
     service::{
-        Service, delete_stale_blocks_from_storage, load_block_ids_from_storage,
-        persist_recovery_state, process_block,
+        Service, delete_stale_blocks_from_storage, load_block_ids_from_storage, process_block,
     },
+    states::{RecoveryProgress, RecoveryRecorder},
     sync::block_provider::BlockProvider,
 };
 
@@ -772,7 +771,6 @@ where
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
-    state: <Self as ServiceData>::State,
 }
 
 impl<Tx, TimeBackend, RuntimeServiceId> ServiceData
@@ -782,9 +780,9 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
 {
     type Settings = CryptarchiaSettings;
-    type State = CryptarchiaConsensusState;
-    type StateOperator =
-        RecoveryOperator<StorageRecoveryBackend<Self::State, Self::Settings, RuntimeServiceId>>;
+    type State = NoState<Self::Settings>;
+    // The chain commits recovery records atomically with chain data.
+    type StateOperator = NoOperator<Self::State>;
     type Message = ConsensusMsg<Tx>;
 }
 
@@ -821,7 +819,7 @@ where
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-        initial_state: Self::State,
+        _initial_state: Self::State,
     ) -> Result<Self, DynError> {
         let (new_block_subscription_sender, _) = broadcast::channel(16);
         let (lib_subscription_sender, _) = broadcast::channel(16);
@@ -830,11 +828,9 @@ where
             service_resources_handle,
             new_block_subscription_sender,
             lib_subscription_sender,
-            state: initial_state,
         })
     }
 
-    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<
@@ -843,17 +839,20 @@ where
             >(&self.service_resources_handle)
             .await;
 
+        let settings = self
+            .service_resources_handle
+            .settings_handle
+            .notifier()
+            .get_updated_settings();
+        let (checkpoint, progress) = Self::load_recovery(&settings);
+
         let CryptarchiaSettings {
             era_schedule,
             bootstrap: bootstrap_config,
             starting_state,
             sync: sync_config,
             ..
-        } = self
-            .service_resources_handle
-            .settings_handle
-            .notifier()
-            .get_updated_settings();
+        } = settings;
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
@@ -872,7 +871,8 @@ where
             pruned_blocks,
             fell_back_to_lib,
         } = Self::initialize_cryptarchia(
-            &self.state,
+            &checkpoint,
+            &progress,
             &bootstrap_config,
             Arc::new(era_schedule.map(|era| era.parameters.0.clone())),
             &relays,
@@ -886,19 +886,10 @@ where
         // have not yet been deleted from the storage layer.
         let storage_blocks_to_remove = delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
-            &self.state.storage_blocks_to_remove,
+            &progress.storage_blocks_to_remove,
             relays.storage(),
         )
         .await;
-
-        if fell_back_to_lib {
-            persist_recovery_state(
-                &cryptarchia,
-                storage_blocks_to_remove.clone(),
-                &fork_digests,
-                &self.service_resources_handle.state_updater,
-            );
-        }
 
         let sync_blocks_provider: BlockProvider<_> =
             BlockProvider::new(relays.storage().clone(), sync_config.block_provider);
@@ -912,23 +903,19 @@ where
 
         let chain_online_notifier = ChainOnlineNotifier::new(*cryptarchia.state());
 
-        // Mark the service as ready. The service is operational and can handle
-        // requests even while in bootstrap mode waiting for IBD+PBP to
-        // complete.
-        self.notify_service_ready();
+        let recovery_recorder = RecoveryRecorder::new(&checkpoint, fork_digests);
+        drop(checkpoint);
 
         let Self {
             service_resources_handle,
             new_block_subscription_sender,
             lib_subscription_sender,
-            ..
         } = self;
-        let service = Service::new(
+        let mut service = Service::new(
             starting_state,
             cryptarchia,
             service_resources_handle.inbound_relay,
-            service_resources_handle.state_updater,
-            fork_digests,
+            recovery_recorder,
             new_block_subscription_sender,
             lib_subscription_sender,
             chain_online_notifier,
@@ -941,31 +928,22 @@ where
             bootstrap_config.prolonged_bootstrap_period,
         );
 
-        // Run all phases in order. Each phase consumes the service and
-        // returns it in the next phase, so phases can only advance
-        // one-directionally. Phases that don't apply run as no-ops.
-        let run_service = async {
-            service
-                .process_awaiting_genesis_time()
-                .await
-                .process_initial_block_download()
-                .await
-                .process_prolonged_bootstrap_period()
-                .await
-                .process_following()
-                .await;
-        };
+        if fell_back_to_lib {
+            service.record_recovery_state().await;
+        }
 
-        // It sucks to use `SERVICE_ID` when we have `<RuntimeServiceId as
-        // AsServiceId<Self>>::SERVICE_ID`.
-        // Somehow it just does not let us use it.
-        //
-        // Hypothesis:
-        // 1. Probably related to too many generics.
-        // 2. It seems `span` requires a `const` string literal.
-        run_service
+        // The service can handle requests while IBD and PBP are in progress.
+        service_resources_handle.status_updater.notify_ready();
+        info!(
+            target: LOG_TARGET,
+            "Service '{}' is ready.",
+            <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
+        );
+
+        service
+            .run_phases()
             .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
-            .await;
+            .await?;
 
         Ok(())
     }
@@ -990,13 +968,23 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
-    fn notify_service_ready(&self) {
-        self.service_resources_handle.status_updater.notify_ready();
-        info!(
-            target: LOG_TARGET,
-            "Service '{}' is ready.",
-            <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
-        );
+    fn load_recovery(
+        settings: &CryptarchiaSettings,
+    ) -> (CryptarchiaConsensusState, RecoveryProgress) {
+        let checkpoint = CryptarchiaConsensusState::load(settings).unwrap_or_else(|error| {
+            panic!(
+                "The saved chain checkpoint cannot be read ({error}). Remove the node's state and sync again."
+            )
+        });
+
+        let progress = RecoveryProgress::load(&checkpoint, &settings.recovery_data)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "The saved chain recovery progress cannot be read ({error}). Remove the node's state and sync again."
+                )
+            });
+
+        (checkpoint, progress)
     }
 
     /// Get current slot and slot timer from time service.
@@ -1099,7 +1087,7 @@ where
     /// # Arguments
     ///
     /// * `bootstrap_config` - The bootstrap configuration.
-    /// * `ledger_config` - The ledger configuration.
+    /// * `era_schedule` - The ledger configuration for each era.
     /// * `relays` - The relays object containing all the necessary relays for
     ///   the consensus.
     ///
@@ -1117,7 +1105,8 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn initialize_cryptarchia(
-        recovery_state: &CryptarchiaConsensusState,
+        checkpoint: &CryptarchiaConsensusState,
+        progress: &RecoveryProgress,
         bootstrap_config: &BootstrapConfig,
         era_schedule: Arc<EraScheduledConfig>,
         relays: &CryptarchiaConsensusRelays<Tx>,
@@ -1125,26 +1114,23 @@ where
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
     ) -> Result<InitializedCryptarchia, Error> {
         info!(
-            target: LOG_TARGET, tip = ?recovery_state.tip, lib = ?recovery_state.lib, lib_height = recovery_state.lib_block_length, genesis = ?recovery_state.genesis_id,
+            target: LOG_TARGET, tip = ?progress.tip, lib = ?progress.lib, lib_height = progress.lib_block_length, checkpoint_lib = ?checkpoint.lib, genesis = ?checkpoint.genesis_id,
             "recovering Cryptarchia",
         );
 
-        let lib_id = recovery_state.lib;
-        let genesis_id = recovery_state.genesis_id;
+        let lib_id = progress.lib;
         let state = choose_engine_state(
             lib_id,
-            genesis_id,
+            checkpoint.genesis_id,
             bootstrap_config,
-            recovery_state.last_engine_state.as_ref(),
+            progress.last_engine_state.as_ref(),
         );
 
-        let mut cryptarchia = Self::cryptarchia_from_recovered_lib(
-            recovery_state,
-            era_schedule,
-            state,
-            relays.storage(),
-        )
-        .await?;
+        let mut cryptarchia =
+            Self::cryptarchia_from_recovered_lib(checkpoint, era_schedule, state, relays.storage())
+                .await?;
+
+        Self::restore_latest_lib(&mut cryptarchia, progress, state, relays.storage()).await?;
 
         // Stream the already applied state.
         let init_tip = cryptarchia.tip_branch();
@@ -1165,14 +1151,14 @@ where
 
         // Phase 1: Collect and load blocks in (LIB, tip].
         info!(
-            target: LOG_TARGET, lib = ?lib_id, tip = ?recovery_state.tip,
+            target: LOG_TARGET, lib = ?lib_id, tip = ?progress.tip,
             "loading stored blocks for chain recovery",
         );
         let RecoveryBlocks {
             blocks,
             fell_back_to_lib,
         } = Self::load_recovery_blocks_or_fall_back_to_lib(
-            recovery_state.tip,
+            progress.tip,
             lib_id,
             relays.storage().clone(),
         )
@@ -1194,6 +1180,7 @@ where
                 relays,
                 new_block_subscription_sender,
                 lib_subscription_sender,
+                None,
             )
             .await
             .inspect_err(|error| {
@@ -1213,6 +1200,92 @@ where
             pruned_blocks,
             fell_back_to_lib,
         })
+    }
+
+    /// Replay the finalized prefix directly into the ledger. The startup
+    /// engine's fork-choice floor is the saved LIB, even in bootstrap mode.
+    async fn restore_latest_lib(
+        cryptarchia: &mut Cryptarchia,
+        progress: &RecoveryProgress,
+        state: State,
+        storage: &StorageApi<Tx>,
+    ) -> Result<(), Error> {
+        let checkpoint_lib = cryptarchia.lib();
+        let checkpoint_branch = cryptarchia.lib_branch();
+        let expected_blocks = progress
+            .lib_block_length
+            .checked_sub(checkpoint_branch.length())
+            .and_then(|count| usize::try_from(count).ok())
+            .ok_or_else(|| Error::Storage("Recovered LIB height precedes the checkpoint".into()))?;
+
+        if expected_blocks == 0 && progress.lib == checkpoint_lib {
+            return Ok(());
+        }
+
+        let ids = load_block_ids_from_storage(progress.lib, checkpoint_lib, storage.clone())
+            .take(expected_blocks.saturating_add(1))
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        if ids.last() != Some(&checkpoint_lib) || ids.len() != expected_blocks.saturating_add(1) {
+            return Err(Error::Storage(
+                "Recovered LIB ancestry does not match the checkpoint".into(),
+            ));
+        }
+
+        let mut parent = checkpoint_lib;
+        let mut slot = checkpoint_branch.slot();
+        for id in ids.into_iter().rev().skip(1) {
+            let block = storage
+                .try_get_block(&id)
+                .await
+                .map_err(|error| {
+                    Error::Storage(format!("Failed to load finalized block {id}: {error}"))
+                })?
+                .ok_or(Error::HeaderIdNotFound(id))?;
+
+            let header = block.header();
+            if header.id() != id || header.parent() != parent || header.slot() <= slot {
+                return Err(Error::InvalidBlock(format!(
+                    "Unexpected header for finalized block {id}"
+                )));
+            }
+
+            slot = header.slot();
+            let leader_proof = header.leader_proof();
+            let uncle_slots = block.uncle_headers().slots();
+            let update = cryptarchia
+                .ledger
+                .prepare_update(
+                    id,
+                    parent,
+                    slot,
+                    &leader_proof.entropy(),
+                    *leader_proof.voucher_cm(),
+                    &uncle_slots,
+                    block.transactions_iter().cloned(),
+                )?
+                .verify_batch_proofs()?;
+
+            cryptarchia.ledger.commit_update(update);
+            cryptarchia.ledger.prune_state_at(&parent);
+
+            if id == progress.lib {
+                cryptarchia.consensus = lb_cryptarchia_engine::Cryptarchia::from_lib(
+                    id,
+                    parent,
+                    Arc::new(cryptarchia.consensus.era_schedule().clone()),
+                    state,
+                    slot,
+                    progress.lib_block_length,
+                    uncle_slots,
+                );
+            }
+
+            parent = id;
+        }
+
+        Ok(())
     }
 
     /// Creates [`Cryptarchia`] with the recovered LIB as its only block.

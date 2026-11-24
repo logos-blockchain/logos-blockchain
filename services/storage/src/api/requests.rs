@@ -14,6 +14,12 @@ use tokio::sync::oneshot::Sender;
 
 use crate::{backend::StorageTransaction, rocksdb::Transaction};
 
+/// A key and its value, ready to write to storage.
+pub struct KeyValuePair {
+    pub key: Bytes,
+    pub value: Bytes,
+}
+
 /// Messages accepted by the storage service.
 pub enum StorageMsg {
     Load {
@@ -44,12 +50,13 @@ pub enum StorageMsg {
         header_id: HeaderId,
         response_tx: Sender<Option<Bytes>>,
     },
-    StoreBlockData {
+    StoreBlockDataAndRecovery {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Bytes,
         events: Bytes,
         immutable_ids: BTreeMap<Slot, HeaderId>,
+        recovery_writes: Vec<KeyValuePair>,
         response_tx: Sender<Result<(), String>>,
     },
     RemoveBlock {
@@ -64,8 +71,9 @@ pub enum StorageMsg {
         header_id: HeaderId,
         response_tx: Sender<Option<Bytes>>,
     },
-    StoreImmutableBlockIds {
+    StoreImmutableBlockIdsAndRecovery {
         ids: BTreeMap<Slot, HeaderId>,
+        recovery_writes: Vec<KeyValuePair>,
         response_tx: Sender<Result<(), String>>,
     },
     GetImmutableBlockId {
@@ -110,9 +118,9 @@ impl StorageMsg {
             Self::Store { .. }
             | Self::Remove { .. }
             | Self::Execute { .. }
-            | Self::StoreBlockData { .. }
+            | Self::StoreBlockDataAndRecovery { .. }
             | Self::RemoveBlock { .. }
-            | Self::StoreImmutableBlockIds { .. }
+            | Self::StoreImmutableBlockIdsAndRecovery { .. }
             | Self::StoreTransactions { .. }
             | Self::RemoveTransactions { .. } => false,
         }
@@ -145,11 +153,15 @@ impl Debug for StorageMsg {
             }
             Self::Execute { .. } => write!(f, "Execute transaction"),
             Self::GetBlock { .. } => write!(f, "GetBlock {{ .. }}"),
-            Self::StoreBlockData { .. } => write!(f, "StoreBlockData {{ .. }}"),
+            Self::StoreBlockDataAndRecovery { .. } => {
+                write!(f, "StoreBlockDataAndRecovery {{ .. }}")
+            }
             Self::RemoveBlock { .. } => write!(f, "RemoveBlock {{ .. }}"),
             Self::GetBlockParent { .. } => write!(f, "GetBlockParent {{ .. }}"),
             Self::GetBlockEvents { .. } => write!(f, "GetBlockEvents {{ .. }}"),
-            Self::StoreImmutableBlockIds { .. } => write!(f, "StoreImmutableBlockIds {{ .. }}"),
+            Self::StoreImmutableBlockIdsAndRecovery { .. } => {
+                write!(f, "StoreImmutableBlockIdsAndRecovery {{ .. }}")
+            }
             Self::GetImmutableBlockId { .. } => write!(f, "GetImmutableBlockId {{ .. }}"),
             Self::ScanImmutableBlockIds { .. } => write!(f, "ScanImmutableBlockIds {{ .. }}"),
             Self::ScanImmutableBlockIdsReverse { .. } => {

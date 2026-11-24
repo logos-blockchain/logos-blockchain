@@ -930,12 +930,13 @@ mod tests {
             let (sender, receiver) = oneshot::channel();
 
             self.storage_relay
-                .send(StorageMsg::StoreBlockData {
+                .send(StorageMsg::StoreBlockDataAndRecovery {
                     header_id,
                     parent_id,
                     block: Bytes::from(block.encode_to_vec()),
                     events: Events::new().try_into().unwrap(),
                     immutable_ids: BTreeMap::new(),
+                    recovery_writes: Vec::new(),
                     response_tx: sender,
                 })
                 .await
@@ -959,8 +960,9 @@ mod tests {
 
             // Mark as immutable
             self.storage_relay
-                .send(StorageMsg::StoreImmutableBlockIds {
+                .send(StorageMsg::StoreImmutableBlockIdsAndRecovery {
                     ids: BTreeMap::from([(slot, header_id)]),
+                    recovery_writes: Vec::new(),
                     response_tx: sender,
                 })
                 .await

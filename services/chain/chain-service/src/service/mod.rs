@@ -6,7 +6,6 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
-    sync::Arc,
     time::Duration,
 };
 
@@ -15,7 +14,6 @@ use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockInfo};
 use lb_core::{
     block::{Block, SignedHeader, TxInBlock, UncleHeaders},
-    era::ForkDigest,
     header::HeaderId,
     mantle::{
         OpRef, TxHash,
@@ -25,26 +23,24 @@ use lb_core::{
     },
     sdp::{Declaration, DeclarationId, ServiceType},
 };
-use lb_cryptarchia_engine::{Epoch, EraSchedule, PrunedBlocks, Slot};
+use lb_cryptarchia_engine::{Epoch, PrunedBlocks, Slot};
 use lb_cryptarchia_sync::{BlocksUnavailableReason, ProviderResponse, TipResponseFailureReason};
 use lb_ledger::config::{config_for_slot, stake_distribution_snapshot};
 use lb_log_targets::diagnostic::BLEND_REACHABILITY;
 use lb_network_service::message::ChainSyncEvent;
 use lb_storage_service::api::StorageApi;
-use overwatch::{
-    DynError,
-    services::{relay::InboundRelay, state::StateUpdater},
-};
+use overwatch::{DynError, services::relay::InboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::{
     AppliedBlock, BlendDeclarationStatus, BlendRewards, BlendStatus, BlockWithVerifiedHeader,
-    ChainServiceInfo, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, EpochStateQueryResult,
-    Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
+    ChainServiceInfo, ConsensusMsg, Cryptarchia, EpochStateQueryResult, Error, LOG_TARGET,
+    LibUpdate, ProcessedBlockEvent, PrunedBlocksInfo, Query, metrics,
     notifier::ChainOnlineNotifier,
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
+    states::RecoveryRecorder,
     sync::block_provider::BlockProvider,
 };
 
@@ -223,8 +219,7 @@ where
     phase: Phase,
     cryptarchia: Cryptarchia,
     inbound_relay: InboundRelay<ConsensusMsg<Tx>>,
-    state_updater: StateUpdater<Option<CryptarchiaConsensusState>>,
-    fork_digests: Arc<EraSchedule<ForkDigest>>,
+    recovery_recorder: RecoveryRecorder,
     new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
     lib_subscription_sender: broadcast::Sender<LibUpdate>,
     chain_online_notifier: ChainOnlineNotifier,
@@ -262,8 +257,7 @@ where
             phase,
             cryptarchia: self.cryptarchia,
             inbound_relay: self.inbound_relay,
-            state_updater: self.state_updater,
-            fork_digests: self.fork_digests,
+            recovery_recorder: self.recovery_recorder,
             new_block_subscription_sender: self.new_block_subscription_sender,
             lib_subscription_sender: self.lib_subscription_sender,
             chain_online_notifier: self.chain_online_notifier,
@@ -321,6 +315,7 @@ where
             &self.relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
+            Some((&mut self.recovery_recorder, &self.storage_blocks_to_remove)),
         )
         .await?;
 
@@ -341,8 +336,6 @@ where
             self.relays.storage(),
         )
         .await;
-
-        self.record_recovery_state();
 
         Ok(outcome)
     }
@@ -679,13 +672,36 @@ where
     }
 
     /// Record the current service state.
-    fn record_recovery_state(&self) {
-        persist_recovery_state(
-            &self.cryptarchia,
-            self.storage_blocks_to_remove.clone(),
-            &self.fork_digests,
-            &self.state_updater,
-        );
+    pub(crate) async fn record_recovery_state(&mut self) {
+        if let Err(error) = self
+            .store_recovery_state(BTreeMap::new(), self.storage_blocks_to_remove.clone())
+            .await
+        {
+            error!(target: LOG_TARGET, %error, "Failed to record chain recovery state");
+        }
+    }
+
+    async fn store_recovery_state(
+        &mut self,
+        immutable_blocks: BTreeMap<Slot, HeaderId>,
+        storage_blocks_to_remove: HashSet<HeaderId>,
+    ) -> Result<(), Error> {
+        let (recovery_writes, checkpoint_lib_height) = self
+            .recovery_recorder
+            .prepare(&self.cryptarchia, storage_blocks_to_remove)
+            .await?;
+
+        self.relays
+            .storage()
+            .store_immutable_block_ids_and_recovery(immutable_blocks, recovery_writes)
+            .await
+            .map_err(|error| {
+                Error::Storage(format!("Failed to store chain recovery state: {error}"))
+            })?;
+
+        self.recovery_recorder.committed(checkpoint_lib_height);
+
+        Ok(())
     }
 }
 
@@ -962,7 +978,7 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
 #[instrument(
     target = LOG_TARGET,
     level = "debug",
-    skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
+    skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster, recovery),
     fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count())
 )]
 pub async fn process_block<Tx>(
@@ -971,6 +987,7 @@ pub async fn process_block<Tx>(
     relays: &CryptarchiaConsensusRelays<Tx>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
+    recovery: Option<(&mut RecoveryRecorder, &HashSet<HeaderId>)>,
 ) -> Result<ProcessBlockOutcome<Tx>, Error>
 where
     Tx: PreverifiedMantleTransaction
@@ -1006,17 +1023,32 @@ where
         candidate.consensus.lib_branch().slot(),
     );
 
+    let (recovery_writes, checkpoint_lib_height) = match &recovery {
+        Some((recorder, pending)) => {
+            let mut pending = (*pending).clone();
+            pending.extend(applied.pruned_blocks.stale_blocks().copied());
+
+            recorder.prepare(&candidate, pending).await?
+        }
+        None => (Vec::new(), None),
+    };
+
     relays
         .storage()
-        .store_block_data(
+        .store_block_data_and_recovery(
             header.id(),
             header.parent(),
             block.clone(),
             applied.events,
             immutable_blocks,
+            recovery_writes,
         )
         .await
         .map_err(|e| Error::Storage(format!("Failed to store block data: {e}")))?;
+
+    if let Some((recorder, _)) = recovery {
+        recorder.committed(checkpoint_lib_height);
+    }
 
     log_newly_canonical_blocks(
         &candidate,
@@ -1054,32 +1086,13 @@ where
             applied.reorged_blocks.len(),
         );
 
-        let height = cryptarchia
-            .consensus
-            .branches()
-            .get(&cryptarchia.lib())
-            .expect("LIB branch not available")
-            .length();
-        let block_info = BlockInfo {
-            height,
-            header_id: new_lib,
-        };
-
-        if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
-            warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {e}");
-        }
-
-        let lib_update = LibUpdate {
-            new_lib: cryptarchia.lib(),
-            pruned_blocks: PrunedBlocksInfo {
-                stale_blocks: applied.pruned_blocks.stale_blocks().copied().collect(),
-                immutable_blocks: applied.pruned_blocks.immutable_blocks().clone(),
-            },
-        };
-
-        if let Err(e) = lib_broadcaster.send(lib_update) {
-            warn!(target: LOG_TARGET, "No LIB-update subscribers to notify: {e}");
-        }
+        notify_lib_update(
+            cryptarchia,
+            &applied.pruned_blocks,
+            relays.broadcast_relay(),
+            lib_broadcaster,
+        )
+        .await;
     }
 
     let newly_canonical_txs: HashMap<_, _> =
@@ -1505,34 +1518,35 @@ fn immutable_blocks_index(
     immutable_blocks
 }
 
-async fn broadcast_finalized_block(
-    broadcast_relay: &BroadcastRelay,
-    block_info: BlockInfo,
-) -> Result<(), DynError> {
-    broadcast_relay
-        .send(BlockBroadcastMsg::BroadcastFinalizedBlock(block_info))
-        .await
-        .map_err(|error| Box::new(error) as DynError)
-}
-
-/// Update and persist `CryptarchiaConsensusState`.
-pub fn persist_recovery_state(
+async fn notify_lib_update(
     cryptarchia: &Cryptarchia,
-    storage_blocks_to_remove: HashSet<HeaderId>,
-    fork_digests: &EraSchedule<ForkDigest>,
-    state_updater: &StateUpdater<Option<CryptarchiaConsensusState>>,
+    pruned_blocks: &PrunedBlocks<HeaderId>,
+    broadcast_relay: &BroadcastRelay,
+    lib_broadcaster: &broadcast::Sender<LibUpdate>,
 ) {
-    match CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
-        cryptarchia,
-        storage_blocks_to_remove,
-        fork_digests,
-    ) {
-        Ok(state) => {
-            state_updater.update(Some(state));
-        }
-        Err(e) => {
-            error!(target: LOG_TARGET, "Failed to update state: {}", e);
-        }
+    let new_lib = cryptarchia.lib();
+    let finalized_block = BlockInfo {
+        height: cryptarchia.lib_branch().length(),
+        header_id: new_lib,
+    };
+
+    if let Err(error) = broadcast_relay
+        .send(BlockBroadcastMsg::BroadcastFinalizedBlock(finalized_block))
+        .await
+    {
+        warn!(target: LOG_TARGET, "Failed to notify finalized-block subscribers: {error}");
+    }
+
+    let lib_update = LibUpdate {
+        new_lib,
+        pruned_blocks: PrunedBlocksInfo {
+            stale_blocks: pruned_blocks.stale_blocks().copied().collect(),
+            immutable_blocks: pruned_blocks.immutable_blocks().clone(),
+        },
+    };
+
+    if let Err(error) = lib_broadcaster.send(lib_update) {
+        warn!(target: LOG_TARGET, "No LIB-update subscribers to notify: {error}");
     }
 }
 

@@ -1,20 +1,33 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{self, Display},
-    num::{NonZero, NonZeroU32},
+    num::{NonZero, NonZeroU32, NonZeroUsize},
+    path::PathBuf,
     sync::Arc,
+    time::{Duration, SystemTime},
 };
 
 use futures::StreamExt as _;
+use lb_binary_codec::{
+    bincode::{DeserializeOp as _, SerializeOp as _},
+    canonical::BinaryEncode as _,
+};
 use lb_core::{
-    block::{Block, BlockTransactions, SignedHeader, TxInBlock, UncleHeaders},
+    block::{
+        Block, BlockTransactions, SignedHeader, TxInBlock, UncleHeaders,
+        genesis::GenesisBlockBuilder,
+    },
     era::{AcceptedForkDigests, ForkDigest},
     mantle::{
-        Note, Op, OpProof, SignedOps, Utxo,
+        GenesisParameters, GenesisTime, Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
         gas::TxGasCalculator as _,
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::{
+            channel::{
+                ChannelId, MsgId,
+                inscribe::{Inscription, InscriptionOp},
+            },
             leader_claim::{VoucherCm, VoucherSecret},
             transfer::TransferOp,
         },
@@ -31,7 +44,9 @@ use lb_core::{
 use lb_cryptarchia_engine::{EpochConfig, EraSchedule, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
-use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
+use lb_key_management_system_keys::keys::{
+    Ed25519Key, Ed25519Signature, UnverifiedEd25519PublicKey, ZkKey,
+};
 use lb_ledger::{
     ConsensusExcludedKeys, LedgerState,
     config::{
@@ -40,10 +55,12 @@ use lb_ledger::{
     },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
+use lb_services_utils::overwatch::RecoveryData;
 use lb_storage_service::{
-    StorageMsg, StorageService,
+    KeyValuePair, StorageMsg, StorageService,
     api::StorageApi,
     backend::StorageBackend as _,
+    recovery::{load_recovery_data, recovery_key},
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
@@ -58,10 +75,13 @@ use tokio::{
 };
 
 use crate::{
-    BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
-    CryptarchiaConsensusState, Error, OfflineGracePeriodConfig, TipEra,
+    BlockProviderConfig, BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia,
+    CryptarchiaConsensus, CryptarchiaConsensusState, CryptarchiaSettings, Error,
+    OfflineGracePeriodConfig, StartingState, SyncConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
+    saved_tip_era,
     service::{get_block_ids, process_block},
+    states::{RECOVERY_PROGRESS_KEY_SUFFIX, RecoveryProgress, RecoveryRecorder},
 };
 
 #[test]
@@ -291,6 +311,244 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     assert_eq!(recovery_blocks.blocks, []);
 }
 
+/// An old checkpoint sets where replay begins. The compact progress still sets
+/// the finalized floor, even after the offline grace period has elapsed.
+#[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "exercise restart and both kinds of missing blocks"
+)]
+async fn recover_latest_lib_and_tip_from_an_older_checkpoint() {
+    type Tx = SignedOps<Preverified, StandardMode>;
+
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let (storage_task, db_dir) = spawn_storage_service(storage_rx);
+
+    let make_relays = |storage_tx| {
+        CryptarchiaConsensusRelays::<Tx>::new(
+            OutboundRelay::new(broadcast_tx.clone()),
+            StorageApi::new(OutboundRelay::new(storage_tx)),
+            OutboundRelay::new(time_tx.clone()),
+        )
+    };
+    let relays = make_relays(storage_tx);
+
+    let (new_block_tx, _new_block_rx) = broadcast::channel(16);
+    let (lib_tx, _lib_rx) = broadcast::channel(16);
+
+    let config = ledger_config(NonZeroU32::MIN);
+    let next_fork_digest = ForkDigest::new([0x22; 32]);
+    let mut next_config = config.clone();
+    next_config.accepted_fork_digests =
+        AcceptedForkDigests::new(vec![FORK_DIGEST, next_fork_digest]);
+
+    let era_schedule = schedule(config.clone(), [(4, next_config)]);
+    let fork_digests = Arc::new(era_schedule.map(|era| {
+        if era.era.into_inner() == 0 {
+            FORK_DIGEST
+        } else {
+            next_fork_digest
+        }
+    }));
+    let era_boundary = era_schedule.at_epoch(4.into()).first_slot;
+
+    let (leader_key, leader_utxo) = utxo();
+    let (_, spent_utxo) = utxo();
+    let mut live = Cryptarchia::from_genesis(
+        GENESIS_ID.into(),
+        LedgerState::from_utxos(
+            [leader_utxo, spent_utxo],
+            &config,
+            0,
+            &ConsensusExcludedKeys::empty(),
+        ),
+        Arc::clone(&era_schedule),
+        lb_cryptarchia_engine::State::Online,
+    );
+
+    let no_stale_blocks = HashSet::new();
+    let checkpoint_key = recovery_key(b"cryptarchia");
+    let mut checkpoint_bytes = None;
+    let mut recorder = None;
+    let mut next_slot = Slot::new(1);
+    let mut blocks = Vec::new();
+
+    for height in 1..=4 {
+        let transactions = if height == 3 {
+            next_slot = next_slot.max(era_boundary);
+            BlockTransactions::try_new(vec![burn_tx(spent_utxo, &leader_key)], u16::MAX).unwrap()
+        } else {
+            BlockTransactions::empty()
+        };
+
+        let (block, _) = try_build_block_with_transactions(
+            &live,
+            live.tip(),
+            leader_utxo,
+            &leader_key,
+            next_slot,
+            UncleHeaders::empty(),
+            transactions,
+        )
+        .unwrap();
+        let slot = block.header().slot();
+        blocks.push(block.header().id());
+
+        let block = live.verify_block(block, slot).unwrap();
+        process_block(
+            &mut live,
+            block,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+            recorder
+                .as_mut()
+                .map(|recorder| (recorder, &no_stale_blocks)),
+        )
+        .await
+        .unwrap();
+
+        next_slot = slot.strict_add(1.into());
+
+        if height == 2 {
+            let checkpoint = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+                &live,
+                no_stale_blocks.clone(),
+                &fork_digests,
+            )
+            .unwrap();
+            assert_eq!(checkpoint.lib, blocks[0]);
+            assert_eq!(checkpoint.tip_era.fork_digest, FORK_DIGEST);
+
+            let bytes = checkpoint.to_bytes().unwrap();
+            relays
+                .storage()
+                .store_immutable_block_ids_and_recovery(
+                    BTreeMap::new(),
+                    vec![KeyValuePair {
+                        key: checkpoint_key.clone(),
+                        value: bytes.clone(),
+                    }],
+                )
+                .await
+                .unwrap();
+
+            checkpoint_bytes = Some(bytes);
+            recorder = Some(RecoveryRecorder::new(
+                &checkpoint,
+                Arc::clone(&fork_digests),
+            ));
+        }
+    }
+
+    let lib_id = blocks[2];
+    let tip_id = blocks[3];
+    assert_eq!(live.lib(), lib_id);
+    assert_eq!(live.tip(), tip_id);
+
+    drop(relays);
+    storage_task.await.unwrap();
+
+    let db_path = db_dir.path().join("db");
+    let recovery_data = load_recovery_data(RocksBackendSettings {
+        db_path: db_path.clone(),
+        read_only: false,
+        column_family: None,
+    })
+    .unwrap();
+
+    assert_eq!(
+        saved_tip_era(&recovery_data).unwrap(),
+        Some(TipEra {
+            slot: live.tip_branch().slot(),
+            fork_digest: next_fork_digest,
+        }),
+    );
+
+    let saved_checkpoint_bytes = recovery_data.take(&checkpoint_key).unwrap().unwrap();
+    assert_eq!(saved_checkpoint_bytes, checkpoint_bytes.unwrap());
+
+    let saved_checkpoint = CryptarchiaConsensusState::from_bytes(&saved_checkpoint_bytes).unwrap();
+    let mut progress = RecoveryProgress::load(&saved_checkpoint, &recovery_data).unwrap();
+    assert_eq!(progress.lib, lib_id);
+    assert_eq!(progress.tip, tip_id);
+
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_task = spawn_storage_service_at(storage_rx, db_path);
+    let relays = make_relays(storage_tx);
+    let bootstrap_config = BootstrapConfig {
+        prolonged_bootstrap_period: Duration::ZERO,
+        force_bootstrap: false,
+        offline_grace_period: OfflineGracePeriodConfig::default(),
+    };
+
+    let recover = async |progress: &RecoveryProgress| {
+        CryptarchiaConsensus::<Tx, SystemTimeBackend, TestRuntimeServiceId>::initialize_cryptarchia(
+            &saved_checkpoint,
+            progress,
+            &bootstrap_config,
+            Arc::clone(&era_schedule),
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+        )
+        .await
+    };
+
+    let recovered = recover(&progress).await.unwrap();
+    assert!(!recovered.fell_back_to_lib);
+    assert_eq!(recovered.cryptarchia.info(), live.info());
+
+    for id in [lib_id, tip_id] {
+        assert_eq!(
+            recovered.cryptarchia.ledger.state(&id),
+            live.ledger.state(&id)
+        );
+    }
+
+    progress.last_engine_state.as_mut().unwrap().timestamp = SystemTime::UNIX_EPOCH;
+    let recovered = recover(&progress).await.unwrap();
+    assert!(!recovered.fell_back_to_lib);
+    assert!(recovered.cryptarchia.is_bootstrapping());
+    assert_eq!(recovered.cryptarchia.lib(), lib_id);
+    assert_eq!(recovered.cryptarchia.tip(), tip_id);
+    assert_eq!(
+        recovered.cryptarchia.ledger.state(&lib_id),
+        live.ledger.state(&lib_id)
+    );
+
+    relays
+        .storage()
+        .remove_block(tip_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let recovered = recover(&progress).await.unwrap();
+    assert!(recovered.fell_back_to_lib);
+    assert_eq!(recovered.cryptarchia.tip(), lib_id);
+    assert_eq!(
+        recovered.cryptarchia.ledger.state(&lib_id),
+        live.ledger.state(&lib_id)
+    );
+
+    let finalized_block = blocks[1];
+    relays
+        .storage()
+        .remove_block(finalized_block)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let failed = recover(&progress).await;
+    assert!(matches!(
+        failed,
+        Err(Error::ParentIdNotFound(_) | Error::HeaderIdNotFound(_))
+    ));
+}
+
 /// The chain must be recovered successfully from storage by skipping the uncle
 /// validation.
 ///
@@ -352,7 +610,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         last_engine_state: None,
     };
     let bootstrap_config = BootstrapConfig {
-        prolonged_bootstrap_period: std::time::Duration::ZERO,
+        prolonged_bootstrap_period: Duration::ZERO,
         force_bootstrap: true,
         offline_grace_period: OfflineGracePeriodConfig::default(),
     };
@@ -362,6 +620,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         TestRuntimeServiceId,
     >::initialize_cryptarchia(
         &recovery_state,
+        &RecoveryProgress::from_checkpoint(&recovery_state),
         &bootstrap_config,
         Arc::clone(stored.ledger.era_schedule()),
         &relays,
@@ -557,7 +816,7 @@ async fn get_block_ids_past_recovered_lib() {
         last_engine_state: None,
     };
     let bootstrap_config = BootstrapConfig {
-        prolonged_bootstrap_period: std::time::Duration::ZERO,
+        prolonged_bootstrap_period: Duration::ZERO,
         force_bootstrap: true,
         offline_grace_period: OfflineGracePeriodConfig::default(),
     };
@@ -567,6 +826,7 @@ async fn get_block_ids_past_recovered_lib() {
         TestRuntimeServiceId,
     >::initialize_cryptarchia(
         &recovery_state,
+        &RecoveryProgress::from_checkpoint(&recovery_state),
         &bootstrap_config,
         Arc::clone(stored.ledger.era_schedule()),
         &relays,
@@ -756,6 +1016,304 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
     assert_eq!(cryptarchia.tip(), f2.header().id());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn fork_switch_persists_tip_lib_and_pruning_progress() {
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage = spawn_storage_service(storage_rx);
+    let relays = recovery_test_relays(storage_tx);
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    let era_schedule = single_era(ledger_config(NonZeroU32::MIN));
+    let (_, local, fork, _, key, utxo) = chain_with_fork_on(Arc::clone(&era_schedule));
+    let genesis = genesis_cryptarchia_on(utxo, era_schedule);
+    let mut fork_view = genesis.clone();
+    fork_view
+        .try_apply_block(fork.clone(), fork.header().slot())
+        .unwrap();
+
+    let fork_id = fork.header().id();
+    let (fork_tip, _) = try_build_block(
+        &fork_view,
+        fork_id,
+        utxo,
+        &key,
+        fork.header().slot().strict_add(1.into()),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+
+    let (mut chain, _) = genesis.online();
+    let fork_digests = Arc::new(chain.ledger.era_schedule().map(|_| FORK_DIGEST));
+    let mut checkpoint = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+        &chain,
+        HashSet::new(),
+        &fork_digests,
+    )
+    .unwrap();
+    checkpoint.last_engine_state = None;
+
+    let mut recorder = RecoveryRecorder::new(&checkpoint, fork_digests);
+    let mut apply = async |block: Block<RecoveryTestTx>, pending: &HashSet<HeaderId>| {
+        let slot = block.header().slot();
+        let block = chain.verify_block(block, slot).unwrap();
+
+        process_block(
+            &mut chain,
+            block,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+            Some((&mut recorder, pending)),
+        )
+        .await
+        .unwrap();
+    };
+
+    let local_id = local.header().id();
+    let no_pending = HashSet::new();
+    apply(local, &no_pending).await;
+    apply(fork, &no_pending).await;
+
+    let progress_key = recovery_key(RECOVERY_PROGRESS_KEY_SUFFIX);
+    let tied = relays
+        .storage()
+        .load::<RecoveryProgress>(progress_key.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tied.tip, local_id);
+    assert_eq!(tied.lib, GENESIS_ID.into());
+    assert!(tied.storage_blocks_to_remove.is_empty());
+
+    let fork_tip_id = fork_tip.header().id();
+    let pending_removal = HeaderId::from([0xff; 32]);
+    apply(fork_tip, &HashSet::from([pending_removal])).await;
+
+    let progress = relays
+        .storage()
+        .load::<RecoveryProgress>(progress_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(progress.tip, fork_tip_id);
+    assert_eq!(progress.lib, fork_id);
+    assert_eq!(
+        progress.storage_blocks_to_remove,
+        HashSet::from([local_id, pending_removal])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "shares one chain across checkpoint rollover and restart"
+)]
+async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
+    const ROLLOVER_HEIGHT: u64 = 120;
+
+    let era_schedule = single_era(ledger_config(NonZeroU32::MIN));
+    let leader_key = ZkKey::from(Fr::ZERO);
+    let mut settings =
+        recovery_test_settings(&era_schedule, Note::new(10_000, leader_key.to_public_key()));
+    let StartingState::Genesis { genesis_block } = &settings.starting_state;
+    let leader_utxo = genesis_block
+        .genesis_tx()
+        .transfer()
+        .operation()
+        .utxos()
+        .next()
+        .unwrap();
+
+    let initial = CryptarchiaConsensusState::load(&settings).unwrap();
+    let mut recorder = RecoveryRecorder::new(
+        &initial,
+        Arc::new(settings.era_schedule.map(|era| era.parameters.1)),
+    );
+    let mut chain = Cryptarchia::from_genesis(
+        initial.genesis_id,
+        initial.lib_ledger_state,
+        Arc::clone(&era_schedule),
+        lb_cryptarchia_engine::State::Online,
+    );
+
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let (storage_task, db_dir) = spawn_storage_service(storage_rx);
+    let relays = recovery_test_relays(storage_tx);
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+    let pending = HashSet::new();
+
+    let mut append = async |chain: &mut Cryptarchia| {
+        let (block, _) = try_build_block(
+            chain,
+            chain.tip(),
+            leader_utxo,
+            &leader_key,
+            chain.tip_branch().slot().strict_add(1.into()),
+            UncleHeaders::empty(),
+        )
+        .unwrap();
+        let slot = block.header().slot();
+        let block = chain.verify_block(block, slot).unwrap();
+
+        process_block(
+            chain,
+            block,
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+            Some((&mut recorder, &pending)),
+        )
+        .await
+        .unwrap();
+    };
+
+    for _ in 0..ROLLOVER_HEIGHT {
+        append(&mut chain).await;
+    }
+    assert_eq!(chain.lib_branch().length(), ROLLOVER_HEIGHT - 1);
+
+    let checkpoint_key = recovery_key(b"cryptarchia");
+    let before_rollover = relays
+        .storage()
+        .load::<CryptarchiaConsensusState>(checkpoint_key.clone())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before_rollover.lib, initial.genesis_id);
+    assert_eq!(before_rollover.lib_block_length, 0);
+
+    append(&mut chain).await;
+
+    let db_path = db_dir.path().join("db");
+    let refreshed_bytes = load_recovery_data(RocksBackendSettings {
+        db_path: db_path.clone(),
+        read_only: true,
+        column_family: None,
+    })
+    .unwrap()
+    .get(&checkpoint_key)
+    .unwrap()
+    .unwrap();
+    let rolled_over = CryptarchiaConsensusState::from_bytes(&refreshed_bytes).unwrap();
+    assert_eq!(rolled_over.lib, chain.lib());
+    assert_eq!(rolled_over.lib_block_length, ROLLOVER_HEIGHT);
+    assert_eq!(
+        &rolled_over.lib_ledger_state,
+        chain.ledger.state(&chain.lib()).unwrap()
+    );
+
+    append(&mut chain).await;
+    assert_eq!(chain.lib_branch().length(), ROLLOVER_HEIGHT + 1);
+    assert_ne!(chain.lib(), rolled_over.lib);
+
+    drop(relays);
+    storage_task.await.unwrap();
+
+    settings.recovery_data = load_recovery_data(RocksBackendSettings {
+        db_path: db_path.clone(),
+        read_only: false,
+        column_family: None,
+    })
+    .unwrap();
+    let saved_bytes = settings
+        .recovery_data
+        .get(&checkpoint_key)
+        .unwrap()
+        .unwrap();
+    assert!(
+        saved_bytes == refreshed_bytes,
+        "the next block rewrote the checkpoint"
+    );
+
+    let checkpoint = CryptarchiaConsensusState::load(&settings).unwrap();
+    assert_eq!(checkpoint.lib, rolled_over.lib);
+    assert_eq!(checkpoint.lib_block_length, ROLLOVER_HEIGHT);
+
+    let progress = RecoveryProgress::load(&checkpoint, &settings.recovery_data).unwrap();
+    assert_eq!(progress.lib, chain.lib());
+    assert_eq!(progress.lib_block_length, ROLLOVER_HEIGHT + 1);
+    assert_eq!(progress.tip, chain.tip());
+
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_task = spawn_storage_service_at(storage_rx, db_path);
+    let relays = recovery_test_relays(storage_tx);
+    let restored = CryptarchiaConsensus::<RecoveryTestTx, SystemTimeBackend, TestRuntimeServiceId>::initialize_cryptarchia(
+        &checkpoint,
+        &progress,
+        &settings.bootstrap,
+        era_schedule,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .unwrap();
+
+    assert!(!restored.fell_back_to_lib);
+    assert_eq!(restored.cryptarchia.info(), chain.info());
+    assert_eq!(
+        restored.cryptarchia.ledger.state(&chain.tip()),
+        chain.ledger.state(&chain.tip())
+    );
+}
+
+type RecoveryTestTx = SignedOps<Preverified, StandardMode>;
+
+fn recovery_test_relays(
+    storage_tx: mpsc::Sender<StorageMsg>,
+) -> CryptarchiaConsensusRelays<RecoveryTestTx> {
+    let (broadcast_tx, mut broadcast_rx) = mpsc::channel(10);
+    let _broadcast_task = tokio::spawn(async move { while broadcast_rx.recv().await.is_some() {} });
+
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    CryptarchiaConsensusRelays::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    )
+}
+
+fn recovery_test_settings(
+    era_schedule: &EraScheduledConfig,
+    leader_note: Note,
+) -> CryptarchiaSettings {
+    let genesis_parameters = GenesisParameters {
+        chain_id: "recovery-test".to_owned().try_into().unwrap(),
+        start_time: GenesisTime::new(0),
+        epoch_nonce: Fr::ZERO,
+        pow_reward_pool: 0,
+        consensus_excluded_keys: ConsensusExcludedKeys::empty(),
+    };
+    let genesis_block = GenesisBlockBuilder::new()
+        .add_note(leader_note)
+        .set_inscription(InscriptionOp {
+            channel_id: ChannelId::from([0; 32]),
+            inscription: Inscription::new_unchecked(genesis_parameters.encode_to_vec()),
+            parent: MsgId::root(),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+        })
+        .build()
+        .unwrap();
+
+    CryptarchiaSettings {
+        era_schedule: Arc::new(era_schedule.map(|era| (era.parameters.clone(), FORK_DIGEST))),
+        starting_state: genesis_block.into(),
+        bootstrap: BootstrapConfig {
+            prolonged_bootstrap_period: Duration::ZERO,
+            force_bootstrap: false,
+            offline_grace_period: OfflineGracePeriodConfig::default(),
+        },
+        sync: SyncConfig {
+            block_provider: BlockProviderConfig {
+                batch_size: NonZeroUsize::MIN,
+            },
+        },
+        recovery_data: RecoveryData::default(),
+    }
+}
+
 #[test]
 fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let config = ledger_config(NonZero::<u32>::new(1).unwrap());
@@ -806,7 +1364,7 @@ async fn verify_and_process_block(
     lib_tx: &broadcast::Sender<crate::LibUpdate>,
 ) -> Result<crate::service::ProcessBlockOutcome<SignedOps<Preverified, StandardMode>>, Error> {
     let block = cryptarchia.verify_block(block, current_slot)?;
-    process_block(cryptarchia, block, relays, new_block_tx, lib_tx).await
+    process_block(cryptarchia, block, relays, new_block_tx, lib_tx, None).await
 }
 
 /// Creates a transfer tx with a fake sig.
@@ -910,7 +1468,7 @@ pub fn schedule(
     after_genesis: impl IntoIterator<Item = (u32, lb_ledger::Config)>,
 ) -> Arc<EraScheduledConfig> {
     let timing = |config: &lb_ledger::Config| EraTiming {
-        slot_duration: std::time::Duration::from_secs(1),
+        slot_duration: Duration::from_secs(1),
         epoch_length: EpochLength::epoch_length(config),
     };
     let after_genesis = after_genesis.into_iter().collect::<Vec<_>>();
@@ -948,7 +1506,7 @@ pub fn single_consensus_era(
     config: lb_cryptarchia_engine::Config,
 ) -> Arc<EraSchedule<lb_cryptarchia_engine::Config>> {
     let timing = EraTiming {
-        slot_duration: std::time::Duration::from_secs(1),
+        slot_duration: Duration::from_secs(1),
         epoch_length: NonZero::<u64>::MIN,
     };
     Arc::new(
@@ -1249,22 +1807,28 @@ pub fn utxo() -> (ZkKey, Utxo) {
     (zk_sk, utxo)
 }
 
-pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
+pub fn spawn_storage_service(rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
+    let handle = spawn_storage_service_at(rx, db_dir.path().join("db"));
+    (handle, db_dir)
+}
+
+fn spawn_storage_service_at(
+    mut rx: mpsc::Receiver<StorageMsg>,
+    db_path: PathBuf,
+) -> JoinHandle<()> {
     let backend = RocksBackend::new(RocksBackendSettings {
-        db_path: db_dir.path().join("db"),
+        db_path,
         read_only: false,
         column_family: None,
     })
     .unwrap();
 
-    let handle = tokio::spawn(async move {
+    tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &backend);
         }
-    });
-
-    (handle, db_dir)
+    })
 }
 
 pub struct TestRuntimeServiceId;
