@@ -252,6 +252,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 },
                 block_rewards: BLOCK_REWARDS,
                 gas_profile: GAS_PROFILE,
+                pow_reward_pool: v2::cryptarchia::EraStartRewardPool::default(),
             },
             time: TimeDeploymentSettings {
                 slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)

@@ -6,7 +6,7 @@ use lb_core::{
     mantle::{
         Value,
         gas::{Gas, GasProfile},
-        ops::pow::{PowSlotWindows, PowTarget},
+        ops::pow::{PowReward, PowSlotWindows, PowTarget},
         transactions::TxEra,
     },
 };
@@ -40,6 +40,11 @@ pub struct Config {
     pub tx_era: TxEra,
     pub sdp_config: crate::mantle::sdp::Config,
     pub pow_config: PoWConfig,
+    /// The `PoW` reward pool the era starts with, replacing what the era
+    /// before it left, or `None` for an era that carries the pool over. The
+    /// genesis era's pool is inscribed in the genesis block instead.
+    #[serde(default)]
+    pub pow_reward_pool_reset: Option<PowReward>,
     pub accepted_fork_digests: AcceptedForkDigests,
     pub execution_market: ExecutionMarketConfig,
     pub storage_market: StorageMarketConfig,
@@ -1075,6 +1080,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             tx_era: lb_core::mantle::transactions::TxEra::Master,
+            pow_reward_pool_reset: None,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
@@ -1167,6 +1173,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             tx_era: lb_core::mantle::transactions::TxEra::Master,
+            pow_reward_pool_reset: None,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
@@ -1275,6 +1282,7 @@ mod tests {
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
             tx_era: lb_core::mantle::transactions::TxEra::Master,
+            pow_reward_pool_reset: None,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),

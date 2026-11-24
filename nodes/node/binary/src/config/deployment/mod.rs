@@ -63,10 +63,16 @@ const SERIALIZED_ERAS: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/ser
 /// The main file of the testnet release 0.3.1 started, and the era files it
 /// includes.
 const SERIALIZED_TESTNET_DEPLOYMENT: &str = include_str!("testnet/settings.yaml");
-const SERIALIZED_TESTNET_ERAS: &[(&str, &str)] = &[(
-    "era/schedule/0.yaml",
-    include_str!("testnet/era/schedule/0.yaml"),
-)];
+const SERIALIZED_TESTNET_ERAS: &[(&str, &str)] = &[
+    (
+        "era/schedule/0.yaml",
+        include_str!("testnet/era/schedule/0.yaml"),
+    ),
+    (
+        "era/schedule/14.yaml",
+        include_str!("testnet/era/schedule/14.yaml"),
+    ),
+];
 
 type EraSchedule = lb_time::era::EraSchedule<EraDefinition>;
 
@@ -745,6 +751,33 @@ mod tests {
     }
 
     #[test]
+    fn the_testnet_moves_to_the_latest_ruleset_at_epoch_14() {
+        let testnet = DeploymentSettings::testnet();
+        let schedule = testnet.era_schedule();
+        assert_eq!(schedule.iter().count(), 2);
+        let era_1 = schedule.get(Era::new(1)).unwrap();
+
+        assert_eq!(era_1.first_epoch, Epoch::new(14));
+        assert_eq!(era_1.first_slot, Slot::new(4_200_000));
+        // 2026-11-27T05:10:00Z.
+        assert_eq!(era_1.start_time.unix_timestamp(), 1_795_756_200);
+        assert_eq!(testnet.first_master_slot(), Slot::new(4_200_000));
+
+        let definition = era_1.parameters;
+        assert!(!definition.ruleset.is_legacy());
+        assert!(!definition.accepted_fork_digests.accepts(None));
+        // k = 120 at f = 1/30: 36,000 one-second slots.
+        assert_eq!(definition.epoch_length().get(), 36_000);
+        let cryptarchia = &definition.ruleset.parameters().cryptarchia;
+        assert_eq!(cryptarchia.pow_reward_pool.0, Some(5_940_000_000_000_000));
+        assert_eq!(cryptarchia.pow_config.reward.rate_num, 1);
+        assert_eq!(cryptarchia.pow_config.reward.rate_den.get(), 100);
+        // The genesis era keeps the pool its genesis block gives it.
+        let genesis = schedule.genesis().parameters.ruleset.parameters();
+        assert!(genesis.cryptarchia.pow_reward_pool.is_unset());
+    }
+
+    #[test]
     fn a_legacy_chain_keeps_the_discovery_names_of_release_0_3() {
         // What release 0.3.6 prints for its Kademlia and identify protocols:
         // named after the chain ID its genesis block inscribes.
@@ -795,6 +828,15 @@ mod tests {
             recovered.era_schedule().genesis().parameters.fork_digest,
             testnet.era_schedule().genesis().parameters.fork_digest
         );
+        let era_1 = |settings: &DeploymentSettings| {
+            settings
+                .era_schedule()
+                .get(Era::new(1))
+                .unwrap()
+                .parameters
+                .fork_digest
+        };
+        assert_eq!(era_1(&recovered), era_1(&testnet));
     }
 
     #[test]

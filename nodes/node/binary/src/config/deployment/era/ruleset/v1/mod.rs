@@ -285,6 +285,7 @@ impl Declared {
             storage_market,
             block_rewards,
             gas_profile,
+            pow_reward_pool: v2::cryptarchia::EraStartRewardPool::default(),
         };
         // The next ruleset derives the first epoch's reward from the pool,
         // where this one declares it.

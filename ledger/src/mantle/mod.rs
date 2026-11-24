@@ -173,6 +173,17 @@ impl LedgerState {
         self.pow = self
             .pow
             .try_apply_header(last_epoch_state, epoch_state, config)?;
+        // An era entered since the last block may start with a pool of its
+        // own: the latest such era's, should the block skip several.
+        let entered_eras = eras.iter().filter(|era| {
+            last_epoch_state.epoch < era.first_epoch && era.first_epoch <= epoch_state.epoch
+        });
+        if let Some(reward_pool) = entered_eras
+            .rev()
+            .find_map(|era| era.parameters.pow_reward_pool_reset)
+        {
+            self.pow.reset_reward_pool(reward_pool, config);
+        }
         Ok((self, effect))
     }
 
@@ -275,5 +286,62 @@ impl LedgerState {
             )?;
         self.sdp = result;
         Ok((self, events))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::{AdditiveGroup as _, Fr};
+
+    use super::*;
+    use crate::{
+        cryptarchia::tests::{GENESIS_POW_REWARD_POOL, config},
+        mantle::pow::{compute_epoch_pow_reward, tests::epoch_state},
+        test_utils::schedule,
+    };
+
+    const ERA_1_POOL: PowReward = 5_940_000_000_000_000;
+
+    /// Era 0 keeps the genesis pool; era 1, from epoch 2, starts with
+    /// [`ERA_1_POOL`].
+    fn eras_with_a_pool_reset() -> (Config, EraScheduledConfig) {
+        let era_1 = Config {
+            pow_reward_pool_reset: Some(ERA_1_POOL),
+            ..config()
+        };
+        (era_1.clone(), schedule(config(), [(2, era_1)]))
+    }
+
+    /// The `PoW` state of a ledger started in epoch `from` with the genesis
+    /// pool, once a block of epoch `to` is applied.
+    fn pow_after(from: u32, to: u32, eras: &EraScheduledConfig) -> pow::PowState {
+        LedgerState::new(&config(), GENESIS_POW_REWARD_POOL, &epoch_state(from))
+            .try_apply_header(&epoch_state(from), &epoch_state(to), Fr::ZERO.into(), eras)
+            .expect("the epoch transition applies")
+            .0
+            .pow
+    }
+
+    #[test]
+    fn the_pow_reward_pool_is_reset_on_entering_an_era_that_starts_with_one() {
+        let (era_1, eras) = eras_with_a_pool_reset();
+
+        // Within era 0, and within era 1, the pool carries over.
+        for (from, to) in [(0, 1), (2, 3)] {
+            assert_eq!(
+                pow_after(from, to, &eras).reward_pool(),
+                GENESIS_POW_REWARD_POOL
+            );
+        }
+        // Entering era 1 resets it, whether from the epoch before it or from
+        // an earlier one, with the epochs between left without a block.
+        for (from, to) in [(1, 2), (0, 2), (1, 3)] {
+            let pow = pow_after(from, to, &eras);
+            assert_eq!(pow.reward_pool(), ERA_1_POOL);
+            assert_eq!(
+                pow.epoch_reward(),
+                compute_epoch_pow_reward(ERA_1_POOL, &era_1)
+            );
+        }
     }
 }
