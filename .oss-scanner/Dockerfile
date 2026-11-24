@@ -1,6 +1,7 @@
 # Image for Anthropic's OSS scanner (https://github.com/anthropics/oss-scanner).
 
-FROM rust:1.100.0-bookworm
+# Rust 1.100.0 on Debian 12 (debian:bookworm-20261123).
+FROM rust:1.100.0-bookworm@sha256:1b9dc70890ec494e466c87f5ad41ad544bfb30ea6acc99a3e068c47a4ae3f23e
 
 ENV DEBIAN_FRONTEND=noninteractive
 
