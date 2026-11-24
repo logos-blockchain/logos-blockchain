@@ -24,6 +24,10 @@ pub struct NtpSettings {
     /// Interval for the backend to contact the ntp server and update its time
     #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]
     pub update_interval: Duration,
+    /// The furthest the NTP servers' time may be from the system clock for the
+    /// node to follow it
+    #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]
+    pub max_offset: Duration,
 }
 
 impl Default for NtpSettings {
@@ -32,6 +36,7 @@ impl Default for NtpSettings {
             server: "pool.ntp.org:123".to_owned(),
             client: NtpClientSettings::default(),
             update_interval: Duration::from_secs(15),
+            max_offset: Duration::from_secs(30),
         }
     }
 }

@@ -1,31 +1,33 @@
 use std::{
     fmt::{Debug, Formatter},
+    future::ready,
     net::{IpAddr, SocketAddr},
     time::Duration,
 };
 
-use futures::{StreamExt as _, TryStreamExt as _, stream::FuturesUnordered};
+use futures::{StreamExt as _, stream::FuturesUnordered};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
-use sntpc::{Error as SntpError, NtpContext, NtpResult, StdTimestampGen, get_time};
+use sntpc::{NtpContext, NtpResult, StdTimestampGen, get_time};
 use tokio::{
     net::{ToSocketAddrs, UdpSocket, lookup_host},
-    time::{error::Elapsed, timeout},
+    time::sleep,
 };
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error(transparent)]
     Io(std::io::Error),
-    #[error("NTP internal error: {0:?}")]
-    Sntp(SntpError),
-    #[error("NTP request timeout, elapsed: {0:?}")]
-    Timeout(Elapsed),
+    #[error(
+        "{replies} of the {addresses} NTP server addresses of the listening interface's IP \
+         version replied, not a majority"
+    )]
+    TooFewReplies { replies: usize, addresses: usize },
 }
 
 #[serde_with::serde_as]
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NTPClientSettings {
-    /// NTP server requests timeout duration
+    /// How long a round of requests waits for the servers' replies
     #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]
     pub timeout: Duration,
     pub listening_interface: IpAddr,
@@ -62,20 +64,53 @@ impl AsyncNTPClient {
         get_time(host, &socket, self.ntp_context).await
     }
 
-    pub async fn request_timestamp<Addresses: ToSocketAddrs + Sync>(
-        &self,
-        pool: Addresses,
-    ) -> Result<NtpResult, Error> {
-        let hosts = lookup_host(&pool).await.map_err(Error::Io)?;
-        let mut checks = hosts
-            .map(|host| self.get_time(host))
-            .collect::<FuturesUnordered<_>>()
-            .into_stream();
-        timeout(self.settings.timeout, checks.select_next_some())
+    /// How far ahead of the system clock the time of the NTP servers at `pool`
+    /// is: the median of the offsets they reply within the timeout, if most of
+    /// them reply.
+    ///
+    /// Only the addresses of the listening interface's IP version are asked,
+    /// as the others are out of its reach.
+    pub async fn request_offset<Addresses>(&self, pool: Addresses) -> Result<time::Duration, Error>
+    where
+        Addresses: ToSocketAddrs + Sync,
+    {
+        let is_ipv4 = self.settings.listening_interface.is_ipv4();
+        let hosts: Vec<_> = lookup_host(&pool)
             .await
-            .map_err(Error::Timeout)?
-            .map_err(Error::Sntp)
+            .map_err(Error::Io)?
+            .filter(|host| host.is_ipv4() == is_ipv4)
+            .collect();
+        let offsets: Vec<_> = hosts
+            .iter()
+            .map(|host| self.get_time(*host))
+            .collect::<FuturesUnordered<_>>()
+            .filter_map(|reply| ready(reply.ok().map(|reply| reply.offset())))
+            .take_until(sleep(self.settings.timeout))
+            .collect()
+            .await;
+        let replies = offsets.len();
+        median_of_majority(offsets, hosts.len())
+            .map(time::Duration::microseconds)
+            .ok_or(Error::TooFewReplies {
+                replies,
+                addresses: hosts.len(),
+            })
     }
+}
+
+/// The median of `offsets`, if more than half of the `addresses` asked replied
+/// with them.
+fn median_of_majority(mut offsets: Vec<i64>, addresses: usize) -> Option<i64> {
+    if offsets.len() <= addresses / 2 {
+        return None;
+    }
+    offsets.sort_unstable();
+    let middle = offsets.len() / 2;
+    Some(if offsets.len().is_multiple_of(2) {
+        offsets[middle - 1].midpoint(offsets[middle])
+    } else {
+        offsets[middle]
+    })
 }
 
 #[cfg(test)]
@@ -95,8 +130,22 @@ mod tests {
         };
         let client = AsyncNTPClient::new(settings);
 
-        let _response = client.request_timestamp(ntp_server_address).await?;
+        let _offset = client.request_offset(ntp_server_address).await?;
 
         Ok(())
+    }
+
+    #[test]
+    fn a_minority_of_replies_does_not_move_the_median() {
+        // 50 years, in microseconds.
+        let far_ahead = 50 * 365 * 24 * 3_600 * 1_000_000;
+        assert_eq!(median_of_majority(vec![far_ahead, 2, 1], 4), Some(2));
+        assert_eq!(median_of_majority(vec![1, far_ahead, 4, 2], 4), Some(3));
+    }
+
+    #[test]
+    fn fewer_replies_than_a_majority_give_no_median() {
+        assert_eq!(median_of_majority(vec![1, 2], 4), None);
+        assert_eq!(median_of_majority(vec![], 0), None);
     }
 }
