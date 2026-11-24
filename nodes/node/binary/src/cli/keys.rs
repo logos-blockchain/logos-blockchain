@@ -284,13 +284,11 @@ pub fn run_generate_key(args: GenerateKeyArgs) -> Result<()> {
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
     let title_exists = keystore.contains(user_key_title.clone());
-    let overwrite_approved = args.yes
-        || confirm_overwrite(&format!(
-            "A key with the title '{}' already exists. Overwrite?",
-            user_key_title
-        ))?;
-
-    if title_exists && !overwrite_approved {
+    if !overwrite_approved(title_exists, args.yes, || {
+        Ok(confirm_overwrite(&format!(
+            "A key with the title '{user_key_title}' already exists. Overwrite?"
+        ))?)
+    })? {
         println!("Action discarded.");
         return Ok(());
     }
@@ -336,13 +334,11 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
     let title_exists = keystore.contains(user_key_title.clone());
-    let overwrite_approved = auto_approve
-        || confirm_overwrite(&format!(
-            "A key with the title '{}' already exists. Overwrite?",
-            user_key_title
-        ))?;
-
-    if title_exists && !overwrite_approved {
+    if !overwrite_approved(title_exists, auto_approve, || {
+        Ok(confirm_overwrite(&format!(
+            "A key with the title '{user_key_title}' already exists. Overwrite?"
+        ))?)
+    })? {
         println!("Action discarded.");
         return Ok(());
     }
@@ -413,5 +409,42 @@ fn next_user_key_title(keystore: &Keystore) -> String {
             break candidate;
         }
         counter += 1;
+    }
+}
+
+/// Whether a key may be stored under a title: always when no key holds that
+/// title, otherwise only with `--yes` or an explicit yes from `confirm`.
+fn overwrite_approved(
+    title_exists: bool,
+    auto_approve: bool,
+    confirm: impl FnOnce() -> Result<bool>,
+) -> Result<bool> {
+    if !title_exists || auto_approve {
+        return Ok(true);
+    }
+    confirm()
+}
+
+#[cfg(test)]
+mod overwrite_approval_tests {
+    use color_eyre::eyre::Result;
+
+    use super::overwrite_approved;
+
+    fn never_asked() -> Result<bool> {
+        panic!("asked for confirmation although no key would be overwritten")
+    }
+
+    #[test]
+    fn a_new_title_is_never_asked_about() {
+        assert!(overwrite_approved(false, false, never_asked).unwrap());
+        assert!(overwrite_approved(false, true, never_asked).unwrap());
+    }
+
+    #[test]
+    fn an_existing_title_needs_a_yes_unless_everything_is_approved() {
+        assert!(overwrite_approved(true, false, || Ok(true)).unwrap());
+        assert!(!overwrite_approved(true, false, || Ok(false)).unwrap());
+        assert!(overwrite_approved(true, true, never_asked).unwrap());
     }
 }
