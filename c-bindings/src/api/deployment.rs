@@ -36,7 +36,7 @@ pub struct DeploymentInfo {
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
         let deployment_chain_id = deployment.chain_id();
-        let chain = ProtocolScope::Chain(deployment.genesis_id());
+        let chain = deployment.chain_scope();
         let fork = ProtocolScope::Fork(deployment.fork_digest_in_force());
 
         // Every string is built before any of them is turned into a raw

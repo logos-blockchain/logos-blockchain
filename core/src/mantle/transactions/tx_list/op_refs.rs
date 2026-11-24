@@ -10,7 +10,12 @@ use crate::{
         traits::{Hashable, hashable},
         transactions::{
             MANTLE_TX_HASH_V1_BYTES,
-            tx_list::{Ops, common::TxList, hash::tx_hasher, ops::MantleTxSerde},
+            tx_list::{
+                Ops,
+                common::TxList,
+                hash::tx_hasher,
+                ops::{FormatTaggedTx, MantleTxSerde},
+            },
         },
     },
 };
@@ -19,15 +24,18 @@ use crate::{
 /// gas and its size are computed over.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpRefs<'a> {
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
     ops: TxList<OpRef<'a>>,
 }
 
 impl<'a> OpRefs<'a> {
     #[must_use]
-    pub(crate) fn new(fork_digest: ForkDigest, ops: impl Into<TxList<OpRef<'a>>>) -> Self {
+    pub(crate) fn new(
+        fork_digest: impl Into<Option<ForkDigest>>,
+        ops: impl Into<TxList<OpRef<'a>>>,
+    ) -> Self {
         Self {
-            fork_digest,
+            fork_digest: fork_digest.into(),
             ops: ops.into(),
         }
     }
@@ -63,10 +71,14 @@ impl<'a> From<&'a Ops> for OpRefs<'a> {
 
 impl BinaryEncode for OpRefs<'_> {
     fn encoded_length(&self) -> usize {
-        self.fork_digest.encoded_length() + self.ops.0.encoded_length()
+        self.fork_digest
+            .map_or(0, |fork_digest| fork_digest.encoded_length())
+            + self.ops.0.encoded_length()
     }
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.fork_digest.encode_into(out);
+        if let Some(fork_digest) = self.fork_digest {
+            fork_digest.encode_into(out);
+        }
         self.ops.0.encode_into(out);
     }
 }
@@ -99,8 +111,8 @@ impl Serialize for OpRefs<'_> {
             }
             .serialize(serializer)
         } else {
-            let bytes = self.encode();
-            serializer.serialize_bytes(&bytes)
+            FormatTaggedTx::of(self.fork_digest.is_none(), self.encode().into())
+                .serialize(serializer)
         }
     }
 }
@@ -158,7 +170,8 @@ mod tests {
 
         assert_eq!(
             op_refs.to_bytes().expect("the reference view serializes"),
-            bincode::serialize(&op_refs.encode().into_vec()).expect("the envelope serializes")
+            bincode::serialize(&(false, op_refs.encode().into_vec()))
+                .expect("the envelope serializes")
         );
     }
 

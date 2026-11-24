@@ -298,8 +298,8 @@ mod tests {
         let expected = [Epoch::new(0), Epoch::new(10)];
 
         let yaml = serde_yaml::to_string(&schedule).unwrap();
-        assert!(yaml.starts_with("0: !V1\n"), "{yaml}");
-        assert!(yaml.contains("\n10: !V1\n"), "{yaml}");
+        assert!(yaml.starts_with("0: !V2\n"), "{yaml}");
+        assert!(yaml.contains("\n10: !V2\n"), "{yaml}");
         let decoded: EraDeclarations = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(first_epochs(&decoded), expected);
 
@@ -312,15 +312,15 @@ mod tests {
     #[test]
     fn an_era_is_its_ruleset_tagged_with_its_version() {
         let yaml = serde_yaml::to_string(&ruleset()).unwrap();
-        assert!(yaml.starts_with("!V1\nblend:\n"), "{yaml}");
+        assert!(yaml.starts_with("!V2\nblend:\n"), "{yaml}");
     }
 
     #[test]
     fn a_ruleset_without_a_known_version_is_rejected() {
         let yaml = serde_yaml::to_string(&ruleset()).unwrap();
-        let untagged = yaml.replacen("!V1\n", "", 1);
+        let untagged = yaml.replacen("!V2\n", "", 1);
         assert!(serde_yaml::from_str::<EraRuleset>(&untagged).is_err());
-        let unknown = yaml.replacen("!V1\n", "!V0\n", 1);
+        let unknown = yaml.replacen("!V2\n", "!V0\n", 1);
         assert!(serde_yaml::from_str::<EraRuleset>(&unknown).is_err());
     }
 }

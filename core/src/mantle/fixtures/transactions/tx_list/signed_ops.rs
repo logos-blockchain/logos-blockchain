@@ -85,7 +85,7 @@ fn two_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
     );
 
     SignedOps {
-        fork_digest: FORK_DIGEST,
+        fork_digest: Some(FORK_DIGEST),
         ops: TxList::from([
             SignedOp::Transfer(transfer.into_state_trusted()),
             SignedOp::ChannelInscribe(inscription.into_state_trusted()),
@@ -132,7 +132,7 @@ fn all_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
         signed!(ClaimPowReward, CLAIM_POW_REWARD, NoOpProof),
     ]);
     SignedOps {
-        fork_digest: FORK_DIGEST,
+        fork_digest: Some(FORK_DIGEST),
         ops,
     }
 }
@@ -144,7 +144,7 @@ impl<State: VerificationState, Mode: VerificationMode> lb_binary_codec::canonica
         [
             lb_binary_codec::canonical::CodecFixture {
                 value: Self {
-                    fork_digest: FORK_DIGEST,
+                    fork_digest: Some(FORK_DIGEST),
                     ops: TxList::empty(),
                 },
                 bytes: Cow::Owned(decode_fixture_hex(&format!("{FORK_DIGEST_HEX}00"))),
@@ -174,6 +174,6 @@ mod tests {
         lb_binary_codec::canonical::assert_codec_fixtures_with::<
             SignedOps<Unverified, StandardMode>,
             _,
-        >(|| u32::MAX);
+        >(|| crate::mantle::transactions::TxDecodeContext::UNBOUNDED);
     }
 }

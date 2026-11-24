@@ -33,7 +33,7 @@ const DEFAULT_ACTIVE_SLOT_COEFF: NonNegativeRatio =
 const DEFAULT_SECURITY_PARAM: NonZeroU32 = NonZeroU32::new(20).unwrap();
 
 fn constrain_default_uncle_reference_window(
-    cryptarchia: &mut lb_node::config::deployment::era::ruleset::v1::cryptarchia::Settings,
+    cryptarchia: &mut lb_node::config::deployment::era::ruleset::v2::cryptarchia::Settings,
 ) {
     cryptarchia.uncle_reference_window_in_block = cryptarchia
         .uncle_reference_window_in_block
@@ -441,7 +441,7 @@ impl TopologyConfig {
                 .expect("The changed deployment must be valid.");
         }
         if let Some(schedule) = self.era_boundary_schedule {
-            let ruleset = EraRuleset::V1(settings.genesis_era_parameters().clone());
+            let ruleset = EraRuleset::V2(settings.genesis_era_parameters().clone());
             let declarations = (0..=schedule.target_era)
                 .map(|era| {
                     let first_epoch = if era == schedule.target_era {
@@ -959,7 +959,7 @@ mod tests {
     }
 
     fn assert_cucumber_fixture_parameters(
-        parameters: &lb_node::config::deployment::era::ruleset::v1::Parameters,
+        parameters: &lb_node::config::deployment::era::ruleset::v2::Parameters,
     ) {
         let cryptarchia = &parameters.cryptarchia;
         assert_eq!(cryptarchia.security_param.get(), 8);

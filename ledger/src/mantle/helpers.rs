@@ -11,7 +11,7 @@ use lb_core::{
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, SdpEra, ServiceType, service_notes::ServiceNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
@@ -105,6 +105,12 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         &config_for_slot(self.eras, self.cryptarchia_ledger.slot)
             .sdp_config
             .min_stake
+    }
+
+    fn sdp_era(&self) -> SdpEra {
+        config_for_slot(self.eras, self.cryptarchia_ledger.slot)
+            .sdp_config
+            .era
     }
 
     fn get_epoch(&self) -> Epoch {

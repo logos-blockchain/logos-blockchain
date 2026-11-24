@@ -16,7 +16,7 @@ use lb_core::{
     sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
+use lb_node::config::{RunConfig, deployment::era::ruleset::v2::cryptarchia::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };

@@ -225,7 +225,7 @@ where
         immutable_ids: BTreeMap<Slot, HeaderId>,
         recovery_writes: Vec<KeyValuePair>,
     ) -> Result<(), DynError> {
-        let block = Bytes::from(block.encode_to_vec());
+        let block = Bytes::from(block.encode_wire());
         let events = Bytes::try_from(events)?;
 
         self.request(|response_tx| StorageMsg::StoreBlockDataAndRecovery {
@@ -244,7 +244,9 @@ where
 
 impl<Tx> StorageApi<Tx>
 where
-    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
         let bytes = self
@@ -294,9 +296,11 @@ where
 /// allow, as they're assumed to be within the era's limits.
 fn decode_stored_block<Tx>(bytes: &[u8]) -> Result<Block<Tx>, DecodeError>
 where
-    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
-    Block::decode_all(bytes, &(u8::MAX, u32::MAX, (u16::MAX, u32::MAX)))
+    Block::decode_stored(bytes)
 }
 
 impl<Tx: Serialize + Hashable<Hash = TxHash>> StorageApi<Tx> {

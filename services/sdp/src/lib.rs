@@ -1005,7 +1005,7 @@ where
             return;
         };
 
-        let withdraw_message = WithdrawMessage {
+        let withdraw_message = WithdrawMessage::Master {
             declaration_id,
             nonce,
         };

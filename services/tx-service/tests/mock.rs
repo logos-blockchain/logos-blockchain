@@ -630,7 +630,7 @@ async fn a_tx_whose_fork_digest_the_era_in_force_does_not_accept_is_refused() {
 
     assert!(matches!(
         error,
-        MempoolError::UnacceptedForkDigest(fork_digest) if fork_digest == other_fork
+        MempoolError::UnacceptedForkDigest(Some(fork_digest)) if fork_digest == other_fork
     ));
     assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
 }
