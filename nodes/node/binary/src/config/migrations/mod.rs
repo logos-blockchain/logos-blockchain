@@ -170,8 +170,8 @@ mod tests {
         std::fs::write(&path, config).unwrap();
         let keystore_path = dir.path().join("keystore.yaml");
         std::fs::write(&keystore_path, keystore).unwrap();
-        // 0.3.2 wrote it with the default mode: its owner has to restrict it before
-        // this release loads it.
+        // 0.3.2 wrote it with the default mode: its owner has to restrict it
+        // before this release loads it.
         rustix::fs::chmod(&keystore_path, Mode::RUSR | Mode::WUSR).unwrap();
 
         let loaded = UserConfig::load(&path).unwrap();
