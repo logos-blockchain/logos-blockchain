@@ -15,6 +15,7 @@ use crate::{
         },
         ops::SignedOperation,
         transactions::{
+            OperationVerificationHelper,
             hash::TxHashView,
             states::{Preverified, Unverified, Verified},
         },
@@ -28,6 +29,7 @@ pub struct SDPActiveValidationContext<'a> {
     pub declaration: &'a Declaration,
     pub tx_hash_view: &'a TxHashView,
     pub epoch: Epoch,
+    pub helper: &'a dyn OperationVerificationHelper,
 }
 
 pub struct SDPActiveExecutionContext {
@@ -76,6 +78,12 @@ impl VerifiableOperation<StandardMode> for SignedOperation<SDPActiveOp, Preverif
         }
 
         validate_nonce(operation.nonce, declaration)?;
+
+        // Executing the message records the activity in the rewards of the
+        // declaration's service, so they must accept it.
+        context
+            .helper
+            .check_activity(declaration, &operation.metadata)?;
 
         // Defer the proof verification, so that the caller can batch it.
         let inputs =
@@ -128,6 +136,7 @@ mod tests {
         mantle::{
             TxHash,
             batch::{DeferredZkSig, Error as BatchError, test_utils::batch_verify},
+            channel::Channels,
             gas::{
                 Gas,
                 test_utils::{FixedThresholds, GAS_PROFILE},
@@ -144,6 +153,7 @@ mod tests {
             transactions::{
                 hash::TxHashView,
                 states::{Preverified, Unverified, Verified},
+                verification_helper::test_utils::TestOperationVerificationHelper,
             },
         },
         sdp::{
@@ -151,6 +161,11 @@ mod tests {
             blend::ActivityProof,
         },
     };
+
+    // Accepts every reported activity.
+    fn helper() -> TestOperationVerificationHelper {
+        TestOperationVerificationHelper::new(Channels::new(), [])
+    }
 
     fn declaration_key() -> ZkKey {
         ZkKey::from(BigUint::from(1u8))
@@ -222,6 +237,7 @@ mod tests {
                 .verify(&SDPActiveValidationContext {
                     declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
+                    helper: &helper(),
                     epoch: withdraw_at.strict_add(Epoch::from(1)),
                 })
                 .unwrap_err(),
@@ -258,6 +274,7 @@ mod tests {
                 .verify(&SDPActiveValidationContext {
                     declaration: &declaration_b,
                     tx_hash_view: &tx_hash_view,
+                    helper: &helper(),
                     epoch: declaration_b.created,
                 })
                 .unwrap_err(),
@@ -289,6 +306,7 @@ mod tests {
                 .verify(&SDPActiveValidationContext {
                     declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
+                    helper: &helper(),
                     epoch: Epoch::from(0),
                 })
                 .unwrap_err(),
@@ -317,6 +335,7 @@ mod tests {
                 .verify(&SDPActiveValidationContext {
                     declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
+                    helper: &helper(),
                     epoch: declaration_b.created,
                 })
                 .unwrap_err(),
@@ -343,6 +362,7 @@ mod tests {
             .verify(&SDPActiveValidationContext {
                 declaration: declarations.get(&declaration_id).expect("declaration"),
                 tx_hash_view: &signed_view,
+                helper: &helper(),
                 epoch: declaration.created,
             })
             .expect("a sequence jump within the declaration lifecycle is accepted");
@@ -369,6 +389,7 @@ mod tests {
                 .verify(&SDPActiveValidationContext {
                     declaration: declarations.get(&declaration_id).expect("declaration"),
                     tx_hash_view: &signed_view,
+                    helper: &helper(),
                     epoch: declaration.created,
                 })
                 .unwrap_err(),
@@ -401,6 +422,7 @@ mod tests {
             .verify(&SDPActiveValidationContext {
                 declaration: declarations.get(&declaration_id).expect("declaration"),
                 tx_hash_view: &tx_hash_view,
+                helper: &helper(),
                 epoch: Epoch::from(0),
             })
             .expect("verify leaves the proof to the batch")
@@ -443,6 +465,7 @@ mod tests {
             .verify(&SDPActiveValidationContext {
                 declaration: declarations.get(&declaration_id).expect("declaration"),
                 tx_hash_view: &signed_view,
+                helper: &helper(),
                 epoch: Epoch::from(2),
             })
             .expect("a withdrawal epoch still ahead keeps the declaration active");
@@ -552,6 +575,7 @@ mod tests {
             .verify(&SDPActiveValidationContext {
                 declaration: declarations.get(&declare_op.id()).expect("declaration"),
                 tx_hash_view: &tx_hash_view,
+                helper: &helper(),
                 epoch,
             })
             .map(|_| ())

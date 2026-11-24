@@ -10,7 +10,7 @@ pub use withdraw::{SDPWithdrawExecutionContext, SDPWithdrawValidationContext};
 
 use crate::{
     mantle::NoteId,
-    sdp::{Declaration, DeclarationId, Nonce, ProviderId, ServiceType},
+    sdp::{ActivityError, Declaration, DeclarationId, Nonce, ProviderId, ServiceType},
 };
 
 pub type SDPDeclareOp = crate::sdp::DeclarationMessage;
@@ -84,6 +84,8 @@ pub enum SdpError {
         note_id: NoteId,
         service_type: ServiceType,
     },
+    #[error("The service rejects the reported activity: {0}")]
+    RejectedActivity(ActivityError),
 }
 
 /// Ensures a caller-supplied declaration is the one named by the operation.

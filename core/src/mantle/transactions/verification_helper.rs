@@ -15,7 +15,10 @@ use crate::{
             sdp::SdpError,
         },
     },
-    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{
+        ActivityMetadata, Declaration, DeclarationId, MinStake, ServiceType,
+        service_notes::ServiceNotes,
+    },
 };
 
 pub trait OperationVerificationHelper {
@@ -47,6 +50,15 @@ pub trait OperationVerificationHelper {
                 SdpError::DeclarationNotFound(*id),
             ))
     }
+
+    /// Checks the activity an active message from `declaration` reports in
+    /// `metadata` against the rewards of the declaration's service, which
+    /// record it when the message is executed.
+    fn check_activity(
+        &self,
+        declaration: &Declaration,
+        metadata: &ActivityMetadata,
+    ) -> Result<(), SdpError>;
 
     fn get_min_stake(&self) -> &MinStake;
 
@@ -129,7 +141,10 @@ pub mod test_utils {
             },
             transactions::OperationVerificationHelper,
         },
-        sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+        sdp::{
+            ActivityMetadata, Declaration, DeclarationId, MinStake, ServiceType,
+            service_notes::ServiceNotes,
+        },
     };
 
     pub struct TestOperationVerificationHelper {
@@ -289,6 +304,14 @@ pub mod test_utils {
                 .ok_or(VerificationError::SDPVerificationError(
                     SdpError::DeclarationNotFound(*id),
                 ))
+        }
+
+        fn check_activity(
+            &self,
+            _declaration: &Declaration,
+            _metadata: &ActivityMetadata,
+        ) -> Result<(), SdpError> {
+            Ok(())
         }
 
         fn get_min_stake(&self) -> &MinStake {

@@ -302,6 +302,7 @@ impl SignedOp<Preverified, StandardMode> {
                     declaration,
                     tx_hash_view,
                     epoch: helper.get_epoch(),
+                    helper,
                 };
                 op.into_verified_deferred(&context, deferred_proofs)
                     .map(Into::into)
