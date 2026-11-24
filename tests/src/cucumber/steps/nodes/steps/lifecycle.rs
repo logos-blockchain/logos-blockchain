@@ -128,13 +128,11 @@ async fn step_start_nodes_with_wallet_resources(
         }
     }
 
-    let nodes_to_start_ordered = start_nodes_order_respecting_dependencies(
-        nodes_to_start,
-        world.nodes_info.keys().cloned().collect(),
-    )
-    .inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?;
+    let nodes_to_start_ordered =
+        start_nodes_order_respecting_dependencies(nodes_to_start, world.nodes_info.keys().cloned())
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            })?;
     for (node_name, wallet_start_info, mut initial_peers) in nodes_to_start_ordered {
         initial_peers.sort();
         initial_peers.dedup();
@@ -345,13 +343,11 @@ async fn step_start_mining_nodes_with_wallet_resources(
         }
     }
 
-    let nodes_to_start_ordered = start_nodes_order_respecting_dependencies(
-        nodes_to_start,
-        world.nodes_info.keys().cloned().collect(),
-    )
-    .inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?;
+    let nodes_to_start_ordered =
+        start_nodes_order_respecting_dependencies(nodes_to_start, world.nodes_info.keys().cloned())
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            })?;
     for (node_name, wallet_start_info, mut initial_peers) in nodes_to_start_ordered {
         initial_peers.sort();
         initial_peers.dedup();

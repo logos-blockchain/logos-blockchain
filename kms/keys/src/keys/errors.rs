@@ -1,7 +1,6 @@
 use std::any::{type_name, type_name_of_val};
 
 use thiserror::Error;
-use tokio::task::JoinError;
 
 use crate::keys::secured_key::SecuredKey;
 
@@ -17,8 +16,6 @@ pub enum KeyError {
     ZkSignError(#[from] lb_zksign::ZkSignError),
     #[error("Unsupported operator `{operator}` for key type `{key}`")]
     UnsupportedKeyOperator { operator: String, key: String },
-    #[error(transparent)]
-    FailedOperatorCall(JoinError),
 }
 
 impl From<EncodingError> for KeyError {

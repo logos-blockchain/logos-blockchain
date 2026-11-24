@@ -592,6 +592,7 @@ async fn a_duplicate_over_an_old_epoch_connection_carries_no_reaction() {
     receiver.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Sender sends X again, bypassing its own `Forwarded` guard. From
@@ -655,6 +656,7 @@ async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_n
     receiver.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Sender sends garbage data over the old-epoch connection.
@@ -734,12 +736,14 @@ async fn a_peer_that_offends_on_an_old_epoch_connection_loses_its_current_epoch_
     receiver.behaviour_mut().start_new_epoch(
         (memberships[1].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Re-connect for the new epoch.
     sender.behaviour_mut().start_new_epoch(
         (memberships[0].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
     sender.connect_and_wait_for_upgrade(&mut receiver).await;
     assert!(
@@ -841,6 +845,7 @@ async fn duplicate_message_from_old_epoch_after_epoch_rotation_is_suppressed() {
     receiver.behaviour_mut().start_new_epoch(
         (memberships[2].clone(), 1.into()),
         TestProofsVerifier::accepting(),
+        None,
     );
 
     // Sender B sends the identical message X through its (still-open)

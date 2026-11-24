@@ -2,10 +2,11 @@ use std::marker::PhantomData;
 
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
+use tokio::sync::oneshot;
 
 use crate::{
     ServiceComponents,
-    message::{DataPayload, ProxyServiceMessage, ServiceMessage},
+    message::{DataPayload, PayloadTooLarge, ProxyServiceMessage, ServiceMessage},
 };
 
 /// Marker trait for the top-level blend service, used to parametrize
@@ -31,6 +32,8 @@ impl<T> BlendServiceData for T where
 pub enum ApiError {
     #[error("Failed to establish connection to blend-service: {0}")]
     CommsFailure(String),
+    #[error(transparent)]
+    PayloadTooLarge(#[from] PayloadTooLarge),
 }
 
 /// Typed wrapper over the blend service relay, exposing the blend queries and
@@ -76,11 +79,18 @@ where
     RuntimeServiceId: Sync,
 {
     /// Publish a payload to the blend network. The exit node hands it over to
-    /// whichever local service owns that kind of payload. Fire-and-forget.
+    /// whichever local service owns that kind of payload.
+    ///
+    /// Returns once Blend has taken it, or refused it as larger than a payload
+    /// body of the current epoch, or failed to take it.
     pub async fn publish(&self, payload: DataPayload) -> Result<(), ApiError> {
+        let (reply, accepted) = oneshot::channel();
         self.relay
-            .send(ServiceMessage::Blend(payload).into())
+            .send(ProxyServiceMessage::Blend { payload, reply })
             .await
-            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Blend")))
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Blend")))?;
+        accepted
+            .await
+            .map_err(|error| ApiError::CommsFailure(format!("{error} while receiving Blend")))?
     }
 }

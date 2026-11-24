@@ -3,7 +3,10 @@ use std::ops::RangeInclusive;
 use lb_cryptarchia_engine::{Epoch, Slot, UncleSlots};
 use rpds::HashTrieSetSync;
 
-use crate::Config;
+use crate::{
+    Config,
+    config::{EraScheduledConfig, config_for_epoch},
+};
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockDensity {
@@ -14,20 +17,33 @@ pub struct BlockDensity {
 }
 
 impl BlockDensity {
-    pub fn new(epoch: Epoch, config: &Config) -> Self {
+    pub fn new(epoch: Epoch, eras: &EraScheduledConfig) -> Self {
+        Self::of_epoch_starting_at(
+            eras.starting_slot_for_epoch(epoch),
+            config_for_epoch(eras, epoch),
+        )
+    }
+
+    pub fn from_genesis_config(config: &Config) -> Self {
+        Self::of_epoch_starting_at(Slot::genesis(), config)
+    }
+
+    fn of_epoch_starting_at(first_slot: Slot, config: &Config) -> Self {
         Self {
-            period_range: Self::compute_period_range(epoch, config),
+            period_range: Self::compute_period_range(first_slot, config),
             occupied_slots: HashTrieSetSync::new_sync(),
         }
     }
 
-    /// The range of slots used to compute the block density for a given epoch
+    /// The range of slots used to compute the block density of the epoch that
+    /// starts at `first_slot` under `config`: the slots before the epoch
+    /// snapshots the total stake of the next epoch.
     ///
     /// If epoch length is 100 slots, and epoch phases are 3/3/4 slots,
     /// the block density for epoch 2 will be computed during [200, 259],
     /// which is the Stake Distribution Snapshot + Buffer phases of epoch 2.
-    fn compute_period_range(epoch: Epoch, config: &Config) -> RangeInclusive<Slot> {
-        let snapshot_slot_for_next_epoch = config.total_stake_snapshot(epoch.strict_add(1.into()));
+    fn compute_period_range(first_slot: Slot, config: &Config) -> RangeInclusive<Slot> {
+        let snapshot_slot_for_next_epoch = config.next_epoch_snapshot(first_slot);
         let start = snapshot_slot_for_next_epoch
             .saturating_sub(config.total_stake_inference_period().into());
         let end = snapshot_slot_for_next_epoch.saturating_sub(1.into());
@@ -65,25 +81,28 @@ impl BlockDensity {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
-    use lb_core::sdp::MinStake;
+    use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
-    use crate::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
+    use crate::{
+        mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters},
+        test_utils::{FORK_DIGEST, single_era},
+    };
 
     #[test]
     fn test_initial_block_density_is_zero() {
-        let density = BlockDensity::new(0.into(), &config());
+        let density = BlockDensity::new(0.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(0.into()..=59.into()));
         assert_eq!(density.current_block_density(), 0);
     }
 
     #[test]
     fn test_mark_occupied_slots() {
-        let mut density = BlockDensity::new(1.into(), &config());
+        let mut density = BlockDensity::new(1.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
         density.mark_occupied_slots(Slot::from(100), &UncleSlots::default());
         assert_eq!(density.current_block_density(), 1);
@@ -101,25 +120,37 @@ mod tests {
 
     #[test]
     fn test_mark_occupied_slots_with_uncles() {
-        let mut density = BlockDensity::new(1.into(), &config());
+        let mut density = BlockDensity::new(1.into(), &single_era(config()));
         assert_eq!(density.period_range(), &(100.into()..=159.into()));
 
         // A block and its uncles are marked together.
-        density.mark_occupied_slots(Slot::from(110), &[Slot::from(105)].into());
+        density.mark_occupied_slots(
+            Slot::from(110),
+            &UncleSlots::try_new(vec![Slot::from(105)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 2);
 
         // A slot occupied more than once is counted once:
         // slot 105 by another uncle, and slot 110 by an uncle of another block.
-        density.mark_occupied_slots(Slot::from(120), &[Slot::from(105), Slot::from(110)].into());
+        density.mark_occupied_slots(
+            Slot::from(120),
+            &UncleSlots::try_new(vec![Slot::from(105), Slot::from(110)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 3);
 
         // Uncle slots outside the period are ignored.
-        density.mark_occupied_slots(Slot::from(130), &[Slot::from(99)].into());
+        density.mark_occupied_slots(
+            Slot::from(130),
+            &UncleSlots::try_new(vec![Slot::from(99)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 4);
 
         // A block outside the period is skipped entirely, even if its uncles
         // are within the period (late references).
-        density.mark_occupied_slots(Slot::from(160), &[Slot::from(150)].into());
+        density.mark_occupied_slots(
+            Slot::from(160),
+            &UncleSlots::try_new(vec![Slot::from(150)], 4).unwrap(),
+        );
         assert_eq!(density.current_block_density(), 4);
     }
 
@@ -132,9 +163,10 @@ mod tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 5.try_into().unwrap(),
-                NonNegativeRatio::new(1, 2.try_into().unwrap()),
+                ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
                 1f64.try_into().unwrap(),
                 12.try_into().unwrap(),
+                4,
             ),
             // not used in the tests
             sdp_config: crate::mantle::sdp::Config {
@@ -142,19 +174,38 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: 10.try_into().unwrap(),
-                        message_frequency_per_round: 1.0.try_into().unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: 3.try_into().unwrap(),
                         minimum_network_size: 1.try_into().unwrap(),
                         data_replication_factor: 0,
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
-            faucet_pk: None,
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+            },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -165,6 +216,7 @@ mod tests {
                 },
                 reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 }

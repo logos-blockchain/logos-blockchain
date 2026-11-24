@@ -2,8 +2,8 @@ use lb_binary_codec::canonical::BinaryEncode;
 use serde::{Serialize, Serializer};
 
 use crate::mantle::{
-    GasProfile, Op,
-    gas::{Gas, GasOverflow, OpGasCalculator as _, OperationGas, ThresholdSource},
+    Op, Value,
+    gas::{Gas, GasOverflow, GasProfile, ThresholdSource},
     ledger::ProvableOperation,
     ops::{
         channel::{
@@ -33,14 +33,6 @@ pub enum OpRef<'a> {
     ClaimPowReward(&'a ClaimPowRewardOp),
 }
 
-const fn gas_cost_of<T, Profile>(_op: &T) -> Gas
-where
-    T: OperationGas<Profile>,
-    Profile: GasProfile,
-{
-    T::GAS_COST
-}
-
 const fn code_of<T>(_op: &T) -> u8
 where
     T: ProvableOperation,
@@ -49,39 +41,32 @@ where
 }
 
 impl OpRef<'_> {
-    #[must_use]
-    pub const fn gas_cost<Profile: GasProfile>(&self) -> Gas {
-        match self {
-            Self::ChannelInscribe(op) => gas_cost_of(op),
-            Self::ChannelConfig(op) => gas_cost_of(op),
-            Self::ChannelDeposit(op) => gas_cost_of(op),
-            Self::ChannelWithdraw(op) => gas_cost_of(op),
-            Self::ChannelTransfer(op) => gas_cost_of(op),
-            Self::SDPDeclare(op) => gas_cost_of(op),
-            Self::SDPWithdraw(op) => gas_cost_of(op),
-            Self::SDPActive(op) => gas_cost_of(op),
-            Self::LeaderClaim(op) => gas_cost_of(op),
-            Self::Transfer(op) => gas_cost_of(op),
-            Self::ClaimPowReward(op) => gas_cost_of(op),
-        }
-    }
-
-    pub fn execution_gas<Profile: GasProfile>(
+    /// The execution gas of the Operation under `schedule`. The channel
+    /// Operations its keys authorize pay their cost once per key of the
+    /// threshold, read from `thresholds`, that they are verified against.
+    pub fn execution_gas(
         &self,
+        profile: &GasProfile,
         thresholds: &impl ThresholdSource,
     ) -> Result<Gas, GasOverflow> {
         match self {
-            Self::ChannelInscribe(op) => op.execution_gas(thresholds),
-            Self::ChannelConfig(op) => op.execution_gas(thresholds),
-            Self::ChannelDeposit(op) => op.execution_gas(thresholds),
-            Self::ChannelWithdraw(op) => op.execution_gas(thresholds),
-            Self::ChannelTransfer(op) => op.execution_gas(thresholds),
-            Self::SDPDeclare(op) => op.execution_gas(thresholds),
-            Self::SDPWithdraw(op) => op.execution_gas(thresholds),
-            Self::SDPActive(op) => op.execution_gas(thresholds),
-            Self::LeaderClaim(op) => op.execution_gas(thresholds),
-            Self::Transfer(op) => op.execution_gas(thresholds),
-            Self::ClaimPowReward(op) => op.execution_gas(thresholds),
+            Self::ChannelInscribe(_) => Ok(profile.channel_inscribe),
+            Self::ChannelConfig(op) => profile.channel_config.checked_mul(Value::from(
+                thresholds.configuration_threshold(&op.channel()),
+            )),
+            Self::ChannelDeposit(_) => Ok(profile.channel_deposit),
+            Self::ChannelWithdraw(op) => profile
+                .channel_withdraw
+                .checked_mul(Value::from(thresholds.transfer_threshold(&op.channel_id))),
+            Self::ChannelTransfer(op) => profile
+                .channel_transfer
+                .checked_mul(Value::from(thresholds.transfer_threshold(&op.channel_id))),
+            Self::SDPDeclare(_) => Ok(profile.sdp_declare),
+            Self::SDPWithdraw(_) => Ok(profile.sdp_withdraw),
+            Self::SDPActive(_) => Ok(profile.sdp_active),
+            Self::LeaderClaim(_) => Ok(profile.leader_claim),
+            Self::Transfer(_) => Ok(profile.transfer),
+            Self::ClaimPowReward(_) => Ok(profile.claim_pow_reward),
         }
     }
 

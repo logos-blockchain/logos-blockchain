@@ -1,10 +1,10 @@
-use core::{cell::Cell, convert::Infallible};
+use core::{cell::Cell, convert::Infallible, num::NonZeroU64};
 
 use async_trait::async_trait;
 use futures::future::ready;
 use lb_blend_message::{
     crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-    encap::ProofsVerifier,
+    encap::{MessageLayout, ProofsVerifier},
 };
 use lb_blend_proofs::{
     quota::{self, KeyIndex, ProofOfQuota, VerifiedProofOfQuota, inputs::prove::PublicInputs},
@@ -21,6 +21,14 @@ use crate::{
         core_leader_and_pow::CoreLeaderAndPowProofsGenerator,
     },
 };
+
+/// The layout of test messages carrying `num_blend_layers` blending headers.
+pub fn message_layout(num_blend_layers: u64) -> MessageLayout {
+    MessageLayout {
+        num_blend_layers: NonZeroU64::new(num_blend_layers).unwrap(),
+        payload_body_size: 64,
+    }
+}
 
 pub struct MockCorePoQGenerator;
 

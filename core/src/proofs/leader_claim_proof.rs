@@ -1,6 +1,6 @@
 use lb_binary_codec::{
     bincode::BoundedSerializeOp,
-    canonical::{BinaryDecode, BinaryEncode, DecodeError},
+    canonical::{BinaryDecode, BinaryEncode},
 };
 #[cfg(any(test, feature = "test-utils"))]
 use lb_groth16::CompressedGroth16Proof;
@@ -18,7 +18,8 @@ use crate::{
 
 const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, BinaryDecode)]
+#[decode(from = "[u8; COMPRESSED_PROOF_SIZE]")]
 pub struct Groth16LeaderClaimProof {
     #[serde(with = "proof_serde")]
     proof: lb_poc::PoCProof,
@@ -34,20 +35,11 @@ impl BinaryEncode for Groth16LeaderClaimProof {
     }
 }
 
-impl BinaryDecode for Groth16LeaderClaimProof {
-    type Context = ();
-
-    fn decode<'input>(
-        input: &'input [u8],
-        (): &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (rest, inner) = <[u8; _]>::decode(input, &())?;
-        Ok((
-            rest,
-            Self {
-                proof: lb_poc::PoCProof::from_bytes(&inner),
-            },
-        ))
+impl From<[u8; COMPRESSED_PROOF_SIZE]> for Groth16LeaderClaimProof {
+    fn from(bytes: [u8; COMPRESSED_PROOF_SIZE]) -> Self {
+        Self {
+            proof: lb_poc::PoCProof::from_bytes(&bytes),
+        }
     }
 }
 

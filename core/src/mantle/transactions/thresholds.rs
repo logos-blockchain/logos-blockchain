@@ -38,9 +38,11 @@ impl<'a> RunningThresholds<'a> {
         match op {
             OpRef::ChannelConfig(operation) => {
                 self.transfer_thresholds
-                    .insert(operation.channel, operation.transfer_threshold);
-                self.configuration_thresholds
-                    .insert(operation.channel, operation.configuration_threshold);
+                    .insert(operation.channel(), operation.transfer_threshold().get());
+                self.configuration_thresholds.insert(
+                    operation.channel(),
+                    operation.configuration_threshold().get(),
+                );
             }
             // An inscription creates the channel when it does not exist yet.
             OpRef::ChannelInscribe(operation) => {

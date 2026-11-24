@@ -2,11 +2,9 @@
 
 set -e
 
-export CFG_DEPLOYMENT_PATH="/node-data/deployment.yaml"
-
 /usr/bin/logos-blockchain-faucet \
     --port $FAUCET_PORT \
     --node-base-url $NODE_API_ADDR \
-    --deployment-file $CFG_DEPLOYMENT_PATH \
+    --faucet-pk $FAUCET_PK \
     --drip-amount 1000000000000
 

@@ -1,9 +1,9 @@
 use lb_testing_framework::NodeHttpClient;
 
 use super::{
-    CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress, CucumberWorld,
-    DependentTransactionLoadState, Duration, ManualCommand, Step, StepError, StepResult, TARGET,
-    execute_coin_splits_all_user_wallets,
+    CONTINUOUS_NEXT_WALLET_LOAD_TASK, ContinuousTransactionLoadProgress,
+    ContinuousWorkloadReservations, CucumberWorld, DependentTransactionLoadState, Duration,
+    ManualCommand, Step, StepError, StepResult, TARGET, execute_coin_splits_all_user_wallets,
     execute_continuous_dependent_next_wallet_user_wallet_with_cancellation,
     execute_continuous_next_wallet_user_wallet,
     execute_continuous_next_wallet_user_wallet_with_cancellation,
@@ -167,16 +167,13 @@ async fn step_coin_split_transactions_for_each_user_wallet(
     Ok(())
 }
 
-#[when(
-    expr = "I split available funds in each user wallet into {int} approximately equal outputs with {int} epochs fee headroom"
-)]
+#[when(expr = "I split available funds in each user wallet into {int} approximately equal outputs")]
 async fn step_mempool_diagnostic_split_available_funds(
     world: &mut CucumberWorld,
     step: &Step,
     outputs_per_wallet: usize,
-    epochs_headroom: u32,
 ) -> StepResult {
-    execute_mempool_diagnostic_coin_splits(world, &step.value, outputs_per_wallet, epochs_headroom)
+    execute_mempool_diagnostic_coin_splits(world, &step.value, outputs_per_wallet)
         .await
         .inspect_err(|error| {
             warn!(target: TARGET, "Step `{}` error: {error}", step.value);
@@ -420,12 +417,14 @@ fn start_continuous_next_wallet_load(
                 }),
             );
 
+            // Keep pending retirement and late-inclusion records across rounds.
+            let mut workload_reservations = ContinuousWorkloadReservations::default();
             loop {
                 if *cancellation.borrow() {
                     return Ok(());
                 }
 
-                let (completed_rounds, completed_verified_transactions) = task_progress.snapshot();
+                let (completed_rounds, completed_included_transactions) = task_progress.snapshot();
                 let round = completed_rounds.saturating_add(1);
                 log_continuous_load_timeline_event(
                     &task_event_logger,
@@ -434,7 +433,7 @@ fn start_continuous_next_wallet_load(
                         "round": round,
                         "workload_mode": if dependent_mode { "dependent" } else { "independent" },
                         "transactions_per_round": transactions_per_round,
-                        "completed_verified_transactions": completed_verified_transactions,
+                        "completed_included_transactions": completed_included_transactions,
                     }),
                 );
 
@@ -446,6 +445,7 @@ fn start_continuous_next_wallet_load(
                         &mut cancellation,
                         dependent_state,
                         round,
+                        &mut workload_reservations,
                     )
                     .await
                 } else {
@@ -454,35 +454,40 @@ fn start_continuous_next_wallet_load(
                         &workload_step,
                         &command,
                         &mut cancellation,
+                        &mut workload_reservations,
                     )
                     .await
                 };
-                if let Err(error) = round_execution {
-                    if matches!(&error, StepError::BackgroundTaskCancelled) {
-                        return Ok(());
+                let (included_transaction_count, outstanding_transaction_count) =
+                    match round_execution {
+                    Ok(completion_counts) => completion_counts,
+                    Err(error) => {
+                        if matches!(&error, StepError::BackgroundTaskCancelled) {
+                            return Ok(());
+                        }
+                        let (completed_rounds, completed_included_transactions) =
+                            task_progress.snapshot();
+                        log_continuous_load_timeline_event(
+                            &task_event_logger,
+                            "continuous_transaction_load_failed",
+                            &serde_json::json!({
+                                "failure_stage": "round_execution",
+                                "round": completed_rounds.saturating_add(1),
+                                "workload_mode": if dependent_mode { "dependent" } else { "independent" },
+                                "transactions_per_round": transactions_per_round,
+                                "completed_rounds": completed_rounds,
+                                "completed_included_transactions": completed_included_transactions,
+                                "dependent_burst": task_dependent_state.as_ref()
+                                    .and_then(DependentTransactionLoadState::last_burst_diagnostics),
+                                "error": error.to_string(),
+                            }),
+                        );
+                        return Err(error);
                     }
-                    let (completed_rounds, completed_verified_transactions) =
-                        task_progress.snapshot();
-                    log_continuous_load_timeline_event(
-                        &task_event_logger,
-                        "continuous_transaction_load_failed",
-                        &serde_json::json!({
-                            "failure_stage": "round_execution",
-                            "round": completed_rounds.saturating_add(1),
-                            "workload_mode": if dependent_mode { "dependent" } else { "independent" },
-                            "transactions_per_round": transactions_per_round,
-                            "completed_rounds": completed_rounds,
-                            "completed_verified_transactions": completed_verified_transactions,
-                            "dependent_burst": task_dependent_state.as_ref()
-                                .and_then(DependentTransactionLoadState::last_burst_diagnostics),
-                            "error": error.to_string(),
-                        }),
-                    );
-                    return Err(error);
-                }
+                };
 
-                task_progress.record_completed_round();
-                let (completed_rounds, completed_verified_transactions) = task_progress.snapshot();
+                task_progress.record_completed_round(included_transaction_count);
+                let (completed_rounds, completed_included_transactions) = task_progress.snapshot();
                 let (clock_epoch, clock_slot, clock_query_error) = best_effort_reference_clock(
                     task_reference_time_client.as_ref(),
                     reference_time_client_error.as_deref(),
@@ -495,7 +500,9 @@ fn start_continuous_next_wallet_load(
                         "round": completed_rounds,
                         "workload_mode": if dependent_mode { "dependent" } else { "independent" },
                         "transactions_per_round": transactions_per_round,
-                        "completed_verified_transactions": completed_verified_transactions,
+                        "completed_included_transactions": completed_included_transactions,
+                        "included_transactions_this_round": included_transaction_count,
+                        "outstanding_transactions_this_round": outstanding_transaction_count,
                         "reference_node": CONTINUOUS_LOAD_REFERENCE_NODE,
                         "clock_epoch": clock_epoch,
                         "clock_slot": clock_slot,
@@ -553,10 +560,10 @@ fn step_continuous_transaction_load_is_healthy_and_has_made_progress(
         event = "continuous_transaction_load_health_and_progress",
         task_status = %task_status,
         completed_rounds = checkpoint.completed_rounds,
-        completed_verified_transactions = checkpoint.completed_verified_transactions,
+        completed_included_transactions = checkpoint.completed_included_transactions,
         rounds_since_previous_check = checkpoint.rounds_since_previous_check,
-        verified_transactions_since_previous_check =
-            checkpoint.verified_transactions_since_previous_check,
+        included_transactions_since_previous_check =
+            checkpoint.included_transactions_since_previous_check,
         transactions_per_round = checkpoint.transactions_per_round,
         "Continuous next-wallet transaction load health and progress"
     );
@@ -566,25 +573,27 @@ fn step_continuous_transaction_load_is_healthy_and_has_made_progress(
         &serde_json::json!({
             "task_status": task_status.as_str(),
             "completed_rounds": checkpoint.completed_rounds,
-            "completed_verified_transactions": checkpoint.completed_verified_transactions,
+            "completed_included_transactions": checkpoint.completed_included_transactions,
             "rounds_since_previous_check": checkpoint.rounds_since_previous_check,
-            "verified_transactions_since_previous_check": checkpoint
-                .verified_transactions_since_previous_check,
+            "included_transactions_since_previous_check": checkpoint
+                .included_transactions_since_previous_check,
             "transactions_per_round": checkpoint.transactions_per_round,
         }),
     );
     world.ensure_background_task_healthy(CONTINUOUS_NEXT_WALLET_LOAD_TASK)?;
-    let expected_verified_transactions = checkpoint
+    let maximum_expected_included_transactions = checkpoint
         .rounds_since_previous_check
         .saturating_mul(checkpoint.transactions_per_round);
     if checkpoint.rounds_since_previous_check == 0
-        || checkpoint.verified_transactions_since_previous_check != expected_verified_transactions
+        || checkpoint.included_transactions_since_previous_check == 0
+        || checkpoint.included_transactions_since_previous_check
+            > maximum_expected_included_transactions
     {
         return Err(StepError::StepFail {
             message: format!(
-                "continuous next-wallet transaction load made insufficient progress since the previous check: {} completed round(s), {} verified transaction(s); expected at least one round and {expected_verified_transactions} verified transaction(s)",
+                "continuous next-wallet transaction load made insufficient progress since the previous check: {} completed round(s), {} included transaction(s); expected at least one round and at least one included transaction, with no more than {maximum_expected_included_transactions}",
                 checkpoint.rounds_since_previous_check,
-                checkpoint.verified_transactions_since_previous_check,
+                checkpoint.included_transactions_since_previous_check,
             ),
         });
     }

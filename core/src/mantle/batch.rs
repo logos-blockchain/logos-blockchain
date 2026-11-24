@@ -138,7 +138,7 @@ pub enum Error {
     MalformedLeaderClaimProof(String),
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils {
     use super::{DeferrableProof, DeferredProofs, Error};
 

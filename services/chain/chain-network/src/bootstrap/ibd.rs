@@ -14,11 +14,11 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
-        traits::SignedMantleTx,
+        traits::{SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
 };
-use lb_cryptarchia_sync::GetTipResponse;
+use lb_cryptarchia_sync::TipResponse;
 use lb_log_targets::chain;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
@@ -52,7 +52,7 @@ impl<Cryptarchia, Mempool> IbdBlockProcessor<Block<Cryptarchia::Tx>>
     for ChainNetworkIbdBlockProcessor<Cryptarchia, Mempool>
 where
     Cryptarchia: CryptarchiaServiceData,
-    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + Debug + Clone + Send,
+    Cryptarchia::Tx: SignedMantleTx<Preverified, StandardMode> + StorageSize + Debug + Clone + Send,
     Mempool:
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
 {
@@ -197,9 +197,9 @@ where
 
         // Use `timeout` because `downloader.next()` can stall forever if a
         // download fails and leaves the queue empty.
-        // The timeout lets us re-check `should_poll` and exit cleanly in that case.
-        // Also, the timeout is useful to give the node time for peer discovery
-        // before starting the next IBD round.
+        // The timeout lets us re-check `should_poll` and exit cleanly in that
+        // case. Also, the timeout is useful to give the node time for
+        // peer discovery before starting the next IBD round.
         // TODO: improve `OrphanBlocksDownloader` to simplify this.
         while downloader.should_poll() {
             match tokio::time::timeout(Duration::from_secs(1), downloader.next()).await {
@@ -299,8 +299,8 @@ where
 {
     let tips: HashSet<HeaderId> = join_all(peers.into_iter().map(async |peer| {
         let result: Result<HeaderId, DynError> = match network.request_tip(peer).await {
-            Ok(GetTipResponse::Tip { tip, .. }) => Ok(tip),
-            Ok(GetTipResponse::Failure(reason)) => Err(DynError::from(reason)),
+            Ok(TipResponse::Tip { tip, .. }) => Ok(tip),
+            Ok(TipResponse::Failure(reason)) => Err(DynError::from(reason)),
             Err(e) => Err(e),
         };
         result
@@ -356,7 +356,7 @@ mod tests {
     use std::{
         collections::HashMap,
         iter::empty,
-        num::{NonZero, NonZeroU64},
+        num::{NonZero, NonZeroU32, NonZeroU64},
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -366,20 +366,22 @@ mod tests {
     use futures::stream;
     use lb_core::{
         block::Proposal,
+        era::{AcceptedForkDigests, ForkDigest},
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
-    use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+    use lb_cryptarchia_engine::{EpochConfig, Era, Slot, UncleSlots};
     use lb_ledger::{
-        LedgerState,
-        config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+        ConsensusExcludedKeys, LedgerState,
+        config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
-    use overwatch::{
-        overwatch::OverwatchHandle,
-        services::{ServiceData, relay::OutboundRelay},
+    use lb_network_service::{
+        backends::NetworkBackend,
+        message::{BackendNetworkMsg, ChainSyncEvent},
     };
+    use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
+    use overwatch::{overwatch::OverwatchHandle, services::relay::OutboundRelay};
     use tokio_stream::wrappers::BroadcastStream;
 
     use super::*;
@@ -829,12 +831,15 @@ mod tests {
 
         async fn new(
             _settings: Self::Settings,
-            _network_relay: OutboundRelay<
-                <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-            >,
+            _current_era: Era,
+            _network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         ) -> Self {
             unimplemented!()
         }
+
+        async fn rotate_era(&mut self, _era: Era) {}
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {}
 
         async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError> {
             unimplemented!()
@@ -844,14 +849,14 @@ mod tests {
             unimplemented!()
         }
 
-        async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
+        async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError> {
             let tip = self
                 .providers
                 .iter()
                 .find_map(|(id, p)| (*id == peer).then(|| p.next_tip()))
                 .expect("test setup: peer must exist in providers");
             match tip {
-                Ok(tip) => Ok(GetTipResponse::Tip {
+                Ok(tip) => Ok(TipResponse::Tip {
                     tip: tip.id,
                     slot: tip.slot,
                     height: tip.height,
@@ -860,7 +865,7 @@ mod tests {
             }
         }
 
-        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<TipResponse> {
             Box::new(stream::empty())
         }
 
@@ -917,12 +922,21 @@ mod tests {
 
         fn new(
             _config: Self::Settings,
+            _current_era: Era,
             _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         ) -> Self {
             unimplemented!()
         }
 
         async fn process(&self, _msg: Self::Message) {
+            unimplemented!()
+        }
+
+        async fn rotate_era(&mut self, _era: Era) {
+            unimplemented!()
+        }
+
+        async fn complete_era_transition(&mut self, _ended_era: Era) {
             unimplemented!()
         }
 
@@ -939,9 +953,25 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_genesis(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_config),
-            ledger_config,
+            LedgerState::from_utxos(empty(), &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            single_era(ledger_config),
             lb_cryptarchia_engine::State::Bootstrapping,
+        )
+    }
+
+    /// `config` as the only era, from genesis.
+    fn single_era(config: lb_ledger::Config) -> Arc<EraScheduledConfig> {
+        Arc::new(
+            EraSchedule::new(
+                time::OffsetDateTime::UNIX_EPOCH,
+                EraTiming {
+                    slot_duration: Duration::from_secs(1),
+                    epoch_length: EpochLength::epoch_length(&config),
+                },
+                EraEntriesAfterGenesis::empty(),
+            )
+            .expect("a single era resolves")
+            .map(move |_| config.clone()),
         )
     }
 
@@ -949,15 +979,12 @@ mod tests {
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
@@ -973,9 +1000,10 @@ mod tests {
         };
         let consensus_config = lb_cryptarchia_engine::Config::new(
             NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -988,7 +1016,6 @@ mod tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -996,19 +1023,50 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
-            faucet_pk: None,
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: lb_core::mantle::gas::GasProfile {
+                transfer: 590.into(),
+                channel_config: 56.into(),
+                channel_inscribe: 56.into(),
+                channel_deposit: 590.into(),
+                channel_withdraw: 56.into(),
+                channel_transfer: 56.into(),
+                sdp_declare: 646.into(),
+                sdp_withdraw: 590.into(),
+                sdp_active: 590.into(),
+                leader_claim: 580.into(),
+                claim_pow_reward: 1.into(),
+            },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -1019,6 +1077,7 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 }

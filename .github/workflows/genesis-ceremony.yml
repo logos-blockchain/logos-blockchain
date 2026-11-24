@@ -33,7 +33,7 @@ jobs:
             --inscription-params deployment/ceremony/genesis/$LB_TARGET_ENV/inscribe.yaml \
             --stake-holders deployment/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
             --providers deployment/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
-            --faucet deployment/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
+            --consensus-excluded-keys deployment/ceremony/genesis/$LB_TARGET_ENV/consensus_excluded_keys.yaml \
             --template deployment/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
             --output nodes/node/binary/src/config/deployment/settings.yaml
 
@@ -43,7 +43,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          git add nodes/node/binary/src/config/deployment/settings.yaml
+          git add nodes/node/binary/src/config/deployment/settings.yaml \
+            nodes/node/binary/src/config/deployment/era/schedule
 
           # Only commit and push if there are actual changes
           if git diff --staged --quiet; then

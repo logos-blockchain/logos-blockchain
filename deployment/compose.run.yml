@@ -28,6 +28,7 @@ services:
       - ./deployment:/etc/logos-blockchain
     environment:
       - FAUCET_PORT=18090
+      - FAUCET_PK=0000000000000000000000000000000000000000000000000000000000000000
       - NODE_API_ADDR=http://logos_blockchain_node_0:${NODE0_API_PORT}
     entrypoint: /etc/logos-blockchain/scripts/run_faucet.sh
 

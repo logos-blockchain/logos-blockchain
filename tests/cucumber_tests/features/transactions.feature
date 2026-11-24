@@ -424,7 +424,7 @@ Feature: Transactions
     And I have a cluster with capacity of 3 nodes
     And no nodes are declared as blend providers
     And we use IBD peers
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     And I start nodes with wallet resources:
@@ -449,7 +449,7 @@ Feature: Transactions
     And I have a cluster with capacity of 2 nodes
     And no nodes are declared as blend providers
     And we use IBD peers
-    And I have deployment config override "eras.0.time.slot_duration" as "seconds(1)"
+    And I have deployment config override "eras.0.time.slot_duration_in_seconds" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.numerator" as "1"
     And I have deployment config override "eras.0.cryptarchia.slot_activation_coeff.denominator" as "2"
     And I start nodes with wallet resources:

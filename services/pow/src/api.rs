@@ -5,7 +5,10 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 
-use crate::service::{ClaimableRewardsInfo, PoWError, PoWServiceMessage, PoWStatus};
+use crate::service::{
+    AutoClaimSettings, ClaimableRewardsInfo, PoWError, PoWMiningSettings, PoWServiceMessage,
+    PoWStatus,
+};
 
 /// Marker trait for the `PoW` service, used to parametrize [`PoWServiceApi`]
 /// over the concrete service type while pinning its message type.
@@ -103,7 +106,7 @@ where
         self.relay
             .send(PoWServiceMessage::Claim {
                 claim_address,
-                response: resp_tx,
+                reply_channel: resp_tx,
             })
             .await
             .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Claim")))?;
@@ -120,7 +123,9 @@ where
     pub async fn claimable_rewards(&self) -> Result<ClaimableRewardsInfo, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
-            .send(PoWServiceMessage::ClaimableRewardsInfo { response: resp_tx })
+            .send(PoWServiceMessage::ClaimableRewardsInfo {
+                reply_channel: resp_tx,
+            })
             .await
             .map_err(|error| {
                 ApiError::CommsFailure(format!("{error} while sending ClaimableRewardsInfo"))
@@ -138,13 +143,70 @@ where
     pub async fn status(&self) -> Result<PoWStatus, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
-            .send(PoWServiceMessage::Status { response: resp_tx })
+            .send(PoWServiceMessage::Status {
+                reply_channel: resp_tx,
+            })
             .await
             .map_err(|error| ApiError::CommsFailure(format!("{error} while sending Status")))?;
 
         resp_rx.await.map_err(|relay_err| {
             ApiError::CommsFailure(format!("{relay_err} while receiving Status response"))
         })
+    }
+
+    /// Replace the ticket-search tuning without restarting the node.
+    ///
+    /// Restarts active searches with the new settings.
+    pub async fn set_mining_settings(&self, settings: PoWMiningSettings) -> Result<(), ApiError> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.relay
+            .send(PoWServiceMessage::SetMiningSettings {
+                settings,
+                reply_channel: resp_tx,
+            })
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending SetMiningSettings"))
+            })?;
+
+        resp_rx
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!(
+                    "{error} while receiving SetMiningSettings response"
+                ))
+            })?
+            .map_err(ApiError::SettingsRejected)
+    }
+
+    /// Replace the auto-claim configuration without restarting the node.
+    ///
+    /// The targets are validated against the wallet as they are at startup, so
+    /// a key the wallet does not track is refused and the running
+    /// configuration is left alone.
+    pub async fn set_auto_claim_settings(
+        &self,
+        settings: AutoClaimSettings,
+    ) -> Result<(), ApiError> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.relay
+            .send(PoWServiceMessage::SetAutoClaimSettings {
+                settings,
+                reply_channel: resp_tx,
+            })
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!("{error} while sending SetAutoClaimSettings"))
+            })?;
+
+        resp_rx
+            .await
+            .map_err(|error| {
+                ApiError::CommsFailure(format!(
+                    "{error} while receiving SetAutoClaimSettings response"
+                ))
+            })?
+            .map_err(ApiError::SettingsRejected)
     }
 }
 
@@ -154,4 +216,6 @@ pub enum ApiError {
     CommsFailure(String),
     #[error("Failed to claim PoW rewards: {0}")]
     ClaimFailed(#[from] PoWError),
+    #[error("PoW settings rejected: {0}")]
+    SettingsRejected(PoWError),
 }

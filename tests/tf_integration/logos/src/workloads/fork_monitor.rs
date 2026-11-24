@@ -311,7 +311,7 @@ fn propagation_budget(
     let parameters = deployment.genesis_era_parameters();
     let proposal_interval = parameters
         .time
-        .slot_duration
+        .slot_duration()
         .div_f64(parameters.cryptarchia.slot_activation_coeff.as_f64());
 
     let blend_latency =

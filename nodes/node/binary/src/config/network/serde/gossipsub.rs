@@ -1,7 +1,9 @@
 use core::time::Duration;
 
+use lb_utils::bounded_duration::{MILLI, MinimalBoundedDuration, SECOND};
 use libp2p::gossipsub;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
 /// How long gossipsub remembers seen message IDs before accepting the same
 /// message again.
@@ -14,6 +16,7 @@ const DEFAULT_DUPLICATE_CACHE_TIME: Duration = Duration::from_hours(24);
 
 // A partial copy of gossipsub::Config for deriving Serialize/Deserialize
 // remotely https://serde.rs/remote-derive.html
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 #[expect(
@@ -29,29 +32,37 @@ pub struct Config {
     pub retain_scores: usize,
     pub gossip_lazy: usize,
     pub gossip_factor: f64,
+    #[serde_as(as = "MinimalBoundedDuration<0, MILLI>")]
     pub heartbeat_initial_delay: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<0, MILLI>")]
     pub heartbeat_interval: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub fanout_ttl: Duration,
     pub check_explicit_peers_ticks: u64,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub duplicate_cache_time: Duration,
     pub validate_messages: bool,
     pub allow_self_origin: bool,
     pub do_px: bool,
     pub prune_peers: usize,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub prune_backoff: Duration,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub unsubscribe_backoff: Duration,
     pub backoff_slack: u32,
     pub flood_publish: bool,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub graft_flood_threshold: Duration,
     pub mesh_outbound_min: usize,
     pub opportunistic_graft_ticks: u64,
     pub opportunistic_graft_peers: usize,
     pub gossip_retransimission: u32,
-    pub max_messages_per_rpc: Option<usize>,
-    pub max_ihave_length: usize,
-    pub max_ihave_messages: usize,
+    pub max_publish_messages: usize,
+    pub max_control_messages_sent: usize,
+    pub max_control_message_size: usize,
+    pub max_ihave_messages_heartbeat: usize,
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub iwant_followup_time: Duration,
-    pub published_message_ids_cache_time: Duration,
 }
 
 impl Default for Config {
@@ -84,11 +95,11 @@ impl Default for Config {
             opportunistic_graft_ticks: inner_default.opportunistic_graft_ticks(),
             opportunistic_graft_peers: inner_default.opportunistic_graft_peers(),
             gossip_retransimission: inner_default.gossip_retransimission(),
-            max_messages_per_rpc: inner_default.max_messages_per_rpc(),
-            max_ihave_length: inner_default.max_ihave_length(),
-            max_ihave_messages: inner_default.max_ihave_messages(),
+            max_publish_messages: inner_default.max_publish_messages(),
+            max_control_messages_sent: inner_default.max_control_messages_sent(),
+            max_control_message_size: inner_default.max_control_message_size(),
+            max_ihave_messages_heartbeat: inner_default.max_ihave_messages_heartbeat(),
             iwant_followup_time: inner_default.iwant_followup_time(),
-            published_message_ids_cache_time: inner_default.published_message_ids_cache_time(),
         }
     }
 }
@@ -116,9 +127,10 @@ impl From<Config> for gossipsub::Config {
             history_gossip,
             history_length,
             iwant_followup_time,
-            max_ihave_length,
-            max_ihave_messages,
-            max_messages_per_rpc,
+            max_publish_messages,
+            max_control_messages_sent,
+            max_control_message_size,
+            max_ihave_messages_heartbeat,
             mesh_n,
             mesh_n_high,
             mesh_n_low,
@@ -127,7 +139,6 @@ impl From<Config> for gossipsub::Config {
             opportunistic_graft_ticks,
             prune_backoff,
             prune_peers,
-            published_message_ids_cache_time,
             retain_scores,
             unsubscribe_backoff,
             validate_messages,
@@ -152,7 +163,7 @@ impl From<Config> for gossipsub::Config {
             .allow_self_origin(allow_self_origin)
             .prune_peers(prune_peers)
             .prune_backoff(prune_backoff)
-            .unsubscribe_backoff(unsubscribe_backoff.as_secs())
+            .unsubscribe_backoff(unsubscribe_backoff)
             .backoff_slack(backoff_slack)
             .flood_publish(flood_publish)
             .graft_flood_threshold(graft_flood_threshold)
@@ -160,11 +171,11 @@ impl From<Config> for gossipsub::Config {
             .opportunistic_graft_ticks(opportunistic_graft_ticks)
             .opportunistic_graft_peers(opportunistic_graft_peers)
             .gossip_retransimission(gossip_retransimission)
-            .max_messages_per_rpc(max_messages_per_rpc)
-            .max_ihave_length(max_ihave_length)
-            .max_ihave_messages(max_ihave_messages)
-            .iwant_followup_time(iwant_followup_time)
-            .published_message_ids_cache_time(published_message_ids_cache_time);
+            .max_publish_messages(max_publish_messages)
+            .max_control_messages_sent(max_control_messages_sent)
+            .max_control_message_size(max_control_message_size)
+            .max_ihave_messages_heartbeat(max_ihave_messages_heartbeat)
+            .iwant_followup_time(iwant_followup_time);
 
         if validate_messages {
             builder = builder.validate_messages();

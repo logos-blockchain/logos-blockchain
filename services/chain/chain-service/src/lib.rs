@@ -9,35 +9,41 @@ mod sync;
 #[cfg(test)]
 mod tests;
 mod uncle;
+mod verified;
 
 use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
     pin::Pin,
-    time::Duration,
+    sync::Arc,
 };
 
 use educe::Educe;
 use futures::{Stream, TryStreamExt as _};
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_core::{
-    block::{Block, UncleHeaders, genesis::GenesisBlock},
+    block::{HeaderError, TxInBlock, UncleHeaders, genesis::GenesisBlock},
+    era::ForkDigest,
     events::Events,
-    header::HeaderId,
+    header::{Header, HeaderId},
     mantle::{
         TxHash,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
+    proofs::leader_proof::LeaderProof as _,
     sdp::{Declaration, DeclarationId},
 };
-use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks, UncleSlots};
+use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey};
 pub use lb_ledger::EpochState;
-use lb_ledger::LedgerState;
+use lb_ledger::{
+    LedgerState, config::EraScheduledConfig, mantle::sdp::rewards::blend::RewardEstimate,
+};
 use lb_log_targets::chain;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
@@ -64,9 +70,10 @@ use tracing_futures::Instrument as _;
 pub use crate::{
     bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
     service::phases::PhaseTag,
-    states::CryptarchiaConsensusState,
+    states::{CryptarchiaConsensusState, TipEra, saved_tip_era},
     sync::config::{BlockProviderConfig, SyncConfig},
     uncle::UncleError,
+    verified::{BlockWithVerifiedHeader, VerifiedBlockHeader},
 };
 use crate::{
     bootstrap::state::choose_engine_state,
@@ -86,6 +93,14 @@ pub(crate) const LOG_TARGET: &str = chain::service::ROOT;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("Invalid block header: {0}")]
+    InvalidHeader(HeaderError),
+    #[error("Invalid header signature")]
+    InvalidSignature,
+    #[error("Block slot {block:?} is not after its parent's slot {parent:?}")]
+    InvalidSlot { parent: Slot, block: Slot },
+    #[error("Invalid proof of leadership")]
+    InvalidLeaderProof,
     #[error("Missing parent while applying block {parent}, {info:?}")]
     ParentMissing {
         parent: HeaderId,
@@ -118,6 +133,8 @@ pub enum Error {
     AwaitingGenesisTime,
     #[error("Invalid uncle {uncle}: {reason}")]
     InvalidUncle { uncle: HeaderId, reason: UncleError },
+    #[error("Block carries {count} uncles, more than the {max} its era allows")]
+    TooManyUncles { count: usize, max: u8 },
     #[error("Batch deferred proof verification error: {0}")]
     BatchDeferredProofVerification(#[from] lb_core::mantle::batch::Error),
 }
@@ -129,7 +146,7 @@ struct InitializedCryptarchia {
 }
 
 struct RecoveryBlocks<Tx> {
-    blocks: Vec<Block<Tx>>,
+    blocks: Vec<BlockWithVerifiedHeader<Tx>>,
     fell_back_to_lib: bool,
 }
 
@@ -139,10 +156,10 @@ pub enum ConsensusMsg<Tx> {
     /// Read-only queries and subscriptions.
     /// These are served in every service phase.
     Query(Query),
-    /// Apply a block to the chain,
+    /// Apply a block whose header is verified to the chain,
     /// and return how the canonical chain changed if successful.
     ApplyBlock {
-        block: Box<Block<Tx>>,
+        block: Box<BlockWithVerifiedHeader<Tx>>,
         reply_channel: oneshot::Sender<Result<AppliedBlock<Tx>, Error>>,
     },
     /// Forward chain sync events from the network to chain-service.
@@ -173,6 +190,11 @@ pub enum Query {
     LibSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<LibUpdate>>,
     },
+    /// Returns the ID and slot of the block of the highest slot in the block
+    /// tree.
+    HighestBlock {
+        reply_channel: oneshot::Sender<(HeaderId, Slot)>,
+    },
     GetHeaders {
         from_descendant: Option<HeaderId>,
         to_ancestor: Option<HeaderId>,
@@ -183,13 +205,39 @@ pub enum Query {
         block_id: HeaderId,
         reply_channel: oneshot::Sender<Option<LedgerState>>,
     },
+    /// Returns the ledger config of the era of `slot`.
+    GetLedgerConfigAtSlot {
+        slot: Slot,
+        reply_channel: oneshot::Sender<lb_ledger::Config>,
+    },
     /// Returns all declarations in the current SDP registry, not snapshot
     GetSdpDeclarations {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
+    /// Returns one declaration from the finalized registry (the LIB state).
+    GetFinalizedSdpDeclaration {
+        declaration_id: DeclarationId,
+        reply_channel: oneshot::Sender<Option<Declaration>>,
+    },
+    /// Returns every declaration for one service from the finalized registry.
+    GetFinalizedSdpDeclarations {
+        service_type: lb_core::sdp::ServiceType,
+        reply_channel: oneshot::Sender<Option<HashMap<DeclarationId, Declaration>>>,
+    },
     /// Returns the frozen SDP snapshot for the current epoch
     GetSdpSnapshot {
         reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
+    },
+    /// Returns the Blend rewards at the tip of the declaration `declaration_id`
+    GetBlendRewards {
+        declaration_id: DeclarationId,
+        reply_channel: oneshot::Sender<Option<BlendRewards>>,
+    },
+    /// Returns the Blend status at the tip, with the declaration
+    /// `declaration_id` if there is one
+    GetBlendStatus {
+        declaration_id: Option<DeclarationId>,
+        reply_channel: oneshot::Sender<Option<BlendStatus>>,
     },
     GetEpochState {
         slot: Slot,
@@ -201,15 +249,16 @@ pub enum Query {
         slot: Slot,
         reply_channel: oneshot::Sender<Result<EpochStateQueryResult, Error>>,
     },
-    GetEpochConfig {
-        reply_channel: oneshot::Sender<(
-            lb_cryptarchia_engine::EpochConfig,
-            lb_cryptarchia_engine::Config,
-        )>,
-    },
     GetBlockEvents {
         id: HeaderId,
         reply_channel: oneshot::Sender<Option<Events>>,
+    },
+    /// Verifies a block header against the block tree and the current slot.
+    VerifyHeader {
+        header: Box<Header>,
+        uncle_headers: Box<UncleHeaders>,
+        signature: Box<Ed25519Signature>,
+        reply_channel: oneshot::Sender<Result<VerifiedBlockHeader, Error>>,
     },
     /// Selects uncles for a new block extending `parent` at `slot`.
     SelectUncles {
@@ -247,6 +296,33 @@ pub struct CryptarchiaInfo {
     pub slot: Slot,
     pub height: u64,
     pub state: State,
+}
+
+/// The Blend rewards of a declaration.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlendRewards {
+    /// The declaration's `zk_id`. Rewards are minted to it.
+    pub zk_id: ZkPublicKey,
+    /// `None` while no epoch is being paid out.
+    pub estimate: Option<RewardEstimate>,
+}
+
+/// The Blend status at the tip.
+#[derive(Debug, Clone)]
+pub struct BlendStatus {
+    pub epoch: Epoch,
+    /// `None` if the declaration is not in the ledger.
+    pub declaration_status: Option<BlendDeclarationStatus>,
+}
+
+/// A declaration's Blend status at the tip.
+#[derive(Debug, Clone)]
+pub struct BlendDeclarationStatus {
+    pub declaration: Declaration,
+    /// Whether the declaration is in the current epoch's Blend snapshot.
+    pub is_in_snapshot: bool,
+    /// `None` while no epoch is being paid out.
+    pub estimate: Option<RewardEstimate>,
 }
 
 /// The epoch state returned by a chain query together with the exact
@@ -287,11 +363,14 @@ pub struct AppliedBlock<Tx> {
     pub tip: HeaderId,
     /// Hashes of the transactions carried by the blocks that entered the
     /// canonical chain, including blocks applied earlier while their branch
-    /// was not canonical.
-    pub newly_canonical_txs: Vec<TxHash>,
+    /// was not canonical, each mapped to the slot of the block carrying it.
+    pub newly_canonical_txs: HashMap<TxHash, Slot>,
     /// Transactions carried by the blocks that left the canonical chain,
-    /// except those also carried by the blocks that entered it.
-    pub reorged_txs: Vec<Tx>,
+    /// except those also carried by the blocks that entered it, each with
+    /// the slot of the block carrying it.
+    pub reorged_txs: Vec<TxInBlock<Tx>>,
+    /// The slot of the latest immutable block after applying the block.
+    pub lib_slot: Slot,
 }
 
 /// Event emitted when a block is processed by cryptarchia.
@@ -352,7 +431,7 @@ impl Cryptarchia {
     pub fn from_genesis(
         genesis_id: HeaderId,
         genesis_ledger_state: LedgerState,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         state: State,
     ) -> Self {
         Self::from_lib(
@@ -360,7 +439,7 @@ impl Cryptarchia {
             genesis_id,
             genesis_ledger_state,
             genesis_id,
-            ledger_config,
+            era_schedule,
             state,
             Slot::genesis(),
             0,
@@ -379,7 +458,7 @@ impl Cryptarchia {
         lib_parent: HeaderId,
         lib_ledger_state: LedgerState,
         genesis_id: HeaderId,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         state: State,
         lib_slot: Slot,
         lib_length: u64,
@@ -389,13 +468,13 @@ impl Cryptarchia {
             consensus: <lb_cryptarchia_engine::Cryptarchia<_>>::from_lib(
                 lib_id,
                 lib_parent,
-                ledger_config.consensus_config.clone(),
+                Arc::new(era_schedule.map(|era| era.parameters.consensus_config.clone())),
                 state,
                 lib_slot,
                 lib_length,
                 lib_uncle_slots,
             ),
-            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, ledger_config),
+            ledger: <lb_ledger::Ledger<_>>::new(lib_id, lib_ledger_state, era_schedule),
             genesis_id,
         }
     }
@@ -435,18 +514,29 @@ impl Cryptarchia {
         self.consensus.lib_branch()
     }
 
+    /// The block of the highest slot in the block tree. It is a tip, since a
+    /// block's slot is higher than its parent's.
+    #[must_use]
+    pub fn highest_branch(&self) -> &Branch<HeaderId> {
+        self.consensus
+            .branches()
+            .branches()
+            .max_by_key(|branch| branch.slot())
+            .expect("the block tree has at least one tip")
+    }
+
     /// Try to apply a block to the chain.
     #[cfg(test)]
     fn try_apply_block<Tx>(
         &mut self,
-        block: Block<Tx>,
+        block: lb_core::block::Block<Tx>,
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
     {
-        let outcome =
-            self.try_apply_block_with_state_retention(block, current_slot, BlockOrigin::Network)?;
+        let block = self.verify_block(block, current_slot)?;
+        let outcome = self.try_apply_block_with_state_retention(&block)?;
         self.prune_ledger_states(outcome.pruned_blocks.all());
         Ok((
             outcome.pruned_blocks,
@@ -455,13 +545,54 @@ impl Cryptarchia {
         ))
     }
 
+    /// Verifies a block header against the block tree at `current_slot`.
+    ///
+    /// Returns [`Error::AlreadyApplied`] without verifying it, if the block is
+    /// already applied.
+    pub fn verify_header(
+        &self,
+        header: Header,
+        uncle_headers: UncleHeaders,
+        signature: Ed25519Signature,
+        current_slot: Slot,
+    ) -> Result<VerifiedBlockHeader, Error> {
+        let id = header.id();
+        if self.ledger.state(&id).is_some() {
+            return Err(Error::AlreadyApplied(id));
+        }
+
+        VerifiedBlockHeader::new(header, uncle_headers, signature, self, current_slot)
+    }
+
+    /// Verifies the header of `block` against the block tree at
+    /// `current_slot`, as chain-network does for a block received in full.
+    #[cfg(test)]
+    fn verify_block<Tx>(
+        &self,
+        block: lb_core::block::Block<Tx>,
+        current_slot: Slot,
+    ) -> Result<BlockWithVerifiedHeader<Tx>, Error>
+    where
+        Tx: StorageSize + lb_core::mantle::traits::Hashable<Hash = TxHash>,
+    {
+        let header = self.verify_header(
+            block.header().clone(),
+            block.uncle_headers().clone(),
+            *block.signature(),
+            current_slot,
+        )?;
+        let transactions =
+            lb_core::block::BlockTransactions::try_new(block.into_transactions(), u16::MAX)
+                .map_err(|err| Error::InvalidBlock(err.to_string()))?;
+        BlockWithVerifiedHeader::new(header, transactions)
+            .map_err(|err| Error::InvalidBlock(err.to_string()))
+    }
+
     /// Apply a block while retaining pruned ledger states until the caller has
     /// observed any canonical transition represented by the result.
     pub(crate) fn try_apply_block_with_state_retention<Tx>(
         &mut self,
-        block: Block<Tx>,
-        current_slot: Slot,
-        origin: BlockOrigin,
+        block: &BlockWithVerifiedHeader<Tx>,
     ) -> Result<TryApplyBlockOutcome, Error>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
@@ -475,36 +606,23 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
-        // Reject blocks from future slots
-        if slot > current_slot {
-            return Err(Error::FutureBlock {
-                block_slot: slot,
-                current_slot,
-            });
-        }
-
-        // A block is valid only if every uncle it carries is valid.
-        if origin == BlockOrigin::Network {
-            self.verify_uncles(&block)?;
-        }
-
         let block_uncle_headers_slots = block.uncle_headers().slots();
-        let leader_proof = header.leader_proof().clone();
-
-        let transactions = block.into_transactions();
+        let leader_proof = header.leader_proof();
 
         // Apply the block to the ledger, and batch-verify ZK proofs.
-        // This ledger update is not finalized yet, and will be committed only after
-        // checking if the block is accepted by the consensus engine.
+        // This ledger update is not finalized yet, and will be committed only
+        // after checking if the block is accepted by the consensus
+        // engine.
         let update = self
             .ledger
-            .prepare_update::<_, _, MainnetGasProfile>(
+            .prepare_update(
                 id,
                 parent,
                 slot,
-                &leader_proof,
+                &leader_proof.entropy(),
+                *leader_proof.voucher_cm(),
                 &block_uncle_headers_slots,
-                transactions.into_iter(),
+                block.transactions_iter().cloned(),
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -546,11 +664,9 @@ impl Cryptarchia {
         let tip = self.tip_branch();
         let lib = self.lib_branch();
         let state = self.ledger.state(&tip.id()).expect("no state for tip");
-        let config = self.ledger.config();
-        let epoch_state = state.epoch_state_for_slot(slot, config)?;
-        let requested_epoch = config
-            .epoch_config
-            .epoch(slot, config.consensus_config.base_period_length());
+        let eras = self.ledger.era_schedule();
+        let epoch_state = state.epoch_state_for_slot(slot, eras)?;
+        let requested_epoch = eras.epoch_for_slot(slot);
 
         Ok(EpochStateQueryResult {
             requested_slot: slot,
@@ -616,13 +732,12 @@ impl Cryptarchia {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
-    pub config: lb_ledger::Config,
+    pub era_schedule: Arc<EraSchedule<(lb_ledger::Config, ForkDigest)>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
-    #[serde(skip)]
     pub recovery_data: RecoveryData,
 }
 
@@ -685,6 +800,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -692,6 +809,7 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
+        + Clone
         + Send
         + Sync
         + Display
@@ -716,6 +834,7 @@ where
         })
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(self) -> Result<(), DynError> {
         let relays: CryptarchiaConsensusRelays<Tx> =
             CryptarchiaConsensusRelays::from_service_resources_handle::<
@@ -725,7 +844,7 @@ where
             .await;
 
         let CryptarchiaSettings {
-            config: ledger_config,
+            era_schedule,
             bootstrap: bootstrap_config,
             starting_state,
             sync: sync_config,
@@ -738,7 +857,7 @@ where
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
+            None,
             BlockBroadcastService<_>,
             StorageService<_>,
             TimeService<_, _>
@@ -746,6 +865,7 @@ where
         .await?;
 
         let (current_slot, slot_timer) = Self::get_slot_timer(&relays).await?;
+        let fork_digests = Arc::new(era_schedule.map(|era| era.parameters.1));
 
         let InitializedCryptarchia {
             cryptarchia,
@@ -754,17 +874,16 @@ where
         } = Self::initialize_cryptarchia(
             &self.state,
             &bootstrap_config,
-            ledger_config.clone(),
+            Arc::new(era_schedule.map(|era| era.parameters.0.clone())),
             &relays,
             &self.new_block_subscription_sender,
             &self.lib_subscription_sender,
-            current_slot,
         )
         .await
         .expect("The chain can't be recovered from storage. Remove the chain data, and sync from genesis");
 
-        // These are blocks that have been pruned by the cryptarchia engine but have not
-        // yet been deleted from the storage layer.
+        // These are blocks that have been pruned by the cryptarchia engine but
+        // have not yet been deleted from the storage layer.
         let storage_blocks_to_remove = delete_stale_blocks_from_storage(
             pruned_blocks.stale_blocks().copied(),
             &self.state.storage_blocks_to_remove,
@@ -776,6 +895,7 @@ where
             persist_recovery_state(
                 &cryptarchia,
                 storage_blocks_to_remove.clone(),
+                &fork_digests,
                 &self.service_resources_handle.state_updater,
             );
         }
@@ -792,8 +912,9 @@ where
 
         let chain_online_notifier = ChainOnlineNotifier::new(*cryptarchia.state());
 
-        // Mark the service as ready. The service is operational and can handle requests
-        // even while in bootstrap mode waiting for IBD+PBP to complete.
+        // Mark the service as ready. The service is operational and can handle
+        // requests even while in bootstrap mode waiting for IBD+PBP to
+        // complete.
         self.notify_service_ready();
 
         let Self {
@@ -807,6 +928,7 @@ where
             cryptarchia,
             service_resources_handle.inbound_relay,
             service_resources_handle.state_updater,
+            fork_digests,
             new_block_subscription_sender,
             lib_subscription_sender,
             chain_online_notifier,
@@ -859,6 +981,8 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryEncode
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + Unpin
@@ -883,7 +1007,7 @@ where
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
-                .send(lb_time_service::TimeServiceMessage::Subscribe { sender })
+                .send(lb_time_service::TimeServiceMessage::SubscribeToEpochSlots { sender })
                 .await
                 .expect("Request time subscription to time service should succeed");
             receiver.await?
@@ -908,18 +1032,17 @@ where
         tip: HeaderId,
         lib: HeaderId,
         storage: StorageApi<Tx>,
-    ) -> Result<Vec<Block<Tx>>, Error> {
+    ) -> Result<Vec<BlockWithVerifiedHeader<Tx>>, Error> {
         let ids = load_block_ids_from_storage(tip, lib, storage.clone())
             .try_collect::<Vec<_>>()
             .await?;
 
         let mut blocks = Vec::new();
-        // `load_block_ids_from_storage` walks from tip back to LIB and includes LIB.
-        // Replay recovery blocks in LIB->tip order, skipping LIB because Cryptarchia
-        // is already initialized from it.
+        // `load_block_ids_from_storage` walks from tip back to LIB and includes
+        // LIB. Replay recovery blocks in LIB->tip order, skipping LIB
+        // because Cryptarchia is already initialized from it.
         for id in ids.into_iter().rev().skip(1) {
-            let block = storage
-                .get_block(&id)
+            let block = BlockWithVerifiedHeader::load_stored(&storage, &id)
                 .await
                 .ok_or(Error::HeaderIdNotFound(id))?;
             blocks.push(block);
@@ -934,7 +1057,8 @@ where
         storage: StorageApi<Tx>,
     ) -> RecoveryBlocks<Tx> {
         if tip == lib {
-            // Cryptarchia already starts from LIB, so there is no branch to replay.
+            // Cryptarchia already starts from LIB, so there is no branch to
+            // replay.
             return RecoveryBlocks {
                 blocks: Vec::new(),
                 fell_back_to_lib: false,
@@ -995,11 +1119,10 @@ where
     async fn initialize_cryptarchia(
         recovery_state: &CryptarchiaConsensusState,
         bootstrap_config: &BootstrapConfig,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         relays: &CryptarchiaConsensusRelays<Tx>,
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
-        current_slot: Slot,
     ) -> Result<InitializedCryptarchia, Error> {
         info!(
             target: LOG_TARGET, tip = ?recovery_state.tip, lib = ?recovery_state.lib, lib_height = recovery_state.lib_block_length, genesis = ?recovery_state.genesis_id,
@@ -1017,7 +1140,7 @@ where
 
         let mut cryptarchia = Self::cryptarchia_from_recovered_lib(
             recovery_state,
-            ledger_config,
+            era_schedule,
             state,
             relays.storage(),
         )
@@ -1068,8 +1191,6 @@ where
             let outcome = process_block(
                 &mut cryptarchia,
                 block,
-                current_slot,
-                BlockOrigin::Storage,
                 relays,
                 new_block_subscription_sender,
                 lib_subscription_sender,
@@ -1105,7 +1226,7 @@ where
     /// storage.
     async fn cryptarchia_from_recovered_lib(
         recovery_state: &CryptarchiaConsensusState,
-        ledger_config: lb_ledger::Config,
+        era_schedule: Arc<EraScheduledConfig>,
         state: State,
         storage: &StorageApi<Tx>,
     ) -> Result<Cryptarchia, Error> {
@@ -1115,7 +1236,7 @@ where
             return Ok(Cryptarchia::from_genesis(
                 genesis_id,
                 recovery_state.lib_ledger_state.clone(),
-                ledger_config,
+                era_schedule,
                 state,
             ));
         }
@@ -1129,25 +1250,11 @@ where
             lib_parent,
             recovery_state.lib_ledger_state.clone(),
             genesis_id,
-            ledger_config,
+            era_schedule,
             state,
             recovery_state.lib_block_slot,
             recovery_state.lib_block_length,
             recovery_state.lib_block_uncle_slots.clone(),
         ))
     }
-}
-
-/// Where a block being applied comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockOrigin {
-    /// A block received from the network, or proposed by this node.
-    Network,
-    /// A block that was already verified and stored by this node, which is
-    /// being replayed during the chain recovery.
-    ///
-    /// The uncle validity rules are skipped for it, since the parent of an
-    /// uncle may be older than LIB, and blocks older than LIB are not
-    /// recovered.
-    Storage,
 }

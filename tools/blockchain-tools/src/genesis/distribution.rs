@@ -19,9 +19,10 @@ pub struct StakeHolderInfo {
     pub stake: NoteValue,
 }
 
-/// `Faucet` is used to register a faucet key with it's value.
+/// `ConsensusExcludedKey` is used to register a consensus-excluded key with
+/// its value.
 #[derive(Clone, Debug, Deserialize)]
-pub struct Faucet {
+pub struct ConsensusExcludedKey {
     pub zk_id: ZkPublicKey,
     pub funds: NoteValue,
 }
@@ -31,12 +32,15 @@ pub struct GenesisTransferOp {
 }
 
 impl GenesisTransferOp {
-    pub fn new(stake_holders: impl Iterator<Item = StakeHolderInfo>, faucet: &Faucet) -> Self {
+    pub fn new(
+        stake_holders: impl Iterator<Item = StakeHolderInfo>,
+        excluded_key: &ConsensusExcludedKey,
+    ) -> Self {
         let mut notes: Vec<Note> = stake_holders
             .map(|stake_holder| Note::new(stake_holder.stake, stake_holder.zk_id))
             .collect();
 
-        notes.push(Note::new(faucet.funds, faucet.zk_id));
+        notes.push(Note::new(excluded_key.funds, excluded_key.zk_id));
 
         let outputs = Outputs::try_new(notes)
             .expect("genesis distribution outputs must fit transfer output bounds");
@@ -74,7 +78,7 @@ pub enum DistributionError {
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
-    faucet: &Faucet,
+    excluded_key: &ConsensusExcludedKey,
 ) -> Result<(GenesisTransferOp, Vec<SDPDeclareOp>), DistributionError>
 where
     S: IntoIterator<Item = StakeHolderInfo> + Clone,
@@ -83,7 +87,7 @@ where
     let stake_holder_keys: HashSet<ZkPublicKey> =
         stake_holders.clone().into_iter().map(|s| s.zk_id).collect();
 
-    let transfer_op = GenesisTransferOp::new(stake_holders.into_iter(), faucet);
+    let transfer_op = GenesisTransferOp::new(stake_holders.into_iter(), excluded_key);
     let mut declarations = Vec::new();
     let mut used_services = HashSet::new();
 
@@ -149,16 +153,16 @@ mod tests {
         let providers = vec![DeclarationConfig {
             provider_id: mock_provider_id(10),
             zk_id: zk_id_1,
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+            locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
         }];
 
-        let faucet = Faucet {
+        let excluded_key = ConsensusExcludedKey {
             zk_id: mock_zk_pk(3),
             funds: 100_000,
         };
 
-        let result = distribute(stake_holders, providers, &faucet);
+        let result = distribute(stake_holders, providers, &excluded_key);
 
         assert!(result.is_ok());
         let (transfer_op, declarations) = result.unwrap();
@@ -186,16 +190,16 @@ mod tests {
         let providers = vec![DeclarationConfig {
             provider_id: mock_provider_id(10),
             zk_id: mock_zk_pk(2),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+            locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
         }];
 
-        let faucet = Faucet {
+        let excluded_key = ConsensusExcludedKey {
             zk_id: mock_zk_pk(3),
             funds: 100_000,
         };
 
-        let result = distribute(stake_holders, providers, &faucet);
+        let result = distribute(stake_holders, providers, &excluded_key);
 
         assert!(matches!(
             result,
@@ -217,23 +221,23 @@ mod tests {
             DeclarationConfig {
                 provider_id: mock_provider_id(10),
                 zk_id,
-                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+                locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
                 service_type: ServiceType::BlendNetwork,
             },
             DeclarationConfig {
                 provider_id: mock_provider_id(11),
                 zk_id,
-                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+                locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
                 service_type: ServiceType::BlendNetwork,
             },
         ];
 
-        let faucet = Faucet {
+        let excluded_key = ConsensusExcludedKey {
             zk_id: mock_zk_pk(3),
             funds: 100_000,
         };
 
-        let result = distribute(stake_holders, providers, &faucet);
+        let result = distribute(stake_holders, providers, &excluded_key);
 
         assert!(matches!(
             result,

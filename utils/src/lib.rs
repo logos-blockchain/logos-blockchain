@@ -183,8 +183,9 @@ pub mod serde {
         deserializer: D,
     ) -> Result<[u8; N], D::Error> {
         if deserializer.is_human_readable() {
-            // This path intentionally accepts both the hex string and byte-array
-            // representations, so it must dispatch through `deserialize_any`.
+            // This path intentionally accepts both the hex string and
+            // byte-array representations, so it must dispatch
+            // through `deserialize_any`.
             deserializer.deserialize_any(FixedBytesVisitor::<N>)
         } else {
             deserialize_human_unreadable_bytes_array(deserializer)
@@ -395,7 +396,7 @@ pub mod serde {
                 A: SeqAccess<'de>,
             {
                 // An empty vector always satisfies an upper-only bound.
-                let capacity = allocation_size_for_hint::<u8, MAX>(sequence.size_hint());
+                let capacity = allocation_size_for_hint::<u8>(sequence.size_hint(), MAX);
                 let mut bytes = UpperBoundedVec::new_unchecked(Vec::with_capacity(capacity));
 
                 while let Some(byte) = sequence.next_element()? {

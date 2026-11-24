@@ -4,7 +4,6 @@ use std::{
 };
 
 use backon::{ExponentialBuilder, Retryable as _};
-use rand::RngCore as _;
 use tokio::{
     net::UdpSocket,
     time::{Duration, timeout},
@@ -92,6 +91,6 @@ fn create_backoff(
 /// Generate a random 12-byte nonce for PCP requests
 pub fn generate_nonce() -> [u8; 12] {
     let mut nonce = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    rand_010::fill(&mut nonce);
     nonce
 }

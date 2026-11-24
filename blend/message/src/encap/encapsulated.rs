@@ -12,14 +12,14 @@ use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
 };
 use lb_log_targets::blend;
-use serde::{Deserialize, Serialize};
-use serde_with::serde_as;
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde_with::{DeserializeAs as _, serde_as};
 
 use crate::{
     Error, PayloadType,
     crypto::{domains, key_ext::SharedKeyExt as _},
     encap::{
-        ProofsVerifier,
+        MessageLayout, ProofsVerifier,
         decapsulated::{PartDecapsulationOutput, PrivateHeaderDecapsulationOutput},
         validated::{
             EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
@@ -29,7 +29,7 @@ use crate::{
     message::{
         BlendingHeader, Payload, PublicHeader,
         blending_header::BLENDING_HEADER_ENCODED_SIZE,
-        payload::{PAYLOAD_ENCODED_SIZE, PaddedPayloadBody},
+        payload::{PAYLOAD_HEADER_SIZE, PaddedPayloadBody, payload_encoded_size},
         public_header::VerifiedPublicHeader,
     },
 };
@@ -39,13 +39,17 @@ const LOG_TARGET: &str = blend::message::ROOT;
 pub type MessageIdentifier = ZkHash;
 
 /// An unverified encapsulated message that is received from a peer.
-#[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Educe, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryDecode)]
+// Encoding (and sending) of unverified messages should not be done outside of
+// tests, so this impl is only available in tests.
+#[cfg_attr(test, derive(BinaryEncode))]
 #[educe(Debug)]
 pub struct EncapsulatedMessage {
     /// A public header that is not encapsulated.
     public_header: PublicHeader,
     /// Encapsulated parts
     #[educe(Debug(ignore))] // too long
+    #[context]
     encapsulated_part: EncapsulatedPart,
 }
 
@@ -122,46 +126,10 @@ impl EncapsulatedMessage {
     }
 }
 
-// Encoding (and sending) of unverified messages should not be done outside of
-// tests, so this impl is only available in tests.
-#[cfg(test)]
-impl BinaryEncode for EncapsulatedMessage {
-    fn encoded_length(&self) -> usize {
-        self.public_header
-            .encoded_length()
-            .checked_add(self.encapsulated_part.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.public_header.encode_into(out);
-        self.encapsulated_part.encode_into(out);
-    }
-}
-
-impl BinaryDecode for EncapsulatedMessage {
-    type Context = NonZeroU64;
-
-    fn decode<'input>(
-        input: &'input [u8],
-        context: &Self::Context,
-    ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, public_header) = PublicHeader::decode(input, &())?;
-        let (input, encapsulated_part) = EncapsulatedPart::decode(input, context)?;
-        Ok((
-            input,
-            Self {
-                public_header,
-                encapsulated_part,
-            },
-        ))
-    }
-}
-
 /// Part of the message that should be encapsulated.
 // TODO: Consider having `InitializedPart` that just finished the initialization step and doesn't
 // have `decapsulate` method.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash, BinaryEncode)]
 pub struct EncapsulatedPart {
     private_header: EncapsulatedPrivateHeader,
     payload: EncapsulatedPayload,
@@ -297,29 +265,16 @@ impl EncapsulatedPart {
     }
 }
 
-impl BinaryEncode for EncapsulatedPart {
-    fn encoded_length(&self) -> usize {
-        self.private_header
-            .encoded_length()
-            .checked_add(self.payload.encoded_length())
-            .unwrap()
-    }
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.private_header.encode_into(out);
-        self.payload.encode_into(out);
-    }
-}
-
 impl BinaryDecode for EncapsulatedPart {
-    type Context = NonZeroU64;
+    type Context = MessageLayout;
 
     fn decode<'input>(
         input: &'input [u8],
-        context: &Self::Context,
+        layout: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, private_header) = EncapsulatedPrivateHeader::decode(input, context)?;
-        let (input, payload) = EncapsulatedPayload::decode(input, &())?;
+        let (input, private_header) =
+            EncapsulatedPrivateHeader::decode(input, &layout.num_blend_layers)?;
+        let (input, payload) = EncapsulatedPayload::decode(input, &layout.payload_body_size)?;
         Ok((
             input,
             Self {
@@ -411,16 +366,17 @@ impl EncapsulatedPrivateHeader {
     }
 
     // Randomize the private header, then fill the last `inputs.len()` blending
-    // headers in the reconstructable way, so that the corresponding signatures can
-    // be verified later. Plus, encapsulate those last `inputs.len()` headers.
+    // headers in the reconstructable way, so that the corresponding signatures
+    // can be verified later. Plus, encapsulate those last `inputs.len()`
+    // headers.
     //
     // The private header always holds `num_layers` (`ß_max`) blending headers,
     // however many times the message is actually encapsulated. When the sender
     // encapsulates fewer times, the leading `ß_max - inputs.len()` headers are
     // filled with non-reconstructable random bytes, so the encapsulation count
     // leaks neither through the message size (constant) nor through the header
-    // contents. This follows steps 2-4 of the Message Initialization section of the
-    // spec: <https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/message-encapsulation.md>.
+    // contents. This follows steps 2-4 of the Message Initialization section of
+    // the spec: <https://github.com/logos-co/logos-lips/blob/master/docs/blockchain/raw/message-encapsulation.md>.
     //
     // Example: for `num_layers` 3 and 2 inputs,
     // BlendingHeaders[0]: RANDOM
@@ -428,9 +384,10 @@ impl EncapsulatedPrivateHeader {
     // BlendingHeaders[2]:               Enc(inputs[0], RND(inputs[0]))
     //
     // Notation:
-    // - RANDOM: Pseudo-random bytes generated from fresh entropy, reconstructable
-    //   by nobody
-    // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER` DST
+    // - RANDOM: Pseudo-random bytes generated from fresh entropy,
+    //   reconstructable by nobody
+    // - RND(seed): Pseudo-random bytes generated from `seed` with the `HEADER`
+    //   DST
     // - Enc(key, data): Encrypt `data` by XOR-ing with RND(key)
     fn from_inputs(inputs: &[EncapsulationInput], num_layers: usize) -> Self {
         let unused_layers = num_layers.saturating_sub(inputs.len());
@@ -465,8 +422,8 @@ impl EncapsulatedPrivateHeader {
     }
 
     /// Encapsulates the private header.
-    // TODO: Use two different types for encapsulated and unencapsulated blending
-    // headers?
+    // TODO: Use two different types for encapsulated and unencapsulated
+    // blending headers?
     fn encapsulate(
         mut self,
         shared_key: &SharedKey,
@@ -481,8 +438,8 @@ impl EncapsulatedPrivateHeader {
 
         // Replace the first blending header with the new one.
         // We don't distinguish between locally-generated (valid)
-        // `BlendingHeader`s and received (unverified) ones, so we use regular `PoQ` and
-        // `PoSel` instead of their verified counterparts.
+        // `BlendingHeader`s and received (unverified) ones, so we use regular
+        // `PoQ` and `PoSel` instead of their verified counterparts.
         self.replace_first(EncapsulatedBlendingHeader::initialize(&BlendingHeader {
             signing_pubkey,
             proof_of_quota: *proof_of_quota.as_ref(),
@@ -509,8 +466,8 @@ impl EncapsulatedPrivateHeader {
     where
         Verifier: ProofsVerifier,
     {
-        // We call a bunch of `.expect()`s in the following code, so we need to check we
-        // are dealing with a message with at least one layer.
+        // We call a bunch of `.expect()`s in the following code, so we need to
+        // check we are dealing with a message with at least one layer.
         if self.0.is_empty() {
             return Err(Error::EmptyEncapsulationInputs);
         }
@@ -539,7 +496,8 @@ impl EncapsulatedPrivateHeader {
                 Error::ProofOfSelectionVerificationFailed(selection::Error::Verification)
             })?;
 
-        // Build a new public header with the values in the first blending header.
+        // Build a new public header with the values in the first blending
+        // header.
         let public_header = PublicHeader::new(signing_pubkey, &proof_of_quota, signature);
 
         // Shift blending headers one leftward.
@@ -726,35 +684,34 @@ impl BinaryDecode for EncapsulatedBlendingHeader {
 
 /// A payload encapsulated zero or more times.
 ///
-/// Always exactly [`PAYLOAD_ENCODED_SIZE`] bytes; boxed because that is ~34 KiB
+/// Always exactly the bytes of the [`Payload`] it was initialized from (the
+/// cipher is length-preserving), [`payload_encoded_size`] of its body size;
+/// boxed because a body is padded to the largest block proposal of its era
 /// and must not be stored inline in
 /// [`EncapsulatedPart`]/[`EncapsulatedMessage`].
 #[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub(crate) struct EncapsulatedPayload(
-    #[serde_as(as = "serde_with::Bytes")] Box<[u8; PAYLOAD_ENCODED_SIZE]>,
-);
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
+pub(crate) struct EncapsulatedPayload(#[serde_as(as = "serde_with::Bytes")] Box<[u8]>);
 
 impl EncapsulatedPayload {
     /// Build a [`EncapsulatedPayload`] by serializing a [`Payload`]
     /// without any encapsulation.
     pub(crate) fn initialize(payload: &Payload) -> Self {
-        let mut bytes = Vec::with_capacity(PAYLOAD_ENCODED_SIZE);
-        payload.encode_into(&mut bytes);
-        Self(
-            bytes
-                .into_boxed_slice()
-                .try_into()
-                .expect("A Payload always encodes to PAYLOAD_ENCODED_SIZE bytes."),
-        )
+        Self(payload.encode())
+    }
+
+    /// The size the body of the payload is padded to.
+    fn body_size(&self) -> u16 {
+        u16::try_from(self.0.len() - PAYLOAD_HEADER_SIZE)
+            .expect("An encapsulated payload holds the bytes of a payload.")
     }
 
     /// Try to deserialize into a [`Payload`].
     /// If there is no encapsulation left, and if the bytes are valid,
     /// the deserialization will succeed.
     fn try_deserialize(&self) -> Result<Payload, Error> {
-        let (_remaining, payload) =
-            Payload::decode(&self.0[..], &()).map_err(|_| Error::PayloadDeserializationFailed)?;
+        let (_remaining, payload) = Payload::decode(&self.0, &self.body_size())
+            .map_err(|_| Error::PayloadDeserializationFailed)?;
         Ok(payload)
     }
 
@@ -775,9 +732,25 @@ impl EncapsulatedPayload {
     }
 }
 
+// Serde reads are trusted (the node's own recovery state): the payload keeps
+// the size it was stored with, as long as it holds the bytes of a payload.
+impl<'de> Deserialize<'de> for EncapsulatedPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bytes: Box<[u8]> = serde_with::Bytes::deserialize_as(deserializer)?;
+        if !(PAYLOAD_HEADER_SIZE..=payload_encoded_size(u16::MAX)).contains(&bytes.len()) {
+            return Err(D::Error::custom(Error::PayloadDeserializationFailed));
+        }
+
+        Ok(Self(bytes))
+    }
+}
+
 impl BinaryEncode for EncapsulatedPayload {
     fn encoded_length(&self) -> usize {
-        PAYLOAD_ENCODED_SIZE
+        self.0.len()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -786,18 +759,14 @@ impl BinaryEncode for EncapsulatedPayload {
 }
 
 impl BinaryDecode for EncapsulatedPayload {
-    type Context = ();
+    /// The size the body of the payload is padded to.
+    type Context = u16;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        body_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (bytes, remaining) = take::<Self>(input, PAYLOAD_ENCODED_SIZE)?;
-        let boxed = bytes
-            .to_vec()
-            .into_boxed_slice()
-            .try_into()
-            .expect("Take guarantees the length");
-        Ok((remaining, Self(boxed)))
+        let (bytes, remaining) = take::<Self>(input, payload_encoded_size(*body_size))?;
+        Ok((remaining, Self(bytes.into())))
     }
 }

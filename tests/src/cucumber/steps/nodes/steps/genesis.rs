@@ -42,6 +42,14 @@ pub(super) fn validate_genesis_time_change(
     Ok(())
 }
 
+pub(super) const fn set_explicit_genesis_time(
+    world: &mut CucumberWorld,
+    genesis_time: GenesisTime,
+) {
+    world.set_genesis_time(genesis_time);
+    world.lifecycle.explicit_genesis_time = true;
+}
+
 #[given(expr = "the chain starts {int} seconds from now")]
 #[when(expr = "the chain starts {int} seconds from now")]
 async fn step_chain_starts_from_now(
@@ -49,11 +57,17 @@ async fn step_chain_starts_from_now(
     step: &Step,
     seconds: i64,
 ) -> StepResult {
-    let node_binary_profile = if world.tokio_console_profile_enabled() {
-        NodeBinaryProfile::TokioConsole
-    } else {
-        NodeBinaryProfile::default()
-    };
+    let node_binary_profile = world
+        .lifecycle
+        .node_binary_profile
+        .clone()
+        .unwrap_or_else(|| {
+            NodeBinaryProfile::from_env_or(if world.tokio_console_profile_enabled() {
+                NodeBinaryProfile::TokioConsole
+            } else {
+                NodeBinaryProfile::default()
+            })
+        });
     ensure_node_binary_built(&node_binary_profile)
         .await
         .map_err(|error| StepError::Preflight {
@@ -67,7 +81,7 @@ async fn step_chain_starts_from_now(
         genesis_time,
     )?;
 
-    world.set_genesis_time(genesis_time);
+    set_explicit_genesis_time(world, genesis_time);
     if world.nodes_info.is_empty() && world.cluster.manual_cluster_spec.is_some() {
         rebuild_pending_local_manual_cluster(world).await?;
     }

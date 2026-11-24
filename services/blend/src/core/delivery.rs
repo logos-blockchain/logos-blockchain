@@ -1,13 +1,15 @@
 use core::{
-    num::NonZeroU64,
     pin::Pin,
     task::{Context, Poll},
+    time::Duration,
 };
 use std::collections::HashMap;
 
 use futures::{Stream, StreamExt as _, stream::BoxStream};
 use lb_blend::message::MessageIdentifier;
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::Era;
+use tokio::time::Instant;
 
 use crate::{
     core::{LOG_TARGET, dispatcher::PayloadDispatcher},
@@ -19,38 +21,35 @@ use crate::{
 /// encapsulated-but-not-yet-blended messages.
 pub struct FailureDetector {
     inner: InnerFailureDetector,
-    /// Payloads encapsulated and waiting to be blended.
-    encapsulated: HashMap<MessageIdentifier, (Epoch, DataPayload)>,
+    /// Payloads encapsulated and waiting to be blended, with the epoch they
+    /// were built in and the delivery deadline of its era.
+    encapsulated: HashMap<MessageIdentifier, (Epoch, DataPayload, Duration)>,
 }
 
 impl FailureDetector {
     #[must_use]
-    pub fn new(
-        maximum_blending_delay: NonZeroU64,
-        round_duration_in_seconds: NonZeroU64,
-        payload_broadcasts: BoxStream<'static, DataPayload>,
-    ) -> Self {
+    pub fn new(payload_broadcasts: BoxStream<'static, DataPayload>) -> Self {
         Self {
-            inner: InnerFailureDetector::new(
-                maximum_blending_delay,
-                round_duration_in_seconds,
-                payload_broadcasts,
-            ),
+            inner: InnerFailureDetector::new(payload_broadcasts),
             encapsulated: HashMap::new(),
         }
     }
 
     /// Register the link between a payload and its outermost encapsulation, so
     /// that when the encapsulated message is actually released, we can record
-    /// what payload it belongs to.
+    /// what payload it belongs to. `delivery_deadline` is how long the network
+    /// then has to deliver it: the deadline of the era of `epoch`.
     pub fn mark_payload_as_encapsulated(
         &mut self,
         id: MessageIdentifier,
         payload: DataPayload,
         epoch: Epoch,
+        delivery_deadline: Duration,
     ) {
         assert!(
-            self.encapsulated.insert(id, (epoch, payload)).is_none(),
+            self.encapsulated
+                .insert(id, (epoch, payload, delivery_deadline))
+                .is_none(),
             "Two locally-generated messages share the identifier {id:?}, which means a key was spent twice."
         );
     }
@@ -65,8 +64,11 @@ impl FailureDetector {
     /// recovery state. Claiming a payload twice is what cannot happen, and
     /// `remove` is what stops it.
     pub fn mark_encapsulated_payload_as_released(&mut self, id: MessageIdentifier) {
-        if let Some((_, payload)) = self.encapsulated.remove(&id) {
-            self.inner.mark_payload_as_blended(payload);
+        if let Some((_, payload, delivery_deadline)) = self.encapsulated.remove(&id) {
+            let deadline = Instant::now()
+                .checked_add(delivery_deadline)
+                .expect("The delivery deadline overflowed the clock.");
+            self.inner.mark_payload_as_blended(payload, deadline);
         }
     }
 
@@ -76,7 +78,8 @@ impl FailureDetector {
     /// such epochs.
     pub fn drop_unreleased_payloads_for_epoch(&mut self, expiring: Epoch) {
         let before = self.encapsulated.len();
-        self.encapsulated.retain(|_, (epoch, _)| *epoch != expiring);
+        self.encapsulated
+            .retain(|_, (epoch, _, _)| *epoch != expiring);
         let dropped = before.checked_sub(self.encapsulated.len()).unwrap();
         if dropped > 0 {
             tracing::debug!(
@@ -98,11 +101,12 @@ impl FailureDetector {
     pub async fn drain_pending_message_queue<Dispatcher, RuntimeServiceId>(
         self,
         payload_dispatcher: &Dispatcher,
+        era: Era,
     ) where
         Dispatcher: PayloadDispatcher<RuntimeServiceId> + Sync,
     {
         self.inner
-            .drain_pending_message_queue(payload_dispatcher)
+            .drain_pending_message_queue(payload_dispatcher, era)
             .await;
     }
 }
@@ -125,7 +129,7 @@ mod tests {
 
     use crate::{
         core::delivery::FailureDetector,
-        delivery::test_utils::{DEADLINE, ROUND_IN_SECONDS, proposal, transaction, until},
+        delivery::test_utils::{DEADLINE, DELIVERY_DEADLINE, proposal, transaction, until},
         message::DataPayload,
     };
 
@@ -137,11 +141,7 @@ mod tests {
     /// puts payloads on the broadcasting channel it watches.
     fn new_failure_monitor() -> (FailureDetector, Instant, mpsc::UnboundedSender<DataPayload>) {
         let (channel, broadcasts) = mpsc::unbounded_channel();
-        let detection = FailureDetector::new(
-            DEADLINE,
-            ROUND_IN_SECONDS,
-            UnboundedReceiverStream::new(broadcasts).boxed(),
-        );
+        let detection = FailureDetector::new(UnboundedReceiverStream::new(broadcasts).boxed());
         (detection, Instant::now(), channel)
     }
 
@@ -152,7 +152,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_released_payload_the_network_never_delivers_is_broadcast_at_the_deadline() {
         let (mut detection, start, _channel) = new_failure_monitor();
-        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0), DELIVERY_DEADLINE);
         detection.mark_encapsulated_payload_as_released(id(1));
 
         assert!(
@@ -176,7 +176,7 @@ mod tests {
     async fn the_deadline_runs_from_the_release_and_not_from_the_encapsulation() {
         let (mut detection, start, _channel) = new_failure_monitor();
         // Built now, but held back — waiting on the proofs that will back it.
-        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0), DELIVERY_DEADLINE);
         assert_eq!(until(&mut detection, start, HELD_FOR).await, []);
         detection.mark_encapsulated_payload_as_released(id(1));
 
@@ -188,6 +188,35 @@ mod tests {
         );
         assert_eq!(
             until(&mut detection, start, DEADLINE.get() + HELD_FOR + 2).await,
+            vec![proposal()]
+        );
+    }
+
+    /// A payload is owed the deadline of the era it was encapsulated in, even
+    /// when an epoch of another era has started by the time it is released: it
+    /// crosses the network under its own epoch's era.
+    #[tokio::test(start_paused = true)]
+    async fn a_payload_keeps_the_deadline_of_the_era_it_was_encapsulated_in() {
+        let (mut detection, start, _channel) = new_failure_monitor();
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0), DELIVERY_DEADLINE);
+        // The next epoch opens an era with a shorter deadline before the old
+        // epoch releases its message.
+        detection.mark_payload_as_encapsulated(
+            id(2),
+            transaction(),
+            Epoch::new(1),
+            DELIVERY_DEADLINE / 2,
+        );
+        detection.mark_encapsulated_payload_as_released(id(1));
+        detection.mark_encapsulated_payload_as_released(id(2));
+
+        assert_eq!(
+            until(&mut detection, start, DEADLINE.get() / 2 + 1).await,
+            vec![transaction()],
+            "the shorter deadline of the era that started is not the old epoch's payload's"
+        );
+        assert_eq!(
+            until(&mut detection, start, DEADLINE.get() + 1).await,
             vec![proposal()]
         );
     }
@@ -206,8 +235,13 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_expiring_epoch_drops_what_it_never_released() {
         let (mut detection, start, _channel) = new_failure_monitor();
-        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
-        detection.mark_payload_as_encapsulated(id(2), transaction(), Epoch::new(0));
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0), DELIVERY_DEADLINE);
+        detection.mark_payload_as_encapsulated(
+            id(2),
+            transaction(),
+            Epoch::new(0),
+            DELIVERY_DEADLINE,
+        );
 
         detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
 
@@ -226,8 +260,13 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_expiring_epoch_leaves_nothing_that_can_never_be_claimed() {
         let (mut detection, ..) = new_failure_monitor();
-        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0));
-        detection.mark_payload_as_encapsulated(id(2), transaction(), Epoch::new(0));
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(0), DELIVERY_DEADLINE);
+        detection.mark_payload_as_encapsulated(
+            id(2),
+            transaction(),
+            Epoch::new(0),
+            DELIVERY_DEADLINE,
+        );
 
         detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
         detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
@@ -247,7 +286,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn an_expiring_epoch_leaves_the_current_one_alone() {
         let (mut detection, ..) = new_failure_monitor();
-        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(1));
+        detection.mark_payload_as_encapsulated(id(1), proposal(), Epoch::new(1), DELIVERY_DEADLINE);
 
         detection.drop_unreleased_payloads_for_epoch(Epoch::new(0));
 

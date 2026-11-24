@@ -18,7 +18,7 @@ use crate::{
         },
         transactions::{
             GENESIS_REQUIRED_OPS, GenesisTx, MAX_GENESIS_DECLARATIONS, OpProofs, Ops, SignedOps,
-            VerificationError, genesis_tx,
+            TxList, VerificationError, genesis_tx,
         },
     },
 };
@@ -153,8 +153,7 @@ impl<'de> Deserialize<'de> for GenesisBlock {
             uncle_headers: raw.uncle_headers,
             transactions: raw.transactions,
         };
-        block
-            .validate_body_root()
+        Block::validate_body_root(&block.header, &block.uncle_headers, &block.transactions)
             .map_err(serde::de::Error::custom)?;
 
         Ok(Self(block))
@@ -171,7 +170,8 @@ impl GenesisBlock {
     pub fn genesis(genesis_tx: GenesisTx) -> Self {
         let header = Header::genesis(&genesis_tx);
         let signature = Ed25519Signature::from_bytes(&[0; 64]);
-        let transactions = BlockTransactions::from([genesis_tx]);
+        let transactions = BlockTransactions::try_new(vec![genesis_tx], 1)
+            .expect("One transaction is within a maximum of one.");
         Self(Block {
             header,
             signature,
@@ -1248,7 +1248,8 @@ impl GenesisBlockBuilder<WithAll> {
         .chain(sdp_declarations.into_iter().map(Op::SDPDeclare))
         .collect();
         let n = ops.len();
-        let Ok(capped_ops) = Ops::try_from(ops) else {
+        let Ok(capped_ops) = TxList::try_from(ops).map(|ops| Ops::new(GenesisTx::FORK_DIGEST, ops))
+        else {
             // This should never happen because the builder doesn't allow more
             // ops than can fit in a genesis tx, but we have to handle the error
             // just in case.
@@ -1301,7 +1302,7 @@ mod tests {
         block::SignedHeader,
         header::HeaderId,
         mantle::{
-            CryptarchiaParameter, GenesisTime, NoteId,
+            ConsensusExcludedKeys, GenesisParameters, GenesisTime, NoteId,
             ledger::verification_mode::GenesisMode,
             ops::{
                 OpRef,
@@ -1312,16 +1313,19 @@ mod tests {
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
-    // ── helpers ───────────────────────────────────────────────────────────────
+    // ── helpers
+    // ───────────────────────────────────────────────────────────────
 
     fn valid_inscription() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
             inscription: Inscription::new_unchecked(
-                CryptarchiaParameter {
+                GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    genesis_time: GenesisTime::new(1000),
+                    start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    pow_reward_pool: 0,
+                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1334,10 +1338,12 @@ mod tests {
         InscriptionOp {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
             inscription: Inscription::new_unchecked(
-                CryptarchiaParameter {
+                GenesisParameters {
                     chain_id: "test-chain".to_owned().try_into().unwrap(),
-                    genesis_time: GenesisTime::new(1000),
+                    start_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
+                    pow_reward_pool: 0,
+                    consensus_excluded_keys: ConsensusExcludedKeys::empty(),
                 }
                 .encode_to_vec(),
             ),
@@ -1358,7 +1364,7 @@ mod tests {
             service_note_id: NoteId(Fr::from(u64::from(id))),
             zk_id: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[1; 32]).unwrap()),
-            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+            locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
         }
     }
 
@@ -1370,7 +1376,8 @@ mod tests {
         assert_eq!(block.transactions_iter().len(), 1);
     }
 
-    // ── helpers for the with_genesis_tx path ──────────────────────────────────
+    // ── helpers for the with_genesis_tx path
+    // ──────────────────────────────────
 
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedOps<Preverified, GenesisMode> {
         let mut ops = vec![
@@ -1401,14 +1408,19 @@ mod tests {
             .collect::<Vec<_>>();
         let ops_proofs = OpProofs::new_unchecked(proofs_vec);
 
-        SignedOps::from_parts_trusted(Ops::new_unchecked(ops), ops_proofs).unwrap()
+        SignedOps::from_parts_trusted(
+            Ops::new(GenesisTx::FORK_DIGEST, TxList::new_unchecked(ops)),
+            ops_proofs,
+        )
+        .unwrap()
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {
         GenesisTx::from_tx(make_signed_genesis_tx(extra_ops)).expect("valid genesis tx")
     }
 
-    // ── with_genesis_tx path ──────────────────────────────────────────────────
+    // ── with_genesis_tx path
+    // ──────────────────────────────────────────────────
 
     #[test]
     fn with_genesis_tx_builds_block() {
@@ -1426,7 +1438,8 @@ mod tests {
         assert_block_valid(&block);
     }
 
-    // ── GenesisBlockBuilder traits ────────────────────────────────────────────
+    // ── GenesisBlockBuilder traits
+    // ────────────────────────────────────────────
 
     #[test]
     fn default_equals_new() {
@@ -1453,7 +1466,8 @@ mod tests {
         );
     }
 
-    // ── op-accumulation happy paths (all six orderings) ───────────────────────
+    // ── op-accumulation happy paths (all six orderings)
+    // ───────────────────────
 
     #[test]
     fn order_note_inscription_declaration() {
@@ -1571,7 +1585,8 @@ mod tests {
         assert_eq!(genesis_tx.sdp_declarations().count(), 2);
     }
 
-    // ── set_inscription overwrites ────────────────────────────────────────────
+    // ── set_inscription overwrites
+    // ────────────────────────────────────────────
 
     #[test]
     fn set_inscription_overwrites_previous() {
@@ -1598,7 +1613,8 @@ mod tests {
         assert_block_valid(&block);
     }
 
-    // ── invalid inscription is rejected at build time ─────────────────────────
+    // ── invalid inscription is rejected at build time
+    // ─────────────────────────
 
     #[test]
     fn invalid_inscription_fails_at_build() {
@@ -1618,7 +1634,8 @@ mod tests {
         );
     }
 
-    // ── add_notes / add_declarations batch helpers ────────────────────────────
+    // ── add_notes / add_declarations batch helpers
+    // ────────────────────────────
 
     #[test]
     fn add_declarations_accepts_maximum_capacity() {
@@ -1779,7 +1796,8 @@ mod tests {
         );
     }
 
-    // ── op ordering is correct ────────────────────────────────────────────────
+    // ── op ordering is correct
+    // ────────────────────────────────────────────────
 
     #[test]
     fn ops_are_ordered_transfer_inscription_declarations() {

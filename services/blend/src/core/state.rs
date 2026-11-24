@@ -174,7 +174,8 @@ mod service {
                 Option<RecoveryServiceState<BackendSettings, NetworkSettings>>,
             >,
         ) -> Result<Self, error::EpochMismatch> {
-            // Check if `current_epoch_token_collector` has the correct epoch number.
+            // Check if `current_epoch_token_collector` has the correct epoch
+            // number.
             let provided_current_epoch = current_epoch_token_collector.epoch();
             if provided_current_epoch != last_seen_epoch {
                 return Err(error::EpochMismatch {
@@ -183,7 +184,8 @@ mod service {
                 });
             }
 
-            // Check if `old_epoch_token_collector` has the correct epoch number.
+            // Check if `old_epoch_token_collector` has the correct epoch
+            // number.
             if let Some(old_epoch_token_collector) = &old_epoch_token_collector {
                 let provided_current_epoch = old_epoch_token_collector.epoch().strict_add(1.into());
                 if provided_current_epoch != last_seen_epoch {
@@ -297,7 +299,6 @@ mod service {
             self.old_epoch_token_collector.take()
         }
 
-        #[cfg(test)]
         pub(crate) const fn current_epoch_token_collector(&self) -> &EpochBlendingTokenCollector {
             &self.current_epoch_token_collector
         }
@@ -578,7 +579,7 @@ mod recovery_state {
     use serde::{Deserialize, Serialize};
 
     use crate::core::{
-        settings::StartingBlendConfig as BlendConfig,
+        settings::CoreServiceSettings,
         state::{ServiceState, serde::SerializableServiceState},
     };
 
@@ -613,7 +614,7 @@ mod recovery_state {
         for RecoveryServiceState<BackendSettings, NetworkSettings>
     {
         type Error = Infallible;
-        type Settings = BlendConfig<BackendSettings, NetworkSettings>;
+        type Settings = CoreServiceSettings<BackendSettings, NetworkSettings>;
 
         fn from_settings(_: &Self::Settings) -> Result<Self, Self::Error> {
             Ok(Self {

@@ -1,9 +1,21 @@
 use std::collections::HashMap;
 
-use lb_libp2p::{ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig};
-use lb_network_service::{backends::libp2p::config::Libp2pConfig, config::NetworkConfig};
+use lb_core::{self, header::HeaderId};
+use lb_cryptarchia_engine::time::EraSchedule;
+use lb_libp2p::{
+    ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
+    protocol_name::ProtocolScope,
+};
+use lb_network_service::{
+    backends::libp2p::config::{Libp2pConfig, Libp2pEraConfig},
+    config::NetworkConfig,
+};
+use libp2p::gossipsub::{IdentTopic, TopicHash};
 
-use crate::config::{deployment::ProtocolNames, network::serde::Config};
+use crate::config::{
+    deployment::{EraDefinition, era::ruleset::EraRuleset},
+    network::serde::Config,
+};
 
 pub mod serde;
 
@@ -14,27 +26,37 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    pub fn into_network_config(
+    /// The settings of the network service on the chain that starts from the
+    /// genesis block `genesis_id`: the user's, and in each era of `eras` the
+    /// era's fork digest, chain sync protocol, largest block and topics.
+    #[must_use]
+    pub fn into_network_service_settings(
         self,
-        protocol_names: &ProtocolNames,
-        max_data_size_by_topic: HashMap<lb_libp2p::gossipsub::TopicHash, usize>,
+        genesis_id: HeaderId,
+        eras: &EraSchedule<EraDefinition>,
     ) -> NetworkConfig<Libp2pConfig> {
-        let Self { user } = self;
-
+        let chain = ProtocolScope::Chain(genesis_id);
+        let user = self.user;
         NetworkConfig {
             backend: Libp2pConfig {
                 initial_peers: user.backend.initial_peers,
-                max_data_size_by_topic,
                 inner: SwarmConfig {
                     host: user.backend.swarm.host,
                     port: user.backend.swarm.port,
                     node_key: user.backend.swarm.node_key,
-                    kad_protocol_name: protocol_names.kademlia.clone(),
-                    identify_protocol_name: protocol_names.identify.clone(),
-                    chain_sync_protocol_name: protocol_names.chain_sync.clone(),
+                    kad_protocol_name: chain.to_stream_protocol_with_name("kad"),
+                    identify_protocol_name: chain.to_stream_protocol_with_name("identify"),
                     gossipsub_config: user.backend.swarm.gossipsub.into(),
                     kademlia_config: KademliaSettings {
-                        caching: user.backend.swarm.kademlia.caching.map(Into::into),
+                        caching: Some(
+                            user.backend
+                                .swarm
+                                .kademlia
+                                .cache_size
+                                .map_or(CachingSettings::Disabled, |max_peers| {
+                                    CachingSettings::Enabled { max_peers }
+                                }),
+                        ),
                         replication_factor: user.backend.swarm.kademlia.replication_factor,
                         parallelism: user.backend.swarm.kademlia.parallelism,
                         disjoint_query_paths: user.backend.swarm.kademlia.disjoint_query_paths,
@@ -45,18 +67,18 @@ impl ServiceConfig {
                             .kademlia
                             .kbucket_inserts
                             .map(Into::into),
-                        periodic_bootstrap_interval_secs: user
+                        periodic_bootstrap_interval: user
                             .backend
                             .swarm
                             .kademlia
-                            .periodic_bootstrap_interval_secs,
-                        query_timeout_secs: user.backend.swarm.kademlia.query_timeout_secs,
+                            .periodic_bootstrap_interval,
+                        query_timeout: user.backend.swarm.kademlia.query_timeout,
                     },
                     identify_config: IdentifySettings {
                         agent_version: user.backend.swarm.identify.agent_version,
                         cache_size: user.backend.swarm.identify.cache_size,
                         hide_listen_addrs: user.backend.swarm.identify.hide_listen_addrs,
-                        interval_secs: user.backend.swarm.identify.interval_secs,
+                        interval: user.backend.swarm.identify.interval,
                         push_listen_addr_updates: user
                             .backend
                             .swarm
@@ -66,19 +88,62 @@ impl ServiceConfig {
                     chain_sync_config: ChainSyncSettings {
                         peer_response_timeout: user.backend.swarm.chain_sync.peer_response_timeout,
                         max_inbound_requests: user.backend.swarm.chain_sync.max_inbound_requests,
+                        inbound_download_stream_timeout: user
+                            .backend
+                            .swarm
+                            .chain_sync
+                            .inbound_download_stream_timeout,
                     },
                     nat_config: user.backend.swarm.nat.into(),
                 },
+                era_schedule: eras.map(|era| {
+                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    let fork = ProtocolScope::Fork(era.parameters.fork_digest);
+                    Libp2pEraConfig {
+                        fork_digest: era.parameters.fork_digest,
+                        chain_sync_protocol_name: fork.to_stream_protocol_with_name("chainsync"),
+                        chain_sync_max_block_size: parameters.cryptarchia.max_block_size(),
+                        max_data_size_by_topic: max_data_size_by_topic(
+                            &fork.to_string_with_name("mempool"),
+                            &fork.to_string_with_name("cryptarchia"),
+                            parameters.cryptarchia.max_transactions_size as usize,
+                            parameters.cryptarchia.max_proposal_size(),
+                        ),
+                    }
+                }),
             },
         }
     }
+}
+
+/// The data limits of an era's topics, whose largest transaction takes
+/// `max_transaction_size` bytes and largest block proposal
+/// `max_proposal_size` bytes.
+fn max_data_size_by_topic(
+    transaction_topic: &str,
+    proposal_topic: &str,
+    max_transaction_size: usize,
+    max_proposal_size: usize,
+) -> HashMap<TopicHash, usize> {
+    let mut limits: HashMap<TopicHash, usize> = HashMap::new();
+    for (topic, required) in [
+        (transaction_topic, max_transaction_size),
+        (proposal_topic, max_proposal_size),
+    ] {
+        let topic = IdentTopic::new(topic).hash();
+        limits
+            .entry(topic)
+            .and_modify(|existing| *existing = (*existing).max(required))
+            .or_insert(required);
+    }
+    limits
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use lb_core::block::Proposal;
+    use lb_core::block::{BlockLimits, Proposal};
     use lb_libp2p::{
         PeerId,
         behaviour::gossipsub::configure_topic_size_limits,
@@ -86,7 +151,32 @@ mod tests {
         identity::{self, ed25519},
     };
 
-    use crate::MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE;
+    use super::max_data_size_by_topic;
+
+    /// The most bytes a transaction of the tests' era may take.
+    const MAX_TRANSACTION_SIZE: usize = 2 * 1024 * 1024;
+
+    /// The largest proposal of an era that allows four uncles.
+    fn max_proposal_size() -> usize {
+        Proposal::max_encoded_size(BlockLimits {
+            max_uncles: 4,
+            max_transactions: 1024,
+            max_transactions_size: MAX_TRANSACTION_SIZE as u32,
+        })
+    }
+
+    #[test]
+    fn shared_application_topics_use_the_largest_data_limit() {
+        let topic = "/shared/application/topic";
+        let limits =
+            max_data_size_by_topic(topic, topic, MAX_TRANSACTION_SIZE, max_proposal_size());
+        let topic_hash = gossipsub::IdentTopic::new(topic).hash();
+
+        assert_eq!(
+            limits.get(&topic_hash),
+            Some(&MAX_TRANSACTION_SIZE.max(max_proposal_size()))
+        );
+    }
 
     #[test]
     fn production_payload_maxima_fit_the_author_envelopes() {
@@ -96,11 +186,11 @@ mod tests {
         let limits = [
             (
                 "/logos-blockchain-standalone-local/mempool/1.0.0",
-                MAX_TRANSACTION_GOSSIP_BINCODE_PAYLOAD_SIZE,
+                MAX_TRANSACTION_SIZE,
             ),
             (
                 "/logos-blockchain-standalone-local/cryptarchia/1.0.0",
-                Proposal::MAX_ENCODED_SIZE,
+                max_proposal_size(),
             ),
         ];
 
@@ -136,14 +226,12 @@ mod tests {
                 .validation_mode(gossipsub::ValidationMode::None)
                 .build()
                 .unwrap();
-            let mut behaviour = gossipsub::Behaviour::<
-                gossipsub::IdentityTransform,
-                gossipsub::AllowAllSubscriptionFilter,
-            >::new(
-                gossipsub::MessageAuthenticity::Author(author),
-                config.clone(),
-            )
-            .unwrap();
+            let mut behaviour =
+                gossipsub::Behaviour::<
+                    gossipsub::IdentityTransform,
+                    gossipsub::AllowAllSubscriptionFilter,
+                >::new(gossipsub::MessageAuthenticity::Author(author), config)
+                .unwrap();
             assert!(!matches!(
                 behaviour.publish(gossipsub::IdentTopic::new(topic), vec![0; max_payload_size]),
                 Err(gossipsub::PublishError::MessageTooLarge)

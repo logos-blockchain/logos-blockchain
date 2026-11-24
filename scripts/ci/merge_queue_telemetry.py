@@ -62,6 +62,9 @@ SAFE_ENVIRONMENT_FIELDS = (
 QUEUE_SUFFIX_PATTERN = re.compile(
     r"(?:^|/)gh-readonly-queue/(.+)/pr-(\d+)-[0-9a-fA-F]{5,}$"
 )
+QUEUE_REF_PATTERN = re.compile(
+    r"(?:^|/)gh-readonly-queue/(.+)/pr-(\d+)-([0-9a-fA-F]{5,})$"
+)
 MAX_API_PAGES = 10
 MAX_QUEUE_ENTRIES = 100
 HTTP_TIMEOUT_SECONDS = 20
@@ -142,6 +145,25 @@ def queue_branch_from_queue_ref(ref: Any) -> str | None:
         return None
     match = QUEUE_SUFFIX_PATTERN.search(ref)
     return match.group(1) if match else None
+
+
+def parse_queue_ref(ref: Any) -> dict[str, Any]:
+    """Parse the candidate PR, target branch, and base-SHA suffix from a queue ref."""
+    if not isinstance(ref, str):
+        return {"valid": False, "pr_number": None, "target_branch": None, "base_suffix_sha": None}
+    matches = list(QUEUE_REF_PATTERN.finditer(ref))
+    if len(matches) != 1:
+        return {"valid": False, "pr_number": None, "target_branch": None, "base_suffix_sha": None}
+    match = matches[0]
+    number = int(match.group(2))
+    if number < 1:
+        return {"valid": False, "pr_number": None, "target_branch": None, "base_suffix_sha": None}
+    return {
+        "valid": True,
+        "pr_number": number,
+        "target_branch": match.group(1),
+        "base_suffix_sha": match.group(3),
+    }
 
 
 def _pull_numbers(value: Any) -> list[int]:
@@ -234,6 +256,22 @@ def graphql_errors_affect_field(errors: list[Any], *field_names: str) -> bool:
     return False
 
 
+def _queue_proof_graphql_errors(errors: list[Any]) -> list[Any]:
+    """Return errors that could hide queue membership, commits, or stack state."""
+    required = {
+        "mergeQueue", "entries", "nodes", "headCommit", "baseCommit",
+        "pullRequest", "number", "stack", "stackEntry", "position", "size",
+    }
+    relevant = []
+    for error in errors:
+        path = error.get("path") if isinstance(error, dict) else None
+        if not isinstance(path, list) or not path:
+            relevant.append(error)
+        elif any(component in required for component in path):
+            relevant.append(error)
+    return relevant
+
+
 def _graphql_pull_request(
     response: Any,
 ) -> tuple[dict[str, Any] | None, str, list[Any]]:
@@ -315,7 +353,9 @@ def _normalize_commit(value: Any) -> str | None:
     return None
 
 
-def normalize_merge_queue_entry(value: Any) -> dict[str, Any]:
+def normalize_merge_queue_entry(
+    value: Any, *, snapshot_index: int | None = None
+) -> dict[str, Any]:
     """Keep entry identity/admission and candidate-independent stack topology.
 
     Queue position is scheduling state, separate from native stack position.
@@ -324,8 +364,12 @@ def normalize_merge_queue_entry(value: Any) -> dict[str, Any]:
     value = value if isinstance(value, dict) else {}
     pr = value.get("pullRequest")
     pr = pr if isinstance(pr, dict) else {}
-    stack = pr.get("stack") or {}
-    stack_entry = pr.get("stackEntry") or {}
+    stack = pr.get("stack")
+    stack_entry = pr.get("stackEntry")
+    stack_object = stack if isinstance(stack, dict) else {}
+    stack_entry_object = stack_entry if isinstance(stack_entry, dict) else {}
+    entry_stack = stack_entry_object.get("stack")
+    entry_stack_object = entry_stack if isinstance(entry_stack, dict) else {}
     queue = value.get("mergeQueue") or {}
     return {
         "id": value.get("id"), "enqueued_at": value.get("enqueuedAt"),
@@ -334,10 +378,16 @@ def normalize_merge_queue_entry(value: Any) -> dict[str, Any]:
         "head_commit": _normalize_commit(value.get("headCommit")),
         "merge_queue": {"id": queue.get("id")} if isinstance(queue, dict) and queue else None,
         "pull_request_number": pr.get("number") if isinstance(pr, dict) else None,
-        "stack_id": stack.get("id") if isinstance(stack, dict) else None,
-        "stack_number": stack.get("number") if isinstance(stack, dict) else None,
-        "stack_size": stack.get("size") if isinstance(stack, dict) else None,
-        "stack_position": stack_entry.get("position") if isinstance(stack_entry, dict) else None,
+        "stack_field_present": isinstance(value.get("pullRequest"), dict) and "stack" in pr,
+        "stack_entry_field_present": isinstance(value.get("pullRequest"), dict) and "stackEntry" in pr,
+        "stack_value": stack,
+        "stack_entry_value": stack_entry,
+        "stack_id": stack_object.get("id"),
+        "stack_number": stack_object.get("number"),
+        "stack_size": stack_object.get("size"),
+        "stack_position": stack_entry_object.get("position"),
+        "stack_entry_stack_id": entry_stack_object.get("id"),
+        "snapshot_index": snapshot_index,
         "raw": value,
     }
 
@@ -365,7 +415,10 @@ def normalize_merge_queue(
         nodes = entries.get("nodes")
         if isinstance(nodes, list):
             entries_nodes_available = True
-            normalized_entries = [normalize_merge_queue_entry(node) for node in nodes]
+            normalized_entries = [
+                normalize_merge_queue_entry(node, snapshot_index=index)
+                for index, node in enumerate(nodes)
+            ]
             for entry in normalized_entries:
                 if entry.get("merge_queue") is None:
                     entry["merge_queue"] = {"id": value.get("id")}
@@ -388,12 +441,18 @@ def normalize_merge_queue(
             and isinstance(page_info, dict)
             and page_info.get("has_next_page") is False
             and truncated is False
-            and all(isinstance(entry.get("pull_request_number"), int)
+            and type(total_count) is int
+            and total_count == len(normalized_entries)
+            and isinstance(value.get("id"), str)
+            and bool(value.get("id"))
+            and all(type(entry.get("pull_request_number")) is int
                     for entry in normalized_entries)
-            and not graphql_errors_affect_field(
-                graphql_errors or [], "entries", "nodes", "pageInfo", "totalCount",
-                "pullRequest", "number"
+            and all(
+                isinstance(entry.get("head_commit"), str)
+                and re.fullmatch(r"[0-9a-fA-F]{40,64}", entry["head_commit"])
+                for entry in normalized_entries
             )
+            and not _queue_proof_graphql_errors(graphql_errors or [])
             and not any(
                 isinstance(error, dict)
                 and isinstance(error.get("path"), list)
@@ -470,6 +529,371 @@ def normalize_merge_queue_response(response: Any) -> dict[str, Any]:
         "graphql_available": graphql_available,
         "graphql_status": graphql_status,
         "graphql_errors": graphql_errors,
+    }
+
+
+def _valid_oid(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F]{40,64}", value) is not None
+
+
+def _rest_base_repository(pr: Any) -> str | None:
+    if not isinstance(pr, dict):
+        return None
+    base = pr.get("base")
+    repository = base.get("repo") if isinstance(base, dict) else None
+    full_name = repository.get("full_name") if isinstance(repository, dict) else None
+    return full_name if isinstance(full_name, str) and full_name else None
+
+
+def candidate_queue_binding(
+    merge_group: dict[str, Any],
+    queue_ref: Any,
+    repository_queue: dict[str, Any],
+    observed_at: str,
+    rest_pr: Any,
+    expected_repository: str | None,
+    *,
+    additional_queue_refs: list[Any] | None = None,
+) -> dict[str, Any]:
+    """Prove candidate ownership from one complete repository queue observation."""
+    parsed_ref = parse_queue_ref(queue_ref)
+    parsed_additional = [
+        {"raw": value, **parse_queue_ref(value)}
+        for value in (additional_queue_refs or [])
+        if value is not None
+    ]
+    refs_agree = bool(parsed_ref["valid"]) and all(
+        item["valid"]
+        and item["pr_number"] == parsed_ref["pr_number"]
+        and item["target_branch"] == parsed_ref["target_branch"]
+        and item["base_suffix_sha"].casefold() == parsed_ref["base_suffix_sha"].casefold()
+        for item in parsed_additional
+    )
+    group = merge_group if isinstance(merge_group, dict) else {}
+    candidate_sha = group.get("head_sha")
+    base_sha = group.get("base_sha")
+    base_ref = group.get("base_ref")
+    expected_branch = normalize_branch_ref(base_ref)
+    snapshot = repository_queue.get("merge_queue") if isinstance(repository_queue, dict) else None
+    snapshot = snapshot if isinstance(snapshot, dict) else None
+    entries = snapshot.get("entries", []) if snapshot is not None else []
+    entries = entries if isinstance(entries, list) else []
+    snapshot_complete = bool(snapshot and snapshot.get("entries_complete"))
+    errors = repository_queue.get("graphql_errors", []) if isinstance(repository_queue, dict) else []
+    relevant_errors = _queue_proof_graphql_errors(errors if isinstance(errors, list) else [])
+    matches = [
+        entry for entry in entries
+        if isinstance(entry, dict) and entry.get("head_commit") == candidate_sha
+    ] if isinstance(candidate_sha, str) else []
+    matched = matches[0] if len(matches) == 1 else None
+    rest_number = rest_pr.get("number") if isinstance(rest_pr, dict) else None
+    rest_repository = _rest_base_repository(rest_pr)
+    suffix = parsed_ref.get("base_suffix_sha")
+    predicates = {
+        "queue_ref_parse_valid": parsed_ref["valid"],
+        "queue_ref_signals_agree": refs_agree,
+        "repository_snapshot_complete": snapshot_complete,
+        "no_relevant_graphql_errors": not relevant_errors,
+        "exactly_one_candidate_head_match": len(matches) == 1,
+        "matched_pr_matches_queue_ref": bool(
+            matched and type(matched.get("pull_request_number")) is int
+            and matched.get("pull_request_number") == parsed_ref.get("pr_number")
+        ),
+        "matched_base_matches_merge_group": bool(
+            matched and isinstance(base_sha, str) and matched.get("base_commit") == base_sha
+        ),
+        "queue_ref_suffix_matches_merge_group_base": bool(
+            isinstance(suffix, str) and _valid_oid(base_sha)
+            and base_sha[:len(suffix)].casefold() == suffix.casefold()
+        ),
+        "queue_ref_target_matches_merge_group_base_ref": bool(
+            isinstance(parsed_ref.get("target_branch"), str)
+            and expected_branch is not None
+            and parsed_ref.get("target_branch") == expected_branch
+        ),
+        "rest_pr_number_matches_queue_ref": bool(
+            isinstance(rest_number, int) and not isinstance(rest_number, bool)
+            and rest_number == parsed_ref.get("pr_number")
+        ),
+        "rest_repository_matches_expected_repository": bool(
+            isinstance(expected_repository, str) and bool(expected_repository)
+            and rest_repository == expected_repository
+        ),
+    }
+    failed = [name for name, passed in predicates.items() if not passed]
+    return {
+        "status": "proven" if not failed else "unresolved",
+        "reason": "All candidate-time queue predicates hold" if not failed else
+        "Candidate-time queue proof unresolved: " + ", ".join(failed),
+        "observed_at": observed_at,
+        "candidate_sha": candidate_sha,
+        "merge_group_base_sha": base_sha,
+        "merge_group_base_ref": base_ref,
+        "queue_ref": queue_ref,
+        "parsed_queue_ref_pr": parsed_ref.get("pr_number"),
+        "parsed_queue_ref_target_branch": parsed_ref.get("target_branch"),
+        "parsed_queue_ref_base_suffix_sha": suffix,
+        "additional_queue_refs": parsed_additional,
+        "repository_snapshot_complete": snapshot_complete,
+        "repository_snapshot_entry_count": len(entries),
+        "relevant_graphql_errors": relevant_errors,
+        "exact_candidate_head_match_count": len(matches),
+        "matched_queue_entry_id": matched.get("id") if matched else None,
+        "matched_pr": matched.get("pull_request_number") if matched else None,
+        "matched_head_commit": matched.get("head_commit") if matched else None,
+        "matched_base_commit": matched.get("base_commit") if matched else None,
+        "matched_queue_entry": matched,
+        "rest_pr_number": rest_number,
+        "expected_repository": expected_repository,
+        "rest_pr_repository": rest_repository,
+        "rest_corroboration": {
+            "status": "proven" if (
+                predicates["rest_pr_number_matches_queue_ref"]
+                and predicates["rest_repository_matches_expected_repository"]
+            ) else "unresolved",
+            "number_matches": predicates["rest_pr_number_matches_queue_ref"],
+            "repository_matches": predicates["rest_repository_matches_expected_repository"],
+        },
+        "predicates": predicates,
+    }
+
+
+def candidate_stack_observation(
+    binding: dict[str, Any],
+    observed_at: str,
+) -> dict[str, Any]:
+    """Classify stack role only from the exact entry in the bound queue snapshot."""
+    result = {
+        "status": "unresolved",
+        "reason": "Candidate queue ownership is unresolved",
+        "stack_status": "unresolved",
+        "stack_id": None,
+        "stack_number": None,
+        "stack_position": None,
+        "stack_size": None,
+        "is_stack_member": None,
+        "is_stack_head": None,
+        "observed_at": observed_at,
+        "entry_identity": None,
+    }
+    if binding.get("status") != "proven":
+        return result
+    entry = binding.get("matched_queue_entry")
+    if not isinstance(entry, dict):
+        result["reason"] = "Bound queue entry is unavailable"
+        return result
+    result["entry_identity"] = {
+        "id": entry.get("id"),
+        "pull_request_number": entry.get("pull_request_number"),
+        "head_commit": entry.get("head_commit"),
+        "base_commit": entry.get("base_commit"),
+        "snapshot_index": entry.get("snapshot_index"),
+    }
+    stack = entry.get("stack_value")
+    stack_entry = entry.get("stack_entry_value")
+    if not entry.get("stack_field_present") or not entry.get("stack_entry_field_present"):
+        result["reason"] = "Candidate stack fields were omitted from the queue response"
+        return result
+    if stack is None and stack_entry is None:
+        return {
+            **result,
+            "status": "proven",
+            "reason": "Candidate queue entry explicitly reports stack=null and stackEntry=null",
+            "stack_status": "not_a_stack",
+            "is_stack_member": False,
+            "is_stack_head": False,
+        }
+    if not isinstance(stack, dict) or not isinstance(stack_entry, dict):
+        result["reason"] = "Candidate stack and stackEntry fields are mixed or malformed"
+        return result
+    stack_id = stack.get("id")
+    stack_number = stack.get("number")
+    stack_size = stack.get("size")
+    position = stack_entry.get("position")
+    entry_stack = stack_entry.get("stack")
+    if (
+        not isinstance(stack_id, str) or not stack_id
+        or not isinstance(stack_number, int) or isinstance(stack_number, bool) or stack_number < 1
+        or not isinstance(stack_size, int) or isinstance(stack_size, bool) or stack_size < 1
+        or not isinstance(position, int) or isinstance(position, bool)
+        or not 1 <= position <= stack_size
+        or not isinstance(entry_stack, dict)
+        or entry_stack.get("id") != stack_id
+    ):
+        result["reason"] = "Candidate stack membership fields are invalid or inconsistent"
+        return result
+    return {
+        **result,
+        "status": "proven",
+        "reason": "Candidate queue entry has valid matching native-stack metadata",
+        "stack_status": "stack_member",
+        "stack_id": stack_id,
+        "stack_number": stack_number,
+        "stack_position": position,
+        "stack_size": stack_size,
+        "is_stack_member": True,
+        "is_stack_head": position == stack_size,
+    }
+
+
+def candidate_stack_composition(
+    binding: dict[str, Any],
+    observation: dict[str, Any],
+    repository_queue: dict[str, Any],
+    observed_at: str,
+) -> dict[str, Any]:
+    """Check positions 1..P using only the same repository queue observation."""
+    result: dict[str, Any] = {
+        "status": "unresolved",
+        "reason": "Candidate stack observation is unresolved",
+        "observed_at": observed_at,
+        "stack_id": observation.get("stack_id"),
+        "candidate_pr": binding.get("parsed_queue_ref_pr"),
+        "candidate_position": observation.get("stack_position"),
+        "candidate_size": observation.get("stack_size"),
+        "members": [],
+        "missing_positions": [],
+        "duplicate_positions": [],
+        "duplicate_pr_numbers": [],
+        "conflicting_positions": [],
+        "adjacent_base_head_continuity": [],
+        "continuity_status": "unresolved",
+    }
+    if binding.get("status") != "proven" or observation.get("status") != "proven":
+        return result
+    if observation.get("stack_status") == "not_a_stack":
+        return {
+            **result,
+            "status": "proven",
+            "reason": "Candidate is explicitly not a native-stack member",
+            "continuity_status": "not_applicable",
+        }
+    if observation.get("stack_status") != "stack_member":
+        return result
+    stack_id = observation.get("stack_id")
+    position = observation.get("stack_position")
+    stack_number = observation.get("stack_number")
+    size = observation.get("stack_size")
+    snapshot = repository_queue.get("merge_queue") if isinstance(repository_queue, dict) else None
+    entries = snapshot.get("entries", []) if isinstance(snapshot, dict) else []
+    if not isinstance(entries, list) or not isinstance(position, int) or not isinstance(size, int):
+        result["reason"] = "Repository queue entries or candidate role are unavailable"
+        return result
+    selected = [
+        entry for entry in entries
+        if isinstance(entry, dict) and entry.get("stack_id") == stack_id
+    ]
+    by_position: dict[int, list[dict[str, Any]]] = {}
+    unpositioned = []
+    conflicting_positions: set[Any] = set()
+    for entry in selected:
+        member_position = entry.get("stack_position")
+        if not isinstance(member_position, int) or isinstance(member_position, bool) or member_position < 1:
+            unpositioned.append(entry.get("id"))
+            conflicting_positions.add("unknown")
+            continue
+        if member_position > position:
+            continue
+        by_position.setdefault(member_position, []).append(entry)
+        if (
+            type(entry.get("stack_number")) is not int
+            or entry.get("stack_number") < 1
+            or type(entry.get("stack_size")) is not int
+            or entry.get("stack_size") < 1
+            or
+            entry.get("stack_number") != stack_number
+            or entry.get("stack_size") != size
+            or entry.get("stack_entry_stack_id") != stack_id
+            or not entry.get("stack_field_present")
+            or not entry.get("stack_entry_field_present")
+            or not isinstance(entry.get("pull_request_number"), int)
+            or isinstance(entry.get("pull_request_number"), bool)
+            or not _valid_oid(entry.get("head_commit"))
+            or not _valid_oid(entry.get("base_commit"))
+        ):
+            conflicting_positions.add(member_position)
+    required = list(range(1, position + 1))
+    missing = [index for index in required if not by_position.get(index)]
+    duplicates = [index for index in required if len(by_position.get(index, [])) > 1]
+    unique_members = [
+        (index, by_position[index][0])
+        for index in required if len(by_position.get(index, [])) == 1
+    ]
+    pr_numbers = [entry.get("pull_request_number") for _, entry in unique_members]
+    duplicate_prs = sorted({
+        number for number in pr_numbers if pr_numbers.count(number) > 1 and isinstance(number, int)
+    })
+    candidate_entry = binding.get("matched_queue_entry")
+    candidate_matches = (
+        len(by_position.get(position, [])) == 1
+        and isinstance(candidate_entry, dict)
+        and by_position[position][0].get("id") == candidate_entry.get("id")
+        and by_position[position][0].get("pull_request_number") == binding.get("parsed_queue_ref_pr")
+    )
+    if not candidate_matches:
+        conflicting_positions.add(position)
+    continuity = []
+    for index in range(1, position):
+        previous_entries = by_position.get(index, [])
+        later_entries = by_position.get(index + 1, [])
+        if not previous_entries or not later_entries:
+            continue
+        for previous in previous_entries:
+            for later in later_entries:
+                previous_head = previous.get("head_commit")
+                later_base = later.get("base_commit")
+                matches = (
+                    later_base == previous_head
+                    if _valid_oid(later_base) and _valid_oid(previous_head)
+                    else None
+                )
+                continuity.append({
+                    "previous_position": index,
+                    "previous_pr": previous.get("pull_request_number"),
+                    "previous_head_commit": previous_head,
+                    "later_position": index + 1,
+                    "later_pr": later.get("pull_request_number"),
+                    "later_base_commit": later_base,
+                    "matches": matches,
+                    "status": "consistent" if matches is True else
+                    "mismatch" if matches is False else "unresolved",
+                })
+    continuity_status = (
+        "mismatch" if any(item["matches"] is False for item in continuity)
+        else "unresolved" if len(continuity) != max(0, position - 1)
+        or any(item["matches"] is None for item in continuity)
+        else "proven"
+    )
+    members = [{
+        "position": index,
+        "entry_id": entry.get("id"),
+        "pr_number": entry.get("pull_request_number"),
+        "stack_id": entry.get("stack_id"),
+        "stack_number": entry.get("stack_number"),
+        "stack_size": entry.get("stack_size"),
+        "stack_entry_stack_id": entry.get("stack_entry_stack_id"),
+        "head_commit": entry.get("head_commit"),
+        "base_commit": entry.get("base_commit"),
+    } for index, entry in unique_members]
+    complete = (
+        not missing and not duplicates and not duplicate_prs and not conflicting_positions
+        and not unpositioned and candidate_matches and len(unique_members) == position
+        and continuity_status == "proven"
+    )
+    return {
+        **result,
+        "status": "proven" if complete else "unresolved",
+        "reason": "Candidate stack prefix and adjacent queue commits are consistent" if complete
+        else "Candidate stack prefix is incomplete or inconsistent",
+        "members": members,
+        "missing_positions": missing,
+        "duplicate_positions": duplicates,
+        "duplicate_pr_numbers": duplicate_prs,
+        "conflicting_positions": sorted(conflicting_positions, key=str),
+        "unpositioned_same_stack_entry_ids": unpositioned,
+        "candidate_entry_matches_position": candidate_matches,
+        "adjacent_base_head_continuity": continuity,
+        "continuity_status": continuity_status,
     }
 
 
@@ -1159,7 +1583,7 @@ class GitHubAPI:
                   pullRequest {
                     number
                     stack { id number size }
-                    stackEntry { position }
+                    stackEntry { position stack { id } }
                   }
                 }
               }
@@ -1557,6 +1981,30 @@ def _graphql_response_warning(
         )
 
 
+def _collect_repository_queue_snapshot(
+    api: GitHubAPI,
+    queue_branch: str | None,
+    output_dir: Path,
+    warnings: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Capture the repository queue once and retain its observation timestamp."""
+    response = (
+        api.repository_merge_queue_graphql(queue_branch)
+        if isinstance(queue_branch, str) and queue_branch
+        else None
+    )
+    observed_at = utc_now()
+    _write_raw_api(output_dir / "api" / "queue" / "repository-queue.json", response)
+    _graphql_response_warning(
+        response, warnings, label="repository merge-queue topology lookup"
+    )
+    return {
+        "response": response,
+        "normalized": normalize_merge_queue_response(response),
+        "observed_at": observed_at,
+    }
+
+
 def _collect_queue_observation(
     api: GitHubAPI,
     candidate_pr: int | None,
@@ -1564,6 +2012,8 @@ def _collect_queue_observation(
     queue_branch_source: str,
     output_dir: Path,
     warnings: list[dict[str, str]],
+    *,
+    repository_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Collect independent trunk topology and optional candidate entry evidence.
 
@@ -1584,22 +2034,19 @@ def _collect_queue_observation(
         if isinstance(candidate_pr, int)
         else None
     )
-    repository_observed_at = utc_now()
-    repository_response = (
-        api.repository_merge_queue_graphql(queue_branch)
-        if isinstance(queue_branch, str) and queue_branch
-        else None
+    repository_snapshot = repository_snapshot or _collect_repository_queue_snapshot(
+        api, queue_branch, output_dir, warnings
     )
+    repository_observed_at = repository_snapshot.get("observed_at")
+    repository_response = repository_snapshot.get("response")
     _write_raw_api(raw_dir / "candidate-entry.json", candidate_response)
-    _write_raw_api(raw_dir / "repository-queue.json", repository_response)
     _graphql_response_warning(
         candidate_response, warnings, label="candidate merge-queue entry lookup"
     )
-    _graphql_response_warning(
-        repository_response, warnings, label="repository merge-queue topology lookup"
-    )
     candidate_queue = normalize_merge_queue_response(candidate_response)
-    repository_queue = normalize_merge_queue_response(repository_response)
+    repository_queue = repository_snapshot.get("normalized")
+    if not isinstance(repository_queue, dict):
+        repository_queue = normalize_merge_queue_response(repository_response)
     entry_reconciliation = reconcile_candidate_queue_entry(
         candidate_queue,
         repository_queue,
@@ -1976,6 +2423,46 @@ def _snapshot(event_path: Path, repo: Path, output_dir: Path, step_summary: Path
         raise ValueError("merge_group event is missing its candidate SHA")
     api = GitHubAPI(warnings)
     sha = group["head_sha"]
+    queue_ref = group.get("head_ref")
+    parsed_queue_ref = parse_queue_ref(queue_ref)
+    queue_branch = normalize_branch_ref(group.get("base_ref"))
+    if queue_branch is None and parsed_queue_ref.get("valid"):
+        queue_branch = parsed_queue_ref.get("target_branch")
+    queue_branch_source = (
+        "merge_group.base_ref" if normalize_branch_ref(group.get("base_ref"))
+        else "merge_group.head_ref queue ref" if queue_branch
+        else "unresolved"
+    )
+    # Capture candidate-time topology before associated-pulls and later PR stack
+    # lookups. Every proof below is scoped to this one response and timestamp.
+    repository_snapshot = _collect_repository_queue_snapshot(
+        api, queue_branch, output_dir, warnings
+    )
+    queue_ref_pr = parsed_queue_ref.get("pr_number") if parsed_queue_ref.get("valid") else None
+    candidate_rest_pr = api.pull_request(queue_ref_pr) if isinstance(queue_ref_pr, int) else None
+    _write_raw_api(
+        output_dir / "api" / "candidate-time-pr.json",
+        candidate_rest_pr,
+    )
+    candidate_binding = candidate_queue_binding(
+        group,
+        queue_ref,
+        repository_snapshot.get("normalized", {}),
+        repository_snapshot.get("observed_at") or utc_now(),
+        candidate_rest_pr,
+        getattr(api, "repo_name", None),
+        additional_queue_refs=[environment.get("GITHUB_REF")],
+    )
+    candidate_stack = candidate_stack_observation(
+        candidate_binding,
+        repository_snapshot.get("observed_at") or utc_now(),
+    )
+    candidate_composition = candidate_stack_composition(
+        candidate_binding,
+        candidate_stack,
+        repository_snapshot.get("normalized", {}),
+        repository_snapshot.get("observed_at") or utc_now(),
+    )
     identity, candidate = _collect_identity(api, sha, [
         ("merge_group.head_ref", group.get("head_ref")), ("GITHUB_REF", environment.get("GITHUB_REF"))
     ], output_dir, warnings)
@@ -1983,20 +2470,41 @@ def _snapshot(event_path: Path, repo: Path, output_dir: Path, step_summary: Path
         merge_group_base_ref=group.get("base_ref"),
         stack=identity["stack"], pull_request=candidate,
     )
+    queue_candidate_pr = (
+        candidate_binding["matched_pr"]
+        if candidate_binding["status"] == "proven"
+        else None
+    )
     queue = _collect_queue_observation(
-        api, identity["candidate_pr"], branch["queue_branch"],
-        branch["queue_branch_source"], output_dir, warnings,
+        api, queue_candidate_pr, queue_branch or branch["queue_branch"],
+        queue_branch_source if queue_branch else branch["queue_branch_source"],
+        output_dir, warnings, repository_snapshot=repository_snapshot,
     )
     runs = _target_runs(api, sha, output_dir, warnings)
     collected_at = utc_now()
     summary = {
         "mode": "merge_group_snapshot", "collected_at": collected_at,
+        "candidate_proof_schema_version": 2,
         "action": event.get("action"), "merge_group": group, "identity": identity,
+        "candidate_queue_binding": candidate_binding,
+        "candidate_stack_observation": candidate_stack,
+        "candidate_stack_composition": candidate_composition,
+        "candidate_stack_continuity": {
+            "status": candidate_composition.get("continuity_status"),
+            "adjacent_base_head_continuity": candidate_composition.get(
+                "adjacent_base_head_continuity", []
+            ),
+            "observed_at": candidate_composition.get("observed_at"),
+        },
         "queue": queue,
         "composition": _stack_composition(
             repo, sha, identity["candidate_pr"], identity["stack"], output_dir, warnings
         ),
-        "queue_timing": derive_queue_timing(collected_at, queue.get("entry"), runs, candidate_sha=sha),
+        "queue_timing": derive_queue_timing(
+            repository_snapshot.get("observed_at"),
+            candidate_binding.get("matched_queue_entry") if queue_candidate_pr is not None else None,
+            runs, candidate_sha=sha,
+        ),
         "target_workflow_observations": runs, "warnings": warnings,
     }
     _write_api_errors(api, output_dir)
@@ -2100,17 +2608,36 @@ def _write_snapshot_summary(summary: dict[str, Any], destination: Path | None) -
         return
     group = summary["merge_group"]
     timing = summary["queue_timing"]
+    binding = summary["candidate_queue_binding"]
+    stack = summary["candidate_stack_observation"]
+    composition = summary["candidate_stack_composition"]
+    candidate_pr = binding.get("matched_pr") if binding.get("status") == "proven" else None
     lines = [
         "## Merge queue telemetry", "",
         f"**Candidate SHA:** `{_safe_markdown(group.get('head_sha'))}`",
         f"**Queue ref:** {_safe_markdown(group.get('head_ref'))}",
         f"**Raw base ref / SHA:** {_safe_markdown(group.get('base_ref'))} / "
         f"{_safe_markdown(group.get('base_sha'))}",
-        *_identity_summary_lines(summary),
-        f"**Own-stack composition:** {_safe_markdown(summary['composition']['status'])}",
-        f"**Queue age:** {_format_duration(timing['queue_age_at_snapshot_seconds'])}",
-        "**Queue → first target dispatch:** "
+        f"**Candidate queue binding:** {_safe_markdown(binding.get('status'))}; "
+        f"candidate PR {_safe_markdown(candidate_pr)}; {_safe_markdown(binding.get('reason'))}",
+        f"**Candidate stack observation:** {_safe_markdown(stack.get('status'))}; "
+        f"{_safe_markdown(stack.get('stack_status'))}; ID {_safe_markdown(stack.get('stack_id'))}; "
+        f"position {_safe_markdown(stack.get('stack_position'))} / "
+        f"{_safe_markdown(stack.get('stack_size'))}; observed at {_safe_markdown(stack.get('observed_at'))}",
+        f"**Candidate stack composition:** {_safe_markdown(composition.get('status'))}; "
+        f"missing positions {_safe_markdown(composition.get('missing_positions'))}; "
+        f"duplicate positions {_safe_markdown(composition.get('duplicate_positions'))}; "
+        f"conflicting positions {_safe_markdown(composition.get('conflicting_positions'))}",
+        f"**Candidate-time queue age:** {_format_duration(timing['queue_age_at_snapshot_seconds'])}",
+        "**Candidate-time queue → first target dispatch:** "
         f"{_format_duration(timing['queue_to_first_target_workflow_created_seconds'])}",
+        "**Candidate-time queue → first target start:** "
+        f"{_format_duration(timing['queue_to_first_target_workflow_started_seconds'])}",
+        "**Candidate-time queue → target workflows complete:** "
+        f"{_format_duration(timing['queue_to_target_workflows_complete_seconds'])}",
+        "### Legacy diagnostics",
+        *_identity_summary_lines(summary),
+        f"**Legacy own-stack composition:** {_safe_markdown(summary['composition']['status'])}",
         f"**Warnings:** {_warning_text(summary['warnings'])}", "",
     ]
     destination.write_text("\n\n".join(lines), encoding="utf-8")

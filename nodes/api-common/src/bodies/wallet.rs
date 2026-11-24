@@ -31,9 +31,10 @@ pub mod balance {
                     target: LOG_TARGET,
                     "WalletBalanceResponseBody serialization error: {e}"
                 );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
+                // We panic here because this should never happen, and if it
+                // does, it's a critical error that we want to
+                // be immediately visible during development and
+                // testing.
                 panic!("WalletBalanceResponseBody serialization failed: {e}")
             });
 
@@ -89,9 +90,10 @@ pub mod claimable_vouchers {
                     target: LOG_TARGET,
                     "WalletClaimableVouchersResponseBody serialization failed: {e}"
                 );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
+                // We panic here because this should never happen, and if it
+                // does, it's a critical error that we want to
+                // be immediately visible during development and
+                // testing.
                 panic!("WalletClaimableVouchersResponseBody serialization failed: {e}")
             });
 
@@ -136,8 +138,7 @@ pub mod aged_notes {
     /// snapshot yet.
     ///
     /// The set is reported unfiltered. The leader service additionally skips
-    /// the faucet UTXO when a `faucet_pk` is configured, which only matters on
-    /// a faucet node.
+    /// the UTXOs of the keys in `consensus_excluded_keys`.
     #[derive(Serialize, Deserialize)]
     pub struct LeaderAgedNotesResponseBody {
         pub tip: HeaderId,
@@ -156,9 +157,10 @@ pub mod aged_notes {
                     target: LOG_TARGET,
                     "LeaderAgedNotesResponseBody serialization failed: {e}"
                 );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
+                // We panic here because this should never happen, and if it
+                // does, it's a critical error that we want to
+                // be immediately visible during development and
+                // testing.
                 panic!("LeaderAgedNotesResponseBody serialization failed: {e}")
             });
 
@@ -215,9 +217,10 @@ pub mod transfer_funds {
                     target: LOG_TARGET,
                     "WalletTransferFundsResponseBody serialization failed: {e}"
                 );
-                // We panic here because this should never happen, and if it does, it's a
-                // critical error that we want to be immediately visible during
-                // development and testing.
+                // We panic here because this should never happen, and if it
+                // does, it's a critical error that we want to
+                // be immediately visible during development and
+                // testing.
                 panic!("WalletTransferFundsResponseBody serialization failed: {e}")
             });
 
@@ -232,7 +235,7 @@ pub mod fund {
         mantle::{
             OpProof,
             gas::GasCost,
-            transactions::{Ops, builder::MantleTxBuilder, tx_list::ops::mantle_spec},
+            transactions::{Ops, builder::MantleTxBuilder},
         },
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -267,7 +270,6 @@ pub mod fund {
         pub tip: HeaderId,
         /// The funded transaction, with the fee transfer appended as the last
         /// op. All ops are still unsigned.
-        #[serde(with = "mantle_spec")]
         pub funded_tx: Ops,
         /// Proof for the appended fee transfer, signed over the funded
         /// transaction hash. `None` if funding required no transfer (zero

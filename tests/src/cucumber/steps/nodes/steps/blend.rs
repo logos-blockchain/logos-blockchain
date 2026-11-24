@@ -401,14 +401,21 @@ async fn step_all_nodes_reached_min_height_and_converged(
     max_diff_height: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    nodes_converged(
+    let convergence = wait_for_canonical_convergence(
         world,
         &step.value,
         Some(min_height),
         max_diff_height,
         time_out_seconds,
     )
-    .await
+    .await?;
+    if world.startup.era_boundary_schedule.is_some() {
+        crate::cucumber::steps::nodes::era_boundaries::record_canonical_convergence(
+            world,
+            &convergence,
+        )?;
+    }
+    Ok(())
 }
 
 #[when(expr = "all nodes agree on LIB in {int} seconds")]
@@ -446,52 +453,7 @@ async fn step_query_cryptarchia_info_all_nodes(world: &mut CucumberWorld, step: 
 
 #[then(expr = "I stop all nodes")]
 async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
-    let mut background_cleanup_errors = Vec::new();
-    if let Err(error) = world.stop_background_activity().await {
-        background_cleanup_errors.push(error.to_string());
-    }
-
-    world.logos_sql.shutdown_all().await?;
-
-    let runtime_dir_by_node_name: Vec<(String, String)> = world
-        .nodes_info
-        .iter()
-        .map(|(node_name, info)| (node_name.clone(), info.runtime_name.clone()))
-        .collect();
-
-    if world.snapshots.save.extensions.is_some() {
-        prepare_all_wallets_snapshot(world).await?;
-    }
-
-    world.reset_wallet_scanner_after_current_iteration().await;
-    world.zone.clear();
-    if let Err(error) = stop_active_manual_cluster(world).await {
-        background_cleanup_errors.push(error.to_string());
-    }
-
-    if let Some(snapshot_name) = world.snapshots.save.node_state.take() {
-        create_snapshots_all_nodes(world, &snapshot_name)?;
-    }
-
-    if let Some(snapshot_name) = world.snapshots.save.extensions.take() {
-        save_prepared_all_wallets_snapshot(&snapshot_name, world)?;
-    }
-
-    for (node_name, _) in &runtime_dir_by_node_name {
-        info!(target: TARGET, "Stopping node '{node_name}'");
-    }
-    world.nodes_info.clear();
-
-    if background_cleanup_errors.is_empty() {
-        Ok(())
-    } else {
-        Err(StepError::StepFail {
-            message: format!(
-                "scenario background cleanup reported: {}",
-                background_cleanup_errors.join("; ")
-            ),
-        })
-    }
+    stop_all_nodes(world).await
 }
 
 #[when(
@@ -702,15 +664,41 @@ async fn step_run_blend_sdp_declaration_api(
     step: &Step,
     declarer_node_name: String,
 ) -> StepResult {
-    let user_config_path = node_user_config_path(world, &declarer_node_name)?;
-    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
     let service_note_id =
         wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
 
+    declare_blend_core_via_api(world, step, &declarer_node_name, Some(service_note_id)).await
+}
+
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Required to be mutable by cucumber step function signature"
+)]
+#[then(expr = "I declare node {string} as blend core node via the API without a service note")]
+async fn step_run_blend_sdp_declaration_api_without_note(
+    world: &mut CucumberWorld,
+    step: &Step,
+    declarer_node_name: String,
+) -> StepResult {
+    let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
+    wait_for_blend_funded_note(world, &declarer_node_name, blend_zk_pk).await?;
+
+    declare_blend_core_via_api(world, step, &declarer_node_name, None).await
+}
+
+async fn declare_blend_core_via_api(
+    world: &CucumberWorld,
+    step: &Step,
+    declarer_node_name: &str,
+    service_note_id: Option<lb_core::mantle::NoteId>,
+) -> StepResult {
+    let user_config_path = node_user_config_path(world, declarer_node_name)?;
+    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
+
     let declarer_node_client = world
         .nodes_info
-        .get(&declarer_node_name)
+        .get(declarer_node_name)
         .ok_or_else(|| StepError::LogicalError {
             message: format!("Node '{declarer_node_name}' not found in world state"),
         })?

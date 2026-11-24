@@ -1,19 +1,18 @@
 use lb_core::{
-    mantle::{
-        Op, SignedOps,
-        ledger::verification_mode::StandardMode,
-        transactions::{MantleTxBuilder, states::Preverified},
-    },
+    mantle::{Op, gas::GasCost, transactions::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_sdp_service::wallet::{
     SdpWalletAdapter as SdpWalletAdapterTrait, SdpWalletConfig, SdpWalletError,
 };
+use lb_wallet::WalletError;
 use lb_wallet_service::{
-    TipResponse,
-    api::{WalletApi, WalletServiceData},
+    TipResponse, WalletServiceError,
+    api::{WalletApi, WalletApiError, WalletServiceData},
 };
 use overwatch::services::{AsServiceId, ServiceData, relay::OutboundRelay};
+
+use crate::ValidatedTx;
 
 pub struct SdpWalletAdapter<Service, RuntimeServiceId>
 where
@@ -42,7 +41,7 @@ where
         mut tx_builder: MantleTxBuilder,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
+    ) -> Result<ValidatedTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPDeclare(declaration))?;
 
         let TipResponse {
@@ -58,7 +57,7 @@ where
                 0,
             )
             .await
-            .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
+            .map_err(into_sdp_wallet_error)?;
 
         let tx_fee = funded.tx_fee()?;
         if tx_fee > config.max_tx_fee {
@@ -83,7 +82,7 @@ where
         mut tx_builder: MantleTxBuilder,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
+    ) -> Result<ValidatedTx, SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPWithdraw(withdraw))?;
 
         let TipResponse {
@@ -99,7 +98,7 @@ where
                 0,
             )
             .await
-            .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
+            .map_err(into_sdp_wallet_error)?;
 
         let tx_fee = funded.tx_fee()?;
         if tx_fee > config.max_tx_fee {
@@ -124,7 +123,7 @@ where
         mut tx_builder: MantleTxBuilder,
         active: ActiveMessage,
         config: &SdpWalletConfig,
-    ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
+    ) -> Result<(ValidatedTx, GasCost), SdpWalletError> {
         tx_builder = tx_builder.push_op(Op::SDPActive(active))?;
 
         let TipResponse {
@@ -140,7 +139,7 @@ where
                 0,
             )
             .await
-            .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
+            .map_err(into_sdp_wallet_error)?;
 
         let tx_fee = funded.tx_fee()?;
         if tx_fee > config.max_tx_fee {
@@ -157,6 +156,17 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        Ok(signed_tx)
+        Ok((signed_tx, tx_fee))
+    }
+}
+
+/// Maps a wallet API error: insufficient funds become
+/// [`SdpWalletError::Funding`], anything else [`SdpWalletError::WalletApi`].
+fn into_sdp_wallet_error(error: WalletApiError) -> SdpWalletError {
+    match error {
+        WalletApiError::Wallet(WalletServiceError::WalletError(
+            WalletError::InsufficientFunds { .. },
+        )) => SdpWalletError::Funding(error.into()),
+        error => SdpWalletError::WalletApi(error.into()),
     }
 }

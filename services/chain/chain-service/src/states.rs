@@ -1,19 +1,62 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
+use lb_binary_codec::bincode::DeserializeOp as _;
+use lb_core::{era::ForkDigest, header::HeaderId};
+use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_ledger::LedgerState;
+use lb_services_utils::overwatch::{RecoveryData, recovery::StorageRecoverySettings as _};
+use lb_storage_service::recovery::recovery_key;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
 
 use crate::{Cryptarchia, CryptarchiaSettings, Error, StartingState};
 
+/// The slot of the chain's tip, and the fork digest its era has under the
+/// schedule the tip was applied with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TipEra {
+    pub slot: Slot,
+    pub fork_digest: ForkDigest,
+}
+
+impl TipEra {
+    fn at(slot: Slot, fork_digests: &EraSchedule<ForkDigest>) -> Self {
+        Self {
+            slot,
+            fork_digest: *fork_digests.at_slot(slot).parameters,
+        }
+    }
+}
+
+/// The tip era of the state the chain service last saved, if it saved one,
+/// read from `recovery_data` without taking the state, which the service loads
+/// when it starts.
+///
+/// # Errors
+///
+/// If the saved state cannot be read or decoded.
+pub fn saved_tip_era(recovery_data: &RecoveryData) -> Result<Option<TipEra>, DynError> {
+    let Some(bytes) = recovery_data.get(&recovery_key(CryptarchiaSettings::RECOVERY_KEY_SUFFIX))?
+    else {
+        return Ok(None);
+    };
+    let state = CryptarchiaConsensusState::from_bytes(&bytes).map_err(|error| {
+        format!(
+            "The saved chain state cannot be read ({error}). Remove the node's state and sync \
+             again."
+        )
+    })?;
+    Ok(Some(state.tip_era))
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CryptarchiaConsensusState {
     pub(crate) tip: HeaderId,
+    pub(crate) tip_era: TipEra,
     pub(crate) lib: HeaderId,
     pub(crate) lib_ledger_state: LedgerState,
     pub(crate) lib_block_length: u64,
-    pub(crate) lib_block_slot: lb_cryptarchia_engine::Slot,
+    pub(crate) lib_block_slot: Slot,
     /// The uncle slots in the LIB header.
     /// These are unlikely to be used for future uncle selections,
     /// given the depth of LIB. But, we save them because any blocks
@@ -44,6 +87,7 @@ impl CryptarchiaConsensusState {
     pub(crate) fn from_cryptarchia_and_unpruned_blocks(
         cryptarchia: &Cryptarchia,
         storage_blocks_to_remove: HashSet<HeaderId>,
+        fork_digests: &EraSchedule<ForkDigest>,
     ) -> Result<Self, DynError> {
         let lib = cryptarchia.consensus.lib_branch();
         let Some(lib_ledger_state) = cryptarchia.ledger.state(&lib.id()).cloned() else {
@@ -55,8 +99,10 @@ impl CryptarchiaConsensusState {
         let lib_block_slot = lib.slot();
         let lib_block_uncle_slots = lib.uncle_slots().clone();
 
+        let tip = cryptarchia.consensus.tip_branch();
         Ok(Self {
-            tip: cryptarchia.consensus.tip_branch().id(),
+            tip: tip.id(),
+            tip_era: TipEra::at(tip.slot(), fork_digests),
             lib: lib.id(),
             genesis_id: cryptarchia.genesis_id,
             lib_ledger_state,
@@ -81,17 +127,20 @@ impl ServiceState for CryptarchiaConsensusState {
     ) -> Result<Self, <Self as ServiceState>::Error> {
         let StartingState::Genesis { genesis_block } = &settings.starting_state;
         let genesis_id = genesis_block.header().id();
-        let genesis_tx = genesis_block.genesis_tx();
-        let epoch_nonce = genesis_tx.cryptarchia_parameter().epoch_nonce;
+        let (genesis_config, genesis_fork_digest) = settings.era_schedule.genesis().parameters;
         let (lib_ledger_state, _events) =
-            LedgerState::from_genesis_tx(genesis_tx.clone(), &settings.config, epoch_nonce)?;
+            LedgerState::from_genesis_tx(genesis_block.genesis_tx().clone(), genesis_config)?;
 
         Ok(Self {
             tip: genesis_id,
+            tip_era: TipEra {
+                slot: Slot::genesis(),
+                fork_digest: *genesis_fork_digest,
+            },
             lib: genesis_id,
             lib_ledger_state,
             lib_block_length: 0,
-            lib_block_slot: lb_cryptarchia_engine::Slot::default(),
+            lib_block_slot: Slot::default(),
             lib_block_uncle_slots: lb_cryptarchia_engine::UncleSlots::default(),
             genesis_id,
             storage_blocks_to_remove: HashSet::new(),
@@ -109,34 +158,43 @@ pub struct LastEngineState {
 #[cfg(test)]
 mod tests {
     use std::{
-        num::{NonZero, NonZeroU64},
+        num::{NonZero, NonZeroU32, NonZeroU64},
         sync::Arc,
     };
 
-    use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_binary_codec::bincode::SerializeOp as _;
+    use lb_core::{
+        era::AcceptedForkDigests,
+        sdp::{MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::{State::Bootstrapping, UncleSlots};
     use lb_ledger::{
+        ConsensusExcludedKeys,
         config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
         mantle::sdp::{ServiceRewardsParameters, rewards},
     };
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
+    use crate::tests::single_era;
+
+    const FORK_DIGEST: [u8; 32] = [0x22; 32];
+
+    /// The same fork digest for every era of `eras`.
+    fn fork_digests<Parameters>(eras: &EraSchedule<Parameters>) -> EraSchedule<ForkDigest> {
+        eras.map(|_| ForkDigest::from(FORK_DIGEST))
+    }
 
     /// A reward config with claiming disabled, standing in for a real
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: NonZeroU64::MIN,
-            target_claim_per_block: NonZeroU64::MIN,
             pow_share: 0,
             share_den: NonZeroU64::MIN,
             slot_window: NonZeroU64::new(100).unwrap(),
@@ -151,9 +209,10 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -165,14 +224,13 @@ mod tests {
 
         let ledger_config = lb_ledger::Config {
             epoch_config,
-            consensus_config: cryptarchia_engine_config.clone(),
+            consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -180,19 +238,50 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
-            faucet_pk: None,
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: lb_core::mantle::gas::GasProfile {
+                transfer: 590.into(),
+                channel_config: 56.into(),
+                channel_inscribe: 56.into(),
+                channel_deposit: 590.into(),
+                channel_withdraw: 56.into(),
+                channel_transfer: 56.into(),
+                sdp_declare: 646.into(),
+                sdp_withdraw: 590.into(),
+                sdp_active: 590.into(),
+                leader_claim: 580.into(),
+                claim_pow_reward: 1.into(),
+            },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -203,14 +292,18 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         };
 
         let (cryptarchia_engine, pruned_blocks) = {
-            // Boostrapping mode since we are pursposefully adding old forks to test the
-            // recovery mechanism.
+            // Boostrapping mode since we are pursposefully adding old forks to
+            // test the recovery mechanism.
             let mut cryptarchia = lb_cryptarchia_engine::Cryptarchia::<_>::from_genesis(
                 genesis_header_id,
-                cryptarchia_engine_config,
+                Arc::new(
+                    single_era(ledger_config.clone())
+                        .map(|era| era.parameters.consensus_config.clone()),
+                ),
                 Bootstrapping,
             );
 
@@ -220,8 +313,8 @@ mod tests {
             //    \    \    \
             //      b6   b7   b8
             //
-            // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3` represent
-            // the canonical chain now.
+            // Add 3 more blocks to canonical chain. `b0`, `b1`, `b2`, and `b3`
+            // represent the canonical chain now.
             cryptarchia
                 .receive_block(
                     [1; 32].into(),
@@ -281,7 +374,8 @@ mod tests {
                     UncleSlots::default(),
                 )
                 .expect("Block 7 to be added successfully on top of block 1.");
-            // Add a single-block fork from the second block after genesis (block `2`)
+            // Add a single-block fork from the second block after genesis
+            // (block `2`)
             cryptarchia
                 .receive_block(
                     [8; 32].into(),
@@ -297,8 +391,8 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &ledger_config),
-            ledger_config,
+            LedgerState::from_utxos([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+            single_era(ledger_config),
         );
 
         // Build [`CryptarchiaConsensusState`] with the pruned blocks.
@@ -306,6 +400,7 @@ mod tests {
             .stale_blocks()
             .copied()
             .collect::<HashSet<_>>();
+        let fork_digests = fork_digests(ledger_state.era_schedule());
         let recovery_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
             &Cryptarchia {
                 ledger: ledger_state,
@@ -313,10 +408,18 @@ mod tests {
                 genesis_id: genesis_header_id,
             },
             pruned_stale_blocks.clone(),
+            &fork_digests,
         )
         .unwrap();
 
         assert_eq!(recovery_state.tip, cryptarchia_engine.tip());
+        assert_eq!(
+            recovery_state.tip_era,
+            TipEra {
+                slot: cryptarchia_engine.tip_branch().slot(),
+                fork_digest: ForkDigest::from(FORK_DIGEST),
+            }
+        );
         assert_eq!(recovery_state.lib, cryptarchia_engine.lib());
         assert_eq!(
             &recovery_state.storage_blocks_to_remove,
@@ -332,9 +435,10 @@ mod tests {
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
             1f64.try_into().expect("1 > 0"),
-            NonZero::new(12).unwrap(),
+            12,
+            4,
         );
         let epoch_config = lb_cryptarchia_engine::EpochConfig {
             epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -346,14 +450,13 @@ mod tests {
 
         let ledger_config = lb_ledger::Config {
             epoch_config,
-            consensus_config: cryptarchia_engine_config.clone(),
+            consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -361,19 +464,50 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
                         rounds_per_epoch: epoch_length.try_into().unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
                         data_replication_factor: 0,
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
-            faucet_pk: None,
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: lb_core::mantle::gas::GasProfile {
+                transfer: 590.into(),
+                channel_config: 56.into(),
+                channel_inscribe: 56.into(),
+                channel_deposit: 590.into(),
+                channel_withdraw: 56.into(),
+                channel_transfer: 56.into(),
+                sdp_declare: 646.into(),
+                sdp_withdraw: 590.into(),
+                sdp_active: 590.into(),
+                leader_claim: 580.into(),
+                claim_pow_reward: 1.into(),
+            },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -384,21 +518,24 @@ mod tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         };
 
         // Build a chain: b0 (genesis) - b1 - b2 - b3 - b4 - b5
         // With security_param=2, going online will advance LIB.
         let mut engine = lb_cryptarchia_engine::Cryptarchia::<HeaderId>::from_genesis(
             genesis_header_id,
-            cryptarchia_engine_config,
+            Arc::new(
+                single_era(ledger_config.clone())
+                    .map(|era| era.parameters.consensus_config.clone()),
+            ),
             Bootstrapping,
         );
         let block_ids: Vec<HeaderId> = (1..=5u8).map(|i| [i; 32].into()).collect();
         let mut parent = genesis_header_id;
         for (i, &block_id) in block_ids.iter().enumerate() {
             let slot = (i as u64 + 1).into();
-            let uncle_slots =
-                UncleSlots::try_from(vec![lb_cryptarchia_engine::Slot::from(i as u64)]).unwrap();
+            let uncle_slots = UncleSlots::try_new(vec![Slot::from(i as u64)], 4).unwrap();
             engine
                 .receive_block(block_id, parent, slot, uncle_slots)
                 .unwrap_or_else(|_| panic!("Block {block_id} should be added successfully"));
@@ -418,8 +555,8 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &ledger_config),
-                ledger_config.clone(),
+                LedgerState::from_utxos([], &ledger_config, 0, &ConsensusExcludedKeys::empty()),
+                single_era(ledger_config.clone()),
             ),
             genesis_id: genesis_header_id,
         };
@@ -429,6 +566,7 @@ mod tests {
         let saved_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
             &original,
             HashSet::new(),
+            &fork_digests(original.ledger.era_schedule()),
         )
         .unwrap();
         let encoded_state = saved_state.to_bytes().unwrap();
@@ -441,7 +579,7 @@ mod tests {
             engine.lib_branch().parent(),
             saved_state.lib_ledger_state.clone(),
             saved_state.genesis_id,
-            ledger_config,
+            single_era(ledger_config),
             *engine.state(),
             saved_state.lib_block_slot,
             saved_state.lib_block_length,

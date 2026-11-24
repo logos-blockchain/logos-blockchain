@@ -4,6 +4,7 @@ use core::{
 };
 use std::collections::HashSet;
 
+use lb_utils::bounded_duration::{MILLI, MinimalBoundedDuration, SECOND};
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -35,20 +36,25 @@ pub struct BootstrapConfig {
     pub ibd: IbdConfig,
 }
 
+#[serde_as]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct IbdConfig {
     /// Peers to query for the chain tip during IBD.
     pub peers: HashSet<PeerId>,
     /// Deprecated: no longer used. Kept for YAML backward compatibility.
+    #[serde_as(as = "MinimalBoundedDuration<0, SECOND>")]
     pub delay_before_new_download: Duration,
     /// Maximum number of attempts when fetching tips from IBD peers.
     pub tips_fetch_max_attempts: usize,
     /// Lower bound of the exponential backoff between tip-fetch attempts.
+    #[serde_as(as = "MinimalBoundedDuration<0, MILLI>")]
     pub tips_fetch_min_delay: Duration,
     /// Upper bound of the exponential backoff between tip-fetch attempts.
+    #[serde_as(as = "MinimalBoundedDuration<0, MILLI>")]
     pub tips_fetch_max_delay: Duration,
     /// Delay between IBD rounds.
+    #[serde_as(as = "MinimalBoundedDuration<0, MILLI>")]
     pub round_delay: Duration,
 }
 
@@ -102,7 +108,7 @@ pub struct TipPollConfig {
     /// How many expected block-intervals (`1/f` slots each) the local tip may
     /// lag behind the current slot before we proactively poll peers.
     pub lag_threshold_blocks: NonZeroU64,
-    /// Maximum number of peers to sample with `GetTip` on each poll.
+    /// Maximum number of peers to sample with a tip request on each poll.
     pub max_peers_to_sample: NonZeroUsize,
 }
 

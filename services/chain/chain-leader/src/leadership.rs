@@ -22,7 +22,10 @@ use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
-use lb_ledger::{EpochState, UtxoTree};
+use lb_ledger::{
+    ConsensusExcludedKeys, EpochState, UtxoTree,
+    config::{EraScheduledConfig, config_for_epoch},
+};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_utils::tokio::task::spawn_blocking;
@@ -32,7 +35,7 @@ use lb_wallet_service::{
 };
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 #[cfg(test)]
-pub use pol_tests::test_config;
+pub use pol_tests::{single_era, test_config};
 use rand::rngs::OsRng;
 use tokio::{
     sync::{mpsc, oneshot},
@@ -274,9 +277,9 @@ pub struct SlotContext {
 /// (from the current slot for the ongoing epoch — so a mid-epoch start wastes
 /// no work — and in full for each later epoch). The stream is lazy: no slot is
 /// scanned until the subscriber drives it, and the subscriber decides how far
-/// ahead to pre-compute (e.g. via the `Buffered` adapter), so the whole epoch
-/// is never materialized here. This task only produces the cheap per-epoch
-/// handoffs; it exits when the subscriber drops its stream.
+/// ahead to pre-compute, so the whole epoch is never materialized here. This
+/// task only produces the cheap per-epoch handoffs; it exits when the
+/// subscriber drops its stream.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -286,7 +289,8 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
     kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
     time_relay: OutboundRelay<TimeServiceMessage>,
-    ledger_config: lb_ledger::Config,
+    era_schedule: Arc<EraScheduledConfig>,
+    consensus_excluded_keys: ConsensusExcludedKeys,
     epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
 ) where
     CryptarchiaService: CryptarchiaServiceData<Tx: Send>,
@@ -304,7 +308,7 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     let Some(mut slot_timer) = async {
         let (sender, receiver) = oneshot::channel();
         time_relay
-            .send(TimeServiceMessage::Subscribe { sender })
+            .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
             .await
             .ok()?;
         receiver.await.ok()
@@ -320,9 +324,14 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
     // at the end yields the first tick of the next epoch to process, or `None`
     // when the tick stream ends (which ends the loop).
     let mut current_slot_tick = slot_timer.next().await;
-    while let Some(SlotTick { slot, epoch }) = current_slot_tick {
-        let Some(slot_context) =
-            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
+    while let Some(SlotTick { slot, epoch, .. }) = current_slot_tick {
+        let Some(slot_context) = fetch_slot_context(
+            &cryptarchia_api,
+            &wallet_api,
+            &consensus_excluded_keys,
+            slot,
+        )
+        .await
         else {
             tracing::debug!(target: LOG_TARGET, "Could not fetch slot context for slot {slot:?}; retrying on the next tick.");
             current_slot_tick = slot_timer.next().await;
@@ -335,6 +344,16 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             eligible_aged,
             source,
         } = slot_context;
+        tracing::debug!(
+            target: LOG_TARGET,
+            event = "leader_eligible_notes",
+            path = "winning_slot_scan",
+            slot = ?slot,
+            epoch = ?epoch,
+            note_count = eligible_aged.len(),
+            total_value = eligible_aged.iter().map(|note| note.utxo.note.value).sum::<u64>(),
+            "Eligible notes for the winning slot scan"
+        );
         let state = PolEpochState {
             nonce: epoch_state.nonce,
             aged_utxo_root: epoch_state.utxo_merkle_root(),
@@ -362,12 +381,13 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
         );
 
         // Hand the subscriber a *lazy* stream over this epoch's slot range. No
-        // slot is scanned until the subscriber drives the stream, and it decides
-        // how far ahead to pre-compute, so the whole epoch is never materialized
-        // here. A scan made stale by an epoch rollover is implicitly abandoned:
-        // the subscriber just stops polling it once it moves to the next epoch.
+        // slot is scanned until the subscriber drives the stream, and it
+        // decides how far ahead to pre-compute, so the whole epoch is
+        // never materialized here. A scan made stale by an epoch
+        // rollover is implicitly abandoned: the subscriber just stops
+        // polling it once it moves to the next epoch.
         let winning_slots_stream = epoch_winning_slots_stream(
-            &ledger_config,
+            &era_schedule,
             epoch_state,
             &eligible_aged,
             kms.clone(),
@@ -386,8 +406,8 @@ pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeService
             return;
         }
 
-        // Wait for the first tick of the next epoch to produce a new winning slot
-        // stream and pass it to consumers.
+        // Wait for the first tick of the next epoch to produce a new winning
+        // slot stream and pass it to consumers.
         current_slot_tick = next_epoch_tick(&mut slot_timer, epoch).await;
     }
 
@@ -411,12 +431,12 @@ async fn next_epoch_tick(
 }
 
 /// Fetches the [`SlotContext`] for `slot` from the tip: the tip header, the
-/// slot's epoch state, and the wallet's eligible leader UTXOs (with the faucet
-/// UTXO filtered out). Returns `None` if any lookup fails.
+/// slot's epoch state, and the wallet's eligible leader UTXOs (with the
+/// consensus-excluded UTXOs filtered out). Returns `None` if any lookup fails.
 pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService>,
     wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
-    ledger_config: &lb_ledger::Config,
+    consensus_excluded_keys: &ConsensusExcludedKeys,
     slot: Slot,
 ) -> Option<SlotContext>
 where
@@ -437,18 +457,18 @@ where
         .await
         .ok()?
         .ok()?;
+    // Filter the wallet's notes by the aged UTXO set of the slot's epoch, not
+    // the one of the tip's epoch: on the first slots of an epoch, before any
+    // block of it is on the chain, the two differ.
     let eligible_utxos = wallet_api
-        .get_leader_aged_notes(Some(wallet_tip))
+        .get_leader_aged_notes(wallet_tip, epoch_state.utxos.clone())
         .await
         .ok()?;
-    let eligible = match &ledger_config.faucet_pk {
-        Some(faucet_pk) => eligible_utxos
-            .response
-            .into_iter()
-            .filter(|utxo| utxo.utxo.note.pk != *faucet_pk)
-            .collect(),
-        None => eligible_utxos.response,
-    };
+    let eligible = eligible_utxos
+        .response
+        .into_iter()
+        .filter(|utxo| !consensus_excluded_keys.contains(&utxo.utxo.note.pk))
+        .collect();
     Some(SlotContext {
         wallet_tip,
         epoch_state,
@@ -469,24 +489,23 @@ where
 /// driven, performs the KMS lottery check for that slot and — on a win — builds
 /// the leadership private inputs, resolving to `Some(LeaderPrivate)` for a
 /// winning slot or `None` otherwise. The consumer drives the futures (and
-/// decides how far ahead to pre-compute, e.g. via the `Buffered` adapter), so
-/// the whole epoch is never materialized at once.
+/// decides how far ahead to pre-compute), so the whole epoch is never
+/// materialized at once.
 ///
 /// The winning check uses the aged UTXO tree (`epoch_state.utxos`), since the
 /// leadership quota proof only attests that a note was aged at the end of the
 /// previous epoch, not that it is unspent. Slots earlier than `start_slot` are
 /// skipped so a mid-epoch subscriber wastes no work.
 fn epoch_winning_slots_stream<RuntimeServiceId>(
-    ledger_config: &lb_ledger::Config,
+    era_schedule: &EraScheduledConfig,
     epoch_state: EpochState,
     eligible_aged: &[UtxoWithKeyId],
     kms: impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Send + Sync + 'static,
     start_slot: Slot,
 ) -> WinningPolSlotStream {
-    let slots_per_epoch = ledger_config.epoch_length();
-    let epoch_first_slot: u64 = ledger_config
-        .epoch_config
-        .starting_slot(&epoch_state.epoch, ledger_config.base_period_length())
+    let slots_per_epoch = config_for_epoch(era_schedule, epoch_state.epoch).epoch_length();
+    let epoch_first_slot: u64 = era_schedule
+        .starting_slot_for_epoch(epoch_state.epoch)
         .into();
     let epoch_last_slot = epoch_first_slot
         .checked_add(slots_per_epoch)
@@ -562,9 +581,14 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
 #[cfg(test)]
 mod pol_tests {
     use core::fmt;
-    use std::{fmt::Formatter, num::NonZero, slice};
+    use std::{
+        fmt::Formatter,
+        num::{NonZero, NonZeroU32},
+        slice,
+    };
 
     use lb_core::{
+        era::{AcceptedForkDigests, ForkDigest},
         mantle::{
             ledger::{Inputs, Note, Outputs},
             ops::{leader_claim::VoucherCm, transfer::TransferOp},
@@ -581,7 +605,8 @@ mod pol_tests {
             Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
         },
     };
-    use lb_utils::math::{NonNegativeRatio, PositiveF64};
+    use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
     use lb_wallet_service::{WalletMsg, WalletServiceSettings};
     use overwatch::services::{
         ServiceData,
@@ -684,6 +709,20 @@ mod pol_tests {
         None
     }
 
+    /// `config` as the only era, from genesis.
+    pub fn single_era(config: lb_ledger::Config) -> EraScheduledConfig {
+        EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            EraTiming {
+                slot_duration: core::time::Duration::from_secs(1),
+                epoch_length: EpochLength::epoch_length(&config),
+            },
+            EraEntriesAfterGenesis::empty(),
+        )
+        .expect("a single era resolves")
+        .map(move |_| config.clone())
+    }
+
     /// Build an [`EpochState`] and a winning UTXO for `scan` tests.
     fn scan_test_fixtures() -> (
         lb_ledger::Config,
@@ -734,17 +773,15 @@ mod pol_tests {
     #[tokio::test]
     async fn scan_emits_only_slots_in_range() {
         let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
+        let eras = single_era(config.clone());
 
-        let epoch_starting_slot: u64 = config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, config.base_period_length())
-            .into();
+        let epoch_starting_slot: u64 = eras.starting_slot_for_epoch(epoch_state.epoch).into();
         let epoch_end = epoch_starting_slot + config.epoch_length();
         let start_slot = epoch_starting_slot + config.epoch_length() / 2;
 
         // Drive every per-slot future and keep the winning ones.
         let winners: Vec<_> =
-            epoch_winning_slots_stream(&config, epoch_state, &eligible, kms, start_slot.into())
+            epoch_winning_slots_stream(&eras, epoch_state, &eligible, kms, start_slot.into())
                 .filter_map(|winning_slot| winning_slot)
                 .collect()
                 .await;
@@ -768,15 +805,13 @@ mod pol_tests {
     #[tokio::test]
     async fn scan_past_epoch_end_emits_nothing() {
         let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
+        let eras = single_era(config.clone());
 
-        let epoch_starting_slot: u64 = config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, config.base_period_length())
-            .into();
+        let epoch_starting_slot: u64 = eras.starting_slot_for_epoch(epoch_state.epoch).into();
         let epoch_end = epoch_starting_slot + config.epoch_length();
 
         let winners: Vec<_> =
-            epoch_winning_slots_stream(&config, epoch_state, &eligible, kms, epoch_end.into())
+            epoch_winning_slots_stream(&eras, epoch_state, &eligible, kms, epoch_end.into())
                 .filter_map(|winning_slot| winning_slot)
                 .collect()
                 .await;
@@ -791,15 +826,12 @@ mod pol_tests {
     /// deployment config in tests.
     fn disabled_reward_config() -> RewardPoWConfig {
         RewardPoWConfig {
-            reward_pool_genesis: 1_000_000_000,
-            epoch_reward_genesis: 1_000_000,
             minimum_difficulty: ModulusShift::new::<26>(),
             ema_smoothing_factor: 9,
             ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
-            target_claims_per_block: 100,
+            target_claims_per_block: core::num::NonZeroU64::new(100).unwrap(),
             rate_num: 0,
             rate_den: core::num::NonZeroU64::MIN,
-            target_claim_per_block: core::num::NonZeroU64::MIN,
             pow_share: 0,
             share_den: core::num::NonZeroU64::MIN,
             slot_window: core::num::NonZeroU64::new(100).unwrap(),
@@ -815,9 +847,10 @@ mod pol_tests {
             },
             consensus_config: lb_cryptarchia_engine::Config::new(
                 NonZero::new(5).unwrap(),
-                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
                 1f64.try_into().expect("1 > 0"),
-                NonZero::new(12).unwrap(),
+                12,
+                4,
             ),
             sdp_config: SdpConfig {
                 service_params: Arc::new(
@@ -825,7 +858,6 @@ mod pol_tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.try_into().unwrap(),
-                            epoch: 0.into(),
                         },
                     )]
                     .into(),
@@ -833,19 +865,50 @@ mod pol_tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
                         rounds_per_epoch: NonZero::new(10u64).unwrap(),
-                        message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),
                         data_replication_factor: 0,
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 1,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 1 },
             },
-            faucet_pk: None,
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: lb_ledger::config::ExecutionMarketConfig {
+                max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+            },
+            storage_market: lb_ledger::config::StorageMarketConfig {
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+            },
+            block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: lb_core::mantle::gas::GasProfile {
+                transfer: 590.into(),
+                channel_config: 56.into(),
+                channel_inscribe: 56.into(),
+                channel_deposit: 590.into(),
+                channel_withdraw: 56.into(),
+                channel_transfer: 56.into(),
+                sdp_declare: 646.into(),
+                sdp_withdraw: 590.into(),
+                sdp_active: 590.into(),
+                leader_claim: 580.into(),
+                claim_pow_reward: 1.into(),
+            },
             pow_config: PoWConfig {
                 blend: BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -856,6 +919,7 @@ mod pol_tests {
                 },
                 reward: disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
         }
     }
 
@@ -894,7 +958,8 @@ mod pol_tests {
             let latest_path = latest_tree
                 .path(&utxo.id())
                 .ok_or(PrivateInputsError::LatestNoteNotFound)?;
-            // Generate a random one-time Ed25519 key for P_LEAD (as per PoL spec)
+            // Generate a random one-time Ed25519 key for P_LEAD (as per PoL
+            // spec)
             let leader_signing_key = Ed25519Key::generate(&mut OsRng);
             let leader_pk = leader_signing_key.public_key();
             let leader_private = LeaderPrivate::new(

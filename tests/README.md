@@ -71,6 +71,14 @@ CI expects `target/release/logos-blockchain-node` to already exist, or
 `LOGOS_BLOCKCHAIN_NODE_BIN` to point at the prebuilt binary. It does not build
 node binaries inside the test process.
 
+Managed Tokio-console builds use a compiler wrapper to enable `--cfg
+tokio_unstable` for dependencies as well as the node. The wrapper composes
+wrappers supplied through `RUSTC_WRAPPER` or `CARGO_BUILD_RUSTC_WRAPPER`, but
+overrides `build.rustc-wrapper` in Cargo configuration files. To use a custom
+Cargo-configured wrapper, prebuild the node with the `testing,tokio-console`
+features and `--cfg tokio_unstable`, then provide its path through
+`LOGOS_BLOCKCHAIN_NODE_BIN`.
+
 ### 1. Run a specific test
 
 _**MacOS or Linux**_
@@ -145,15 +153,17 @@ before local nodes are started. In CI, Cucumber uses the release binary built by
 Filtering based on tags can be done using the `--tags` option. For example, to run all tests tagged with `@normal_ci`, 
 use the following command:
 ```bash
-cargo test --release --features cucumber --test cucumber -- --tags "@normal_ci"
+cargo test -p logos-blockchain-tests --release --features cucumber --test cucumber -- --tags "@normal_ci"
 ```
 
 Filtering based on test names can be done using the `--name` option. For example, to run a specific test named
 "Idle smoke", use the following command:
 
 ```bash
-cargo test --release --features cucumber --test cucumber -- --name "Idle smoke"
+cargo test -p logos-blockchain-tests --release --features cucumber --test cucumber -- --name "Idle smoke"
 ```
+
+Zone SDK and SQL tests now live in [logos-zone-sdk](https://github.com/logos-blockchain/logos-zone-sdk). That repository reuses this repository's node test support.
 
 For more information on running Cucumber tests, refer to https://github.com/cucumber-rs/cucumber or 
 https://cucumber.io/docs.

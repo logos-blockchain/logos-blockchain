@@ -19,7 +19,9 @@ blake2 = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
+hickory-resolver = { features = ["system-config"], workspace = true }
 igd-next = { features = ["aio_tokio", "tokio"], workspace = true }
+lb-core = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
 lb-log-targets = { workspace = true }
 lb-utils = { features = ["time"], workspace = true }
@@ -31,7 +33,6 @@ libp2p = { features = [
   "kad",
   "macros",
   "quic",
-  "secp256k1",
   "serde",
   "tokio",
 ], workspace = true }
@@ -39,9 +40,9 @@ multiaddr = { workspace = true }
 natpmp = { features = ["tokio"], workspace = true }
 netdev = { workspace = true }
 num_enum = { workspace = true }
-rand = { workspace = true }
+rand_010 = { features = ["thread_rng"], workspace = true }
 serde = { features = ["derive"], workspace = true }
-serde_with = { workspace = true }
+serde_with = { features = ["macros"], workspace = true }
 thiserror = { workspace = true }
 tokio = { features = ["macros", "test-util", "time"], workspace = true }
 tracing = { workspace = true }

@@ -1,5 +1,5 @@
 use crate::mantle::{
-    CryptarchiaParameter,
+    GenesisParameters,
     ledger::verification_mode::GenesisMode,
     ops::{SignedOperation, channel::inscribe::InscriptionOp, transfer::TransferOp},
     traits::{Hashable, MantleTx},
@@ -16,5 +16,5 @@ pub struct GenesisOps {
 /// [Spec](https://lip.logos.co/blockchain/raw/bedrock-genesis-block.html).
 pub trait GenesisTx: Hashable<Hash = TxHash> + MantleTx {
     fn into_genesis_ops(self) -> GenesisOps;
-    fn cryptarchia_parameter(&self) -> CryptarchiaParameter;
+    fn genesis_parameters(&self) -> GenesisParameters;
 }

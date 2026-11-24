@@ -7,10 +7,10 @@ pub use lb_libp2p::{
     libp2p::gossipsub::{Message, TopicHash},
 };
 use lb_log_targets::network_service;
+use lb_time::Era;
 use lb_utils::tokio::task::spawn_on;
 use overwatch::overwatch::handle::OverwatchHandle;
-use rand::SeedableRng as _;
-use rand_chacha::ChaCha20Rng;
+use rand_010::rngs::ChaCha20Rng;
 use tokio::sync::{broadcast, broadcast::Sender, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -20,7 +20,7 @@ pub use self::{
         ChainSyncCommand, Command, Dial, DiscoveryCommand, Libp2pInfo, NetworkCommand,
         PubSubCommand,
     },
-    config::Libp2pConfig,
+    config::{Libp2pConfig, Libp2pEraConfig},
 };
 use super::NetworkBackend;
 use crate::message::ChainSyncEvent;
@@ -41,8 +41,12 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
     type PubSubEvent = Message;
     type ChainSyncEvent = ChainSyncEvent;
 
-    fn new(config: Self::Settings, overwatch_handle: OverwatchHandle<RuntimeServiceId>) -> Self {
-        let rng = ChaCha20Rng::from_entropy();
+    fn new(
+        config: Self::Settings,
+        current_era: Era,
+        overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+    ) -> Self {
+        let rng: ChaCha20Rng = rand_010::make_rng();
         let (commands_tx, commands_rx) = mpsc::channel(BUFFER_SIZE);
 
         let (pubsub_events_tx, _) = broadcast::channel(BUFFER_SIZE);
@@ -52,6 +56,7 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
 
         let mut swarm_handler = SwarmHandler::new(
             config,
+            current_era,
             commands_tx.clone(),
             commands_rx,
             pubsub_events_tx.clone(),
@@ -76,6 +81,28 @@ impl<RuntimeServiceId> NetworkBackend<RuntimeServiceId> for Libp2p {
 
     async fn process(&self, msg: Self::Message) {
         if let Err(e) = self.commands_tx.send(msg).await {
+            tracing::error!(
+                target: LOG_TARGET,
+                "failed to send command to logos-blockchain-libp2p: {e:?}"
+            );
+        }
+    }
+
+    async fn rotate_era(&mut self, era: Era) {
+        if let Err(e) = self.commands_tx.send(Command::StartNewEra(era)).await {
+            tracing::error!(
+                target: LOG_TARGET,
+                "failed to send command to logos-blockchain-libp2p: {e:?}"
+            );
+        }
+    }
+
+    async fn complete_era_transition(&mut self, ended_era: Era) {
+        if let Err(e) = self
+            .commands_tx
+            .send(Command::CompleteEraTransition(ended_era))
+            .await
+        {
             tracing::error!(
                 target: LOG_TARGET,
                 "failed to send command to logos-blockchain-libp2p: {e:?}"

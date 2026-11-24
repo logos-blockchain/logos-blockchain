@@ -6,15 +6,15 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    era::ForkDigest,
     mantle::{
-        GasProfile, Note, NoteId, Op, Utxo, Value,
+        Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow, TxGasCalculator as _},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{OpRef, channel::ChannelId, transfer::TransferOp},
-        traits::MantleTx as _,
         transactions::{
-            Ops,
-            tx_list::ops::{OpsContext, mantle_spec},
+            Ops, TxList,
+            tx_list::ops::{OpsContext, unbuilt_tx},
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -53,7 +53,8 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
     }
 }
 
-/// Builds an [`Ops`] incrementally.
+/// Builds an [`Ops`] incrementally. The transaction gets its fork digest when
+/// it is built, from whoever signs it.
 ///
 /// The builder is intentionally free of any [`OpsContext`]: gas prices are
 /// tip-dependent, so the context is supplied as a parameter to the fee-aware
@@ -63,8 +64,9 @@ impl From<(BoundedError, BoundedTag)> for TxBuilderError {
 /// HTTP) to be funded against a freshly fetched context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MantleTxBuilder {
-    #[serde(rename = "mantle_tx", with = "mantle_spec")] // Shape as per spec
-    ops: Ops,
+    // The spec's transaction shape, without the fork digest it gets when built.
+    #[serde(rename = "mantle_tx", with = "unbuilt_tx")]
+    ops: TxList<Op>,
     ledger_inputs: BoundedUtxos,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
@@ -82,7 +84,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            ops: Ops::empty(),
+            ops: TxList::empty(),
             ledger_inputs: BoundedUtxos::default(),
             pending_transfer: TransferOp::new(Inputs::empty(), Outputs::empty()),
             channel_multi_sig_proofs: HashMap::new(),
@@ -93,12 +95,11 @@ impl MantleTxBuilder {
         self.extend_ops([op])
     }
 
-    // TODO: Change this to a `Result` if trying to push too many ops in the genesis
-    // block.
+    // TODO: Change this to a `Result` if trying to push too many ops in the
+    // genesis block.
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
             self.ops
-                .0
                 .try_push(op)
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
@@ -146,7 +147,7 @@ impl MantleTxBuilder {
 
     /// Return a positive change output while reserving the requested
     /// percentage of the final transaction's mandatory fee.
-    pub fn return_change<G: GasProfile>(
+    pub fn return_change(
         self,
         context: &OpsContext,
         change_pk: ZkPublicKey,
@@ -156,7 +157,7 @@ impl MantleTxBuilder {
         // is based on the final transaction shape.
         let candidate = self.with_dummy_change_note()?;
         let available_change =
-            candidate.funding_delta_with_priority_fee::<G>(context, priority_fee_percent)?;
+            candidate.funding_delta_with_priority_fee(context, priority_fee_percent)?;
 
         match available_change.cmp(&1) {
             Ordering::Less => {
@@ -218,11 +219,8 @@ impl MantleTxBuilder {
     /// Predicts the minimum gas cost of the transaction once signed.
     /// See [`TxGasCalculator::total_gas_cost`] to understand why this is
     /// only a minimum, not an exact cost.
-    pub fn minimum_gas_cost<G: GasProfile>(
-        &self,
-        context: &OpsContext,
-    ) -> Result<GasCost, TxBuilderError> {
-        for op_ref in self.ops.op_refs() {
+    pub fn minimum_gas_cost(&self, context: &OpsContext) -> Result<GasCost, TxBuilderError> {
+        for op_ref in self.ops.iter().map(Op::by_ref) {
             let channel_id = match op_ref {
                 OpRef::ChannelWithdraw(operation) => Some(operation.channel_id),
                 OpRef::ChannelTransfer(operation) => Some(operation.channel_id),
@@ -238,25 +236,24 @@ impl MantleTxBuilder {
             }
         }
 
-        let build = self.clone().build()?;
-        Ok(build.by_ref().total_gas_cost::<G>(&context.gas_context)?)
+        // Every fork digest has the same size, so the one the transaction
+        // will carry does not change its gas: any prices it.
+        let build = self.clone().build(ForkDigest::new([0; 32]))?;
+        Ok(build.by_ref().total_gas_cost(&context.gas_context)?)
     }
 
-    pub fn funding_delta<G: GasProfile>(
-        &self,
-        context: &OpsContext,
-    ) -> Result<i128, TxBuilderError> {
-        Ok(self.net_balance() - i128::from(self.minimum_gas_cost::<G>(context)?.into_inner()))
+    pub fn funding_delta(&self, context: &OpsContext) -> Result<i128, TxBuilderError> {
+        Ok(self.net_balance() - i128::from(self.minimum_gas_cost(context)?.into_inner()))
     }
 
     /// Returns the balance remaining after the mandatory fee and the
     /// percentage-based priority fee reserve.
-    pub fn funding_delta_with_priority_fee<G: GasProfile>(
+    pub fn funding_delta_with_priority_fee(
         &self,
         context: &OpsContext,
         priority_fee_percent: u64,
     ) -> Result<i128, TxBuilderError> {
-        let mandatory_fee = self.minimum_gas_cost::<G>(context)?.into_inner();
+        let mandatory_fee = self.minimum_gas_cost(context)?.into_inner();
         let required_fee = Self::required_fee(mandatory_fee, priority_fee_percent)?;
         Ok(self.net_balance() - i128::from(required_fee))
     }
@@ -298,7 +295,6 @@ impl MantleTxBuilder {
                 };
                 let locked = match op {
                     Op::SDPDeclare(declare) => Some(declare.service_note_id),
-                    Op::SDPWithdraw(withdraw) => Some(withdraw.service_note_id),
                     _ => None,
                 };
                 inputs.into_iter().flatten().copied().chain(locked)
@@ -316,16 +312,17 @@ impl MantleTxBuilder {
         &self.channel_multi_sig_proofs
     }
 
-    // TODO: Change this to a `Result` if genesis tx already contains max number of
-    // ops.
-    pub fn build(mut self) -> Result<Ops, TxBuilderError> {
+    // TODO: Change this to a `Result` if genesis tx already contains max number
+    // of ops.
+    /// The transaction, to be signed under the fork digest `fork_digest`,
+    /// with the pending transfer as its last operation.
+    pub fn build(mut self, fork_digest: ForkDigest) -> Result<Ops, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
             self.ops
-                .0
                 .try_push(Op::Transfer(self.pending_transfer))
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
-        Ok(self.ops)
+        Ok(Ops::new(fork_digest, self.ops))
     }
 }
 
@@ -337,12 +334,13 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            gas::MainnetGasProfile,
+            fixtures::ops::op_values::FORK_DIGEST,
+            gas::test_utils::GAS_PROFILE,
             ledger::BoundedInputs,
             ops::{
                 channel::{
                     deposit::{DepositOp, Metadata},
-                    inscribe::InscriptionOp,
+                    inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::LeaderClaimOp,
@@ -350,7 +348,7 @@ mod tests {
             },
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         },
-        sdp::{DeclarationId, Locator, ProviderId, ServiceType},
+        sdp::{DeclarationId, Locator, Nonce, ProviderId, ServiceType},
     };
 
     #[test]
@@ -361,7 +359,7 @@ mod tests {
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id: [0; 32].into(),
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
@@ -379,7 +377,10 @@ mod tests {
 
         assert_eq!(restored.net_balance(), builder.net_balance());
         assert_eq!(restored.ledger_inputs(), builder.ledger_inputs());
-        assert_eq!(restored.build().unwrap(), builder.build().unwrap());
+        assert_eq!(
+            restored.build(FORK_DIGEST).unwrap(),
+            builder.build(FORK_DIGEST).unwrap()
+        );
     }
 
     #[test]
@@ -387,7 +388,7 @@ mod tests {
         // Build an operation
         let op = InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: b"hello".into(),
+            inscription: Inscription::new_unchecked(b"hello".to_vec()),
             parent: [1; 32].into(),
             signer: Ed25519Key::from_bytes(&[0; 32])
                 .public_key()
@@ -396,7 +397,12 @@ mod tests {
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -405,12 +411,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -419,12 +420,17 @@ mod tests {
         let op = DepositOp {
             channel_id: [0; 32].into(),
             inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
-            metadata: b"Mint 1 to Alice in Zone".into(),
+            metadata: Metadata::new_unchecked(b"Mint 1 to Alice in Zone".to_vec()),
         };
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -433,12 +439,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -455,6 +456,7 @@ mod tests {
                 [(op.channel_id, 1)].into(),
                 HashMap::new(),
                 GasPrices::new(0, 0),
+                GAS_PROFILE,
             ),
             leader_reward_amount: 30,
         };
@@ -464,12 +466,7 @@ mod tests {
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
@@ -486,11 +483,16 @@ mod tests {
             .unwrap();
 
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(1, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(1, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
 
-        let result = builder.minimum_gas_cost::<MainnetGasProfile>(&context);
+        let result = builder.minimum_gas_cost(&context);
 
         assert!(matches!(
             result,
@@ -511,26 +513,31 @@ mod tests {
 
         // Init a tx builder
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(op)).unwrap();
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
-            0
-        );
+        assert_eq!(builder.funding_delta(&context).unwrap(), 0);
     }
 
     #[test]
     fn transfer_op() {
         // Init a tx builder for sending 30 to the recipient
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -542,24 +549,20 @@ mod tests {
         // Check that the balance is 10 (= 50 - 40)
         assert_eq!(builder.net_balance(), 10);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             10 // zero gas price for now
         );
 
         // Add change note
         let builder = builder
-            .return_change::<MainnetGasProfile>(&context, ZkPublicKey::zero(), 0)
+            .return_change(&context, ZkPublicKey::zero(), 0)
             .unwrap()
             .unwrap();
 
         // Check the tx is balanced
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             0 // zero gas price for now
         );
     }
@@ -573,13 +576,14 @@ mod tests {
                 [(channel_id, 1)].into(),
                 HashMap::new(),
                 GasPrices::new(0, 0),
+                GAS_PROFILE,
             ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id,
-                inscription: b"hello".into(),
+                inscription: Inscription::new_unchecked(b"hello".to_vec()),
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32])
                     .public_key()
@@ -589,7 +593,7 @@ mod tests {
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
                 inputs: BoundedInputs::from(NoteId(Fr::ZERO)).into(),
-                metadata: b"Mint 10 to Alice in Zone".into(),
+                metadata: Metadata::new_unchecked(b"Mint 10 to Alice in Zone".to_vec()),
             }))
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
@@ -609,9 +613,7 @@ mod tests {
         // Check the balance before funding tx
         assert_eq!(builder.net_balance(), -40);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             -40 // zero gas price for now
         );
 
@@ -623,9 +625,7 @@ mod tests {
         // Check the tx is balanced
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(
-            builder
-                .funding_delta::<MainnetGasProfile>(&context)
-                .unwrap(),
+            builder.funding_delta(&context).unwrap(),
             0 // zero gas price for now
         );
     }
@@ -634,7 +634,6 @@ mod tests {
     fn notes_consumed_or_used_in_service() {
         let deposit_input = NoteId(Fr::from(1u64));
         let declare_service_note = NoteId(Fr::from(2u64));
-        let withdraw_service_note = NoteId(Fr::from(3u64));
         let transfer_input = Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
 
         let builder = MantleTxBuilder::new()
@@ -646,7 +645,7 @@ mod tests {
             .unwrap()
             .push_op(Op::SDPDeclare(SDPDeclareOp {
                 service_type: ServiceType::BlendNetwork,
-                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+                locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
                 provider_id: ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key()),
                 zk_id: ZkPublicKey::zero(),
                 service_note_id: declare_service_note,
@@ -654,8 +653,7 @@ mod tests {
             .unwrap()
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
-                service_note_id: withdraw_service_note,
-                nonce: 1,
+                nonce: Nonce::new(0.into(), 1),
             }))
             .unwrap()
             .add_ledger_input(transfer_input)
@@ -671,14 +669,12 @@ mod tests {
             "should contain declare service note"
         );
         assert!(
-            consumed_or_used.contains(&withdraw_service_note),
-            "should contain withdraw service note"
-        );
-        assert!(
             consumed_or_used.contains(&transfer_input.id()),
             "should contain transfer input"
         );
-        assert_eq!(consumed_or_used.len(), 4);
+        // SDP Withdraw no longer carries the service-note ID; it is resolved
+        // from the declaration by validation and wallet signing.
+        assert_eq!(consumed_or_used.len(), 3);
     }
 
     #[test]

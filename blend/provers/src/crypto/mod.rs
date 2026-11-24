@@ -1,6 +1,7 @@
-use std::{num::NonZeroU64, sync::Arc};
+use std::sync::Arc;
 
 use educe::Educe;
+use lb_blend_message::encap::MessageLayout;
 pub use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
 use lb_blend_proofs::quota::Quota;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
@@ -25,8 +26,10 @@ pub struct EpochCryptographicProcessorSettings {
     /// corresponding to the public key registered in the membership (SDP).
     #[educe(Debug(ignore))]
     pub non_ephemeral_encryption_key: X25519PrivateKey,
-    /// `ß_c`: number of blending operations for each locally generated message.
-    pub num_blend_layers: NonZeroU64,
+    /// The layout of the epoch's messages: `ß_c`, the number of blending
+    /// operations for each locally generated message, and the size their
+    /// payload bodies are padded to.
+    pub message_layout: MessageLayout,
     /// The dedicated thread pool the `PoW` puzzle search runs on, built once
     /// for the service and shared by every epoch's processor.
     pub pow_mining_pool: Arc<ThreadPool>,

@@ -25,6 +25,7 @@ lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }
 lb-mmr                        = { workspace = true }
 lb-pol                        = { workspace = true }
+lb-time                       = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
 num-bigint                    = { workspace = true }
@@ -41,6 +42,7 @@ lb-core    = { features = ["test-utils", "unsafe-test-functions"], workspace = t
 lb-zksign  = { workspace = true }
 rand       = { features = ["std", "std_rng"], workspace = true }
 serde_json = { features = ["alloc"], workspace = true }
+time       = { workspace = true }
 
 [[bench]]
 harness = false

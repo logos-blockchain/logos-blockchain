@@ -514,17 +514,18 @@ mod tests {
         let json = serde_json::from_str::<TestSet>(r#"[1,1,1,1,1,"malformed"]"#).unwrap_err();
         assert!(
             json.to_string()
-                .contains("Item count 5 exceeds static maximum of 4"),
+                .contains("Item count 5 exceeds maximum of 4"),
             "unexpected error: {json}"
         );
 
-        // A declared length past `MAX` is refused before any element is decoded.
+        // A declared length past `MAX` is refused before any element is
+        // decoded.
         let encoded = bincode::serialize(&vec![1u8; 5]).unwrap();
         let binary = bincode::deserialize::<TestSet>(&encoded).unwrap_err();
         assert!(
             binary
                 .to_string()
-                .contains("Item count 5 exceeds static maximum of 4"),
+                .contains("Item count 5 exceeds maximum of 4"),
             "unexpected error: {binary}"
         );
     }
@@ -554,7 +555,7 @@ mod tests {
         let encoded = bincode::serialize(&vec![1u8, 2, 3, 4, 5]).unwrap();
         let too_many = bincode::deserialize::<TestSet>(&encoded).unwrap_err();
         assert!(
-            too_many.to_string().contains("exceeds static maximum"),
+            too_many.to_string().contains("exceeds maximum"),
             "unexpected error: {too_many}"
         );
     }

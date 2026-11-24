@@ -95,9 +95,9 @@ pub struct Entry {
 /// reaction to something a peer did, but leaves only because time passed.
 #[derive(Debug)]
 pub struct PeerBlacklist {
-    /// Ordered oldest-first, which is both the eviction order and the expiry
-    /// order: rounds only move forward, so an entry added later can never
-    /// expire earlier.
+    /// Ordered oldest-first, which is the eviction order. It is not the expiry
+    /// order: each entry keeps the expiry it was added with, and a later era
+    /// may shorten it.
     entries: VecDeque<Entry>,
     /// How many peers may be blacklisted at once. Reaching it evicts the oldest
     /// entry.
@@ -114,6 +114,16 @@ impl PeerBlacklist {
             entries: VecDeque::with_capacity(capacity.get()),
             capacity,
             expiry,
+        }
+    }
+
+    /// Update blacklist parameters and evict any entries that are now above the
+    /// new capacity.
+    pub fn update_parameters(&mut self, capacity: NonZeroUsize, expiry: RoundCount) {
+        self.capacity = capacity;
+        self.expiry = expiry;
+        while self.entries.len() > capacity.get() {
+            self.entries.pop_front();
         }
     }
 
@@ -188,22 +198,24 @@ impl PeerBlacklist {
     }
 
     /// Drops entries that have outlived their expiry, and returns them.
+    ///
+    /// Every entry is checked because a change in expiry duration can result in
+    /// items expiring earlier being added at the tail of the queue.
     pub fn prune_expired_entries(&mut self, now: Round) -> impl Iterator<Item = Entry> {
         let mut expired = Vec::new();
-        while self
-            .entries
-            .front()
-            .is_some_and(|entry| !is_unexpired(entry, now))
-        {
-            let expired_entry = self.entries.pop_front().unwrap();
+        self.entries.retain(|entry| {
+            if is_unexpired(entry, now) {
+                return true;
+            }
             tracing::debug!(
                 target: MAINTENANCE_TARGET,
                 "Peer {:?} is no longer blacklisted: the window it was excluded for, after {}, has passed.",
-                expired_entry.peer,
-                expired_entry.reason
+                entry.peer,
+                entry.reason
             );
-            expired.push(expired_entry);
-        }
+            expired.push(*entry);
+            false
+        });
         expired.into_iter()
     }
 
@@ -249,6 +261,69 @@ mod tests {
             !blacklist.contains(&peer, Round::from(10 + EXPIRY_ROUNDS.get())),
             "`W` rounds after the offence the peer may be dialed again"
         );
+    }
+
+    /// A new era's expiry is for the entries added after it.
+    #[test]
+    fn an_entry_keeps_the_expiry_it_was_added_with() {
+        let (mut blacklist, early, late) = (blacklist(), PeerId::random(), PeerId::random());
+        blacklist.insert_or_extend(early, BlacklistReason::InvalidProofOfQuota, Round::from(0));
+
+        // The new era shortens the window.
+        blacklist.update_parameters(CAPACITY, RoundCount::new(NonZeroU128::new(5).unwrap()));
+        blacklist.insert_or_extend(late, BlacklistReason::InvalidProofOfQuota, Round::from(0));
+
+        assert!(!blacklist.contains(&late, Round::from(5)));
+        assert!(
+            blacklist.contains(&early, Round::from(EXPIRY_ROUNDS.get() - 1)),
+            "a later era does not shorten the window an entry was added with"
+        );
+    }
+
+    /// Entries added under different expiries do not expire in the order they
+    /// were added, and pruning finds every one that has.
+    #[test]
+    fn pruning_finds_the_entries_that_expire_out_of_order() {
+        let (mut blacklist, early, late) = (blacklist(), PeerId::random(), PeerId::random());
+        blacklist.insert_or_extend(early, BlacklistReason::InvalidProofOfQuota, Round::from(0));
+        blacklist.update_parameters(CAPACITY, RoundCount::new(NonZeroU128::new(5).unwrap()));
+        blacklist.insert_or_extend(late, BlacklistReason::InvalidProofOfQuota, Round::from(1));
+
+        let expired: Vec<_> = blacklist
+            .prune_expired_entries(Round::from(6))
+            .map(|entry| entry.peer)
+            .collect();
+
+        assert_eq!(
+            expired,
+            vec![late],
+            "the newer entry expired behind an older one still running"
+        );
+        assert!(blacklist.contains(&early, Round::from(6)));
+        assert_eq!(blacklist.len(), 1);
+    }
+
+    #[test]
+    fn a_smaller_capacity_keeps_the_most_recent_offenders() {
+        let mut blacklist = blacklist();
+        let peers: Vec<_> = repeat_with(PeerId::random).take(CAPACITY.get()).collect();
+        for (round, peer) in (0..).zip(&peers) {
+            blacklist.insert_or_extend(
+                *peer,
+                BlacklistReason::InvalidProofOfQuota,
+                Round::from(round),
+            );
+        }
+
+        let capacity = NonZeroUsize::new(2).unwrap();
+        blacklist.update_parameters(capacity, RoundCount::new(EXPIRY_ROUNDS));
+
+        let now = Round::from(CAPACITY.get() as u128);
+        let kept: Vec<_> = peers
+            .iter()
+            .filter(|peer| blacklist.contains(peer, now))
+            .collect();
+        assert_eq!(kept, peers.iter().rev().take(2).rev().collect::<Vec<_>>());
     }
 
     #[test]

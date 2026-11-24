@@ -3,6 +3,7 @@ use std::{
     ops::Add,
 };
 
+use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 use serde::{Deserialize, Serialize};
 
 use crate::mantle::{
@@ -38,6 +39,125 @@ impl From<Value> for Gas {
         Self(value)
     }
 }
+
+// An amount of gas: the `Value` it counts.
+impl BinaryEncode for Gas {
+    fn encoded_length(&self) -> usize {
+        self.0.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.0.encode_into(out);
+    }
+}
+
+codec_fixtures!(Gas, encode_only, Gas::new(0x0807_0605_0403_0201) => "0102030405060708");
+
+/// The execution gas each Operation consumes in an era.
+///
+/// The channel Operations its keys authorize cost their entry once per key of
+/// the threshold they are verified against, so a channel that does not exist
+/// yet prices them at zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GasProfile {
+    pub transfer: Gas,
+    /// Per configuration key.
+    pub channel_config: Gas,
+    pub channel_inscribe: Gas,
+    pub channel_deposit: Gas,
+    /// Per transfer key.
+    pub channel_withdraw: Gas,
+    /// Per transfer key.
+    pub channel_transfer: Gas,
+    pub sdp_declare: Gas,
+    pub sdp_withdraw: Gas,
+    pub sdp_active: Gas,
+    pub leader_claim: Gas,
+    pub claim_pow_reward: Gas,
+}
+
+// The cost of every Operation, in declaration order: the order of their
+// opcodes. A node's era digest commits to them through this encoding.
+impl BinaryEncode for GasProfile {
+    fn encoded_length(&self) -> usize {
+        let Self {
+            transfer,
+            channel_config,
+            channel_inscribe,
+            channel_deposit,
+            channel_withdraw,
+            channel_transfer,
+            sdp_declare,
+            sdp_withdraw,
+            sdp_active,
+            leader_claim,
+            claim_pow_reward,
+        } = self;
+        transfer.encoded_length()
+            + channel_config.encoded_length()
+            + channel_inscribe.encoded_length()
+            + channel_deposit.encoded_length()
+            + channel_withdraw.encoded_length()
+            + channel_transfer.encoded_length()
+            + sdp_declare.encoded_length()
+            + sdp_withdraw.encoded_length()
+            + sdp_active.encoded_length()
+            + leader_claim.encoded_length()
+            + claim_pow_reward.encoded_length()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        let Self {
+            transfer,
+            channel_config,
+            channel_inscribe,
+            channel_deposit,
+            channel_withdraw,
+            channel_transfer,
+            sdp_declare,
+            sdp_withdraw,
+            sdp_active,
+            leader_claim,
+            claim_pow_reward,
+        } = self;
+        transfer.encode_into(out);
+        channel_config.encode_into(out);
+        channel_inscribe.encode_into(out);
+        channel_deposit.encode_into(out);
+        channel_withdraw.encode_into(out);
+        channel_transfer.encode_into(out);
+        sdp_declare.encode_into(out);
+        sdp_withdraw.encode_into(out);
+        sdp_active.encode_into(out);
+        leader_claim.encode_into(out);
+        claim_pow_reward.encode_into(out);
+    }
+}
+
+/// The encoding of the fixture below, one Operation per group.
+const GAS_PROFILE_HEX: &str = "
+    0100000000000000 0200000000000000 0300000000000000 0400000000000000 0500000000000000
+    0600000000000000 0700000000000000 0800000000000000 0900000000000000 0a00000000000000
+    0b00000000000000
+";
+
+codec_fixtures!(
+    GasProfile,
+    encode_only,
+    GasProfile {
+        transfer: Gas::new(1),
+        channel_config: Gas::new(2),
+        channel_inscribe: Gas::new(3),
+        channel_deposit: Gas::new(4),
+        channel_withdraw: Gas::new(5),
+        channel_transfer: Gas::new(6),
+        sdp_declare: Gas::new(7),
+        sdp_withdraw: Gas::new(8),
+        sdp_active: Gas::new(9),
+        leader_claim: Gas::new(10),
+        claim_pow_reward: Gas::new(11),
+    } => GAS_PROFILE_HEX
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GasPrice(Value);
@@ -117,17 +237,11 @@ pub trait TxGasCalculator {
     type Context;
 
     /// Returns the gas cost of this transaction.
-    fn total_gas_cost<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<GasCost, GasOverflow>;
+    fn total_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow>;
 
     fn storage_gas_cost(&self, context: &Self::Context) -> Result<GasCost, GasOverflow>;
 
-    fn execution_gas_consumption<Profile: GasProfile>(
-        &self,
-        context: &Self::Context,
-    ) -> Result<Gas, GasOverflow>;
+    fn execution_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow>;
 
     fn storage_gas_consumption(&self, context: &Self::Context) -> Result<Gas, GasOverflow>;
 }
@@ -135,24 +249,6 @@ pub trait TxGasCalculator {
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 #[error("Gas overflow")]
 pub struct GasOverflow;
-
-mod private {
-    pub trait Sealed {}
-}
-
-pub trait GasProfile: private::Sealed {}
-
-pub struct MainnetGasProfile;
-impl private::Sealed for MainnetGasProfile {}
-impl GasProfile for MainnetGasProfile {}
-
-pub trait OperationGas<Profile: GasProfile> {
-    const GAS_COST: Gas;
-}
-
-impl<T: OperationGas<Profile>, Profile: GasProfile> OperationGas<Profile> for &T {
-    const GAS_COST: Gas = T::GAS_COST;
-}
 
 // Where an Operation reads the threshold it is verified against. The ledger
 // answers from the live channels, the wallet from what it predicts them to be.
@@ -164,19 +260,26 @@ pub trait ThresholdSource {
     fn transfer_threshold(&self, channel: &ChannelId) -> ChannelKeyIndex;
 }
 
-// The Execution Gas of an Operation, derived from the Operation and the state
-// it is validated against EXCLUSIVELY.
-pub trait OpGasCalculator<Profile: GasProfile>: OperationGas<Profile> {
-    fn execution_gas(&self, _thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-        Ok(Self::GAS_COST)
-    }
-}
-
 #[cfg(test)]
 pub mod test_utils {
     use crate::mantle::{
-        gas::ThresholdSource,
+        gas::{Gas, GasProfile, ThresholdSource},
         ops::channel::{ChannelId, ChannelKeyIndex},
+    };
+
+    /// The costs of the deployments' current gas profile.
+    pub const GAS_PROFILE: GasProfile = GasProfile {
+        transfer: Gas::new(590),
+        channel_config: Gas::new(56),
+        channel_inscribe: Gas::new(56),
+        channel_deposit: Gas::new(590),
+        channel_withdraw: Gas::new(56),
+        channel_transfer: Gas::new(56),
+        sdp_declare: Gas::new(646),
+        sdp_withdraw: Gas::new(590),
+        sdp_active: Gas::new(590),
+        leader_claim: Gas::new(580),
+        claim_pow_reward: Gas::new(1),
     };
 
     pub struct FixedThresholds(pub ChannelKeyIndex);
@@ -189,79 +292,5 @@ pub mod test_utils {
         fn transfer_threshold(&self, _channel: &ChannelId) -> ChannelKeyIndex {
             self.0
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-    };
-    use crate::mantle::{Value, gas::test_utils::FixedThresholds, ops::channel::ChannelId};
-
-    struct ScalingOp;
-
-    impl OperationGas<MainnetGasProfile> for ScalingOp {
-        const GAS_COST: Gas = Gas::new(7);
-    }
-
-    impl OpGasCalculator<MainnetGasProfile> for ScalingOp {
-        fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-            Self::GAS_COST.checked_mul(Value::from(
-                thresholds.transfer_threshold(&ChannelId::from([0; 32])),
-            ))
-        }
-    }
-
-    struct FlatOp;
-
-    impl OperationGas<MainnetGasProfile> for FlatOp {
-        const GAS_COST: Gas = Gas::new(7);
-    }
-
-    impl OpGasCalculator<MainnetGasProfile> for FlatOp {}
-
-    struct MaxCostOp;
-
-    impl OperationGas<MainnetGasProfile> for MaxCostOp {
-        const GAS_COST: Gas = Gas::new(Value::MAX);
-    }
-
-    impl OpGasCalculator<MainnetGasProfile> for MaxCostOp {
-        fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-            Self::GAS_COST.checked_mul(Value::from(
-                thresholds.transfer_threshold(&ChannelId::from([0; 32])),
-            ))
-        }
-    }
-
-    #[test]
-    fn execution_gas_scales_the_base_cost_by_the_threshold() {
-        assert_eq!(
-            ScalingOp.execution_gas(&FixedThresholds(0)),
-            Ok(Gas::new(0))
-        );
-        assert_eq!(
-            ScalingOp.execution_gas(&FixedThresholds(1)),
-            Ok(Gas::new(7))
-        );
-        assert_eq!(
-            ScalingOp.execution_gas(&FixedThresholds(2)),
-            Ok(Gas::new(14))
-        );
-    }
-
-    #[test]
-    fn execution_gas_defaults_to_the_base_cost_whatever_the_threshold() {
-        assert_eq!(FlatOp.execution_gas(&FixedThresholds(0)), Ok(Gas::new(7)));
-        assert_eq!(FlatOp.execution_gas(&FixedThresholds(3)), Ok(Gas::new(7)));
-    }
-
-    #[test]
-    fn execution_gas_reports_overflow() {
-        assert_eq!(
-            MaxCostOp.execution_gas(&FixedThresholds(2)),
-            Err(GasOverflow)
-        );
     }
 }

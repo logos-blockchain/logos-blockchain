@@ -85,8 +85,8 @@ impl ProofsVerifier for RealProofsVerifier {
     ) -> Result<VerifiedProofOfQuota, Self::Error> {
         let PoQVerificationInputsMinusSigningKey { core, leader, pow } = self.current_inputs;
 
-        // Try with current input, and if it fails, try with the previous one, if any
-        // (i.e., within the epoch transition period).
+        // Try with current input, and if it fails, try with the previous one,
+        // if any (i.e., within the epoch transition period).
         tracing::trace!(
             target: LOG_TARGET,
             "Verifying proof of quota with key nullifier {:?}, signing key: {signing_key:?}, public core inputs: {core:?} and leader inputs: {leader:?}.",

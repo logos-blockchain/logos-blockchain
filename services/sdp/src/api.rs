@@ -11,7 +11,7 @@ use overwatch::{
 };
 use tokio::sync::{oneshot, oneshot::error::RecvError};
 
-use crate::{SdpMessage, SdpSubmission};
+use crate::{SdpMessage, SdpStatus, SdpSubmission, status::SdpBlendStatus};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -67,6 +67,22 @@ where
             reply_channel,
         })
         .await?;
+        receiver.await?.map_err(Error::Other)
+    }
+
+    /// This node's SDP status.
+    pub async fn get_status(&self) -> Result<SdpStatus, Error> {
+        let (reply_channel, receiver) = oneshot::channel();
+        self.publish(SdpMessage::GetStatus { reply_channel })
+            .await?;
+        Ok(receiver.await?)
+    }
+
+    /// This node's Blend status.
+    pub async fn get_blend_status(&self) -> Result<SdpBlendStatus, Error> {
+        let (reply_channel, receiver) = oneshot::channel();
+        self.publish(SdpMessage::GetBlendStatus { reply_channel })
+            .await?;
         receiver.await?.map_err(Error::Other)
     }
 }

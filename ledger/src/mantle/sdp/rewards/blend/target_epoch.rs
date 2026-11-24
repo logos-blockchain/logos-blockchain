@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap, iter::once};
+use std::{cmp::Ordering, collections::HashMap, iter::once, num::NonZeroU64};
 
 use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait,
@@ -15,7 +15,7 @@ use tracing::debug;
 
 use crate::mantle::sdp::rewards::{
     Error,
-    blend::{LOG_TARGET, RewardsParameters, current_epoch::CurrentEpochState},
+    blend::{LOG_TARGET, current_epoch::CurrentEpochState},
     distribute_rewards,
 };
 
@@ -27,6 +27,8 @@ pub struct TargetEpochState<ProofsVerifier> {
     epoch: Epoch,
     /// The providers in the target epoch (their public keys and indices).
     providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+    /// The minimum network size of the era the target epoch belongs to.
+    minimum_network_size: NonZeroU64,
     /// Parameters for evaluating activity proofs in the target epoch
     token_evaluation: BlendingTokenEvaluation,
     /// Verifier for `PoQ` and `PoSel` in the target epoch.
@@ -39,6 +41,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
     pub const fn new(
         epoch: Epoch,
         providers: HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>,
+        minimum_network_size: NonZeroU64,
         token_evaluation: BlendingTokenEvaluation,
         proof_verifier: ProofsVerifier,
         epoch_income: Value,
@@ -46,6 +49,7 @@ impl<ProofsVerifier> TargetEpochState<ProofsVerifier> {
         Self {
             epoch,
             providers,
+            minimum_network_size,
             token_evaluation,
             proof_verifier,
             epoch_income,
@@ -81,7 +85,6 @@ where
         provider_id: &ProviderId,
         proof: &lb_core::sdp::blend::ActivityProof,
         current_epoch_state: &CurrentEpochState,
-        settings: &RewardsParameters,
     ) -> Result<(ZkPublicKey, HammingDistance), Error> {
         if proof.epoch != self.epoch {
             return Err(Error::InvalidEpoch {
@@ -92,7 +95,7 @@ where
 
         let num_providers = self.num_providers();
         assert!(
-            num_providers >= settings.minimum_network_size.get(),
+            num_providers >= self.minimum_network_size.get(),
             "number of providers must be >= minimum_network_size"
         );
         let &(zk_id, index) = self
@@ -182,11 +185,62 @@ impl TargetEpochTracker {
         })
     }
 
+    fn base_reward(
+        &self,
+        epoch_income: Value,
+        premium_providers: &HashTrieSetSync<ProviderId>,
+    ) -> Option<Value> {
+        let shares = self.submitted_proofs.size() as u64 + premium_providers.size() as u64;
+        epoch_income.checked_div(shares)
+    }
+
+    /// What `provider_id` would be paid if the target epoch were finalized
+    /// with the proofs submitted so far.
+    #[must_use]
+    pub fn estimate<ProofsVerifier>(
+        &self,
+        target_epoch_state: &TargetEpochState<ProofsVerifier>,
+        provider_id: &ProviderId,
+    ) -> RewardEstimate {
+        let in_activity_epoch = target_epoch_state.providers.contains_key(provider_id);
+        let did_submit_proof = self.submitted_proofs.contains_key(provider_id);
+        let premium_providers = &self.min_hamming_distance.providers;
+        let is_premium = premium_providers.contains(provider_id);
+        let base_reward = self
+            .base_reward(target_epoch_state.epoch_income(), premium_providers)
+            .unwrap_or(0);
+        let estimated_reward = match (did_submit_proof, is_premium) {
+            (false, _) => 0,
+            (true, false) => base_reward,
+            (true, true) => base_reward * 2,
+        };
+
+        let network = Network {
+            size: target_epoch_state.num_providers(),
+            proofs: self.submitted_proofs.size() as u64,
+        };
+
+        RewardEstimate {
+            activity_epoch: target_epoch_state.epoch(),
+            pool: target_epoch_state.epoch_income(),
+            network,
+            in_activity_epoch,
+            did_submit_proof,
+            is_premium,
+            estimated_reward,
+        }
+    }
+
     pub fn finalize<ProofsVerifier>(
         &self,
         target_epoch_state: &TargetEpochState<ProofsVerifier>,
     ) -> (Self, Vec<Utxo>) {
-        if self.submitted_proofs.is_empty() {
+        // Identify premium providers with the minimum Hamming distance
+        let premium_providers = &self.min_hamming_distance.providers;
+
+        let Some(base_reward) =
+            self.base_reward(target_epoch_state.epoch_income(), premium_providers)
+        else {
             debug!(
                 target: LOG_TARGET,
                 target_epoch = %target_epoch_state.epoch(),
@@ -194,14 +248,7 @@ impl TargetEpochTracker {
                 "target epoch tracker finalized with no activity proofs. no rewards to distribute",
             );
             return (Self::new(), vec![]);
-        }
-
-        // Identify premium providers with the minimum Hamming distance
-        let premium_providers = &self.min_hamming_distance.providers;
-
-        // Calculate base reward
-        let base_reward = target_epoch_state.epoch_income()
-            / (self.submitted_proofs.size() as u64 + premium_providers.size() as u64);
+        };
 
         // Calculate reward for each provider
         let mut rewards = HashMap::new();
@@ -234,6 +281,34 @@ impl TargetEpochTracker {
             ),
         )
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Network {
+    /// Number of core nodes in the activity epoch
+    pub size: u64,
+    /// Number of activity proofs submitted
+    pub proofs: u64,
+}
+
+/// A provider's estimated Blend reward for the activity epoch, based on the
+/// proofs submitted so far
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RewardEstimate {
+    /// The epoch the reward is for, when the blending was done
+    pub activity_epoch: Epoch,
+    /// The activity epoch's network
+    pub network: Network,
+    /// Blend income to be split
+    pub pool: Value,
+    /// Whether the provider was in the activity epoch, and so can earn from it
+    pub in_activity_epoch: bool,
+    /// Whether the provider submitted its activity proof
+    pub did_submit_proof: bool,
+    /// Whether the provider earns the double reward
+    pub is_premium: bool,
+    /// What the provider would be paid
+    pub estimated_reward: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

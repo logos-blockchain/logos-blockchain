@@ -100,7 +100,13 @@ where
             + AsServiceId<BlendService>
             + AsServiceId<StorageService<RuntimeServiceId>>
             + AsServiceId<
-                TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+                TxMempoolService<
+                    MempoolNetAdapter,
+                    Mempool,
+                    Mempool::Storage,
+                    TimeBackend,
+                    RuntimeServiceId,
+                >,
             >
             + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
             + AsServiceId<CryptarchiaService>,
@@ -117,7 +123,7 @@ where
 
         let mempool_relay = service_resources_handle
             .overwatch_handle
-            .relay::<TxMempoolService<_, _, _, _>>()
+            .relay::<TxMempoolService<_, _, _, _, _>>()
             .await
             .expect("Relay connection with MempoolService should succeed");
 
@@ -136,6 +142,10 @@ where
 
     pub const fn mempool_adapter(&self) -> &adapter::MempoolAdapter<Mempool::Item> {
         &self.mempool_adapter
+    }
+
+    pub const fn mempool_adapter_mut(&mut self) -> &mut adapter::MempoolAdapter<Mempool::Item> {
+        &mut self.mempool_adapter
     }
 
     pub const fn time_relay(&self) -> &TimeRelay {

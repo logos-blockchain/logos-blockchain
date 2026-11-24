@@ -12,12 +12,15 @@ use lb_network_service::{
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 
-pub async fn libp2p_info<RuntimeServiceId>(
+pub async fn libp2p_info<TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<Libp2pInfo, overwatch::DynError>
 where
-    RuntimeServiceId:
-        AsServiceId<NetworkService<Libp2p, RuntimeServiceId>> + Debug + Sync + Display + 'static,
+    RuntimeServiceId: AsServiceId<NetworkService<Libp2p, TimeBackend, RuntimeServiceId>>
+        + Debug
+        + Sync
+        + Display
+        + 'static,
 {
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
@@ -33,13 +36,16 @@ where
         .map_err(|e| Box::new(e) as overwatch::DynError)
 }
 
-pub async fn connect_peer<RuntimeServiceId>(
+pub async fn connect_peer<TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     addr: Multiaddr,
 ) -> Result<PeerId, overwatch::DynError>
 where
-    RuntimeServiceId:
-        AsServiceId<NetworkService<Libp2p, RuntimeServiceId>> + Debug + Sync + Display + 'static,
+    RuntimeServiceId: AsServiceId<NetworkService<Libp2p, TimeBackend, RuntimeServiceId>>
+        + Debug
+        + Sync
+        + Display
+        + 'static,
 {
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();

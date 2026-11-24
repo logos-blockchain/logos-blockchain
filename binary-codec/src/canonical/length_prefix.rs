@@ -56,7 +56,8 @@ const fn length_prefix_width<const MAX_LENGTH: usize>() -> NOfBytes {
 }
 
 /// Byte-width of the length prefix for a `MAX_LENGTH`-bounded collection.
-pub(super) const fn length_prefix_len<const MAX_LENGTH: usize>() -> usize {
+#[must_use]
+pub const fn length_prefix_len<const MAX_LENGTH: usize>() -> usize {
     match length_prefix_width::<MAX_LENGTH>() {
         NOfBytes::One => 1,
         NOfBytes::Two => 2,

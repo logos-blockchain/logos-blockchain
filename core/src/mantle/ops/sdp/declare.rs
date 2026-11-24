@@ -8,10 +8,9 @@ use crate::{
         Note,
         batch::DeferredZkSig,
         channel::Channels,
-        gas::{Gas, MainnetGasProfile, OpGasCalculator, OperationGas},
         ledger::{
-            Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation, Utxos,
-            VerifiableOperation,
+            Declarations, ExecutableOperation, PreverifiableOperation, ProvableOperation,
+            ProviderIndex, Utxos, VerifiableOperation,
             verification_mode::{GenesisMode, StandardMode, VerificationMode},
         },
         ops::{SignedOperation, ZkAndEd25519Proof},
@@ -29,8 +28,9 @@ trait SDPDeclareValidationExt {
         note: Note,
         channels: &Channels,
         declarations: &Declarations,
+        provider_index: &ProviderIndex,
         service_notes: &ServiceNotes,
-        min_stake: &MinStake,
+        min_stake: MinStake,
     ) -> Result<(), SdpError>;
 
     fn execute(
@@ -45,16 +45,18 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         note: Note,
         channels: &Channels,
         declarations: &Declarations,
+        provider_index: &ProviderIndex,
         service_notes: &ServiceNotes,
-        min_stake: &MinStake,
+        min_stake: MinStake,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
         if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
-        validate_service_scoped_uniqueness(self, declarations)?;
+        validate_service_scoped_uniqueness(self, provider_index)?;
 
-        // A channel note cannot be used as collateral for a service declaration.
+        // A channel note cannot be used as collateral for a service
+        // declaration.
         if channels.is_channel_note(&self.service_note_id) {
             return Err(SdpError::ChannelNote(self.service_note_id));
         }
@@ -84,7 +86,10 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
         let declaration = Declaration::new(context.epoch, self);
-        context.declarations = context.declarations.insert(declaration_id, declaration);
+        context.declarations.insert_mut(declaration_id, declaration);
+        context
+            .provider_index
+            .insert_mut(self.provider_id, declaration_id);
         let utxo = context
             .utxo_tree
             .utxos()
@@ -97,6 +102,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             .lock(
                 &context.min_stake,
                 self.service_type,
+                declaration_id,
                 utxo.note,
                 &self.service_note_id,
             )
@@ -106,29 +112,19 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     }
 }
 
-/// `provider_id` and `zk_id` must each be unique within the same service.
+/// The declaration-ID lookup enforces `zk_id` uniqueness; this index enforces
+/// `provider_id` uniqueness without scanning the service's declarations.
 fn validate_service_scoped_uniqueness(
     op: &SDPDeclareOp,
-    declarations: &Declarations,
+    provider_index: &ProviderIndex,
 ) -> Result<(), SdpError> {
-    declarations
-        .values()
-        .filter(|d| d.service_type == op.service_type)
-        .try_for_each(|existing| {
-            if existing.provider_id == op.provider_id {
-                Err(SdpError::DuplicateProviderId {
-                    service_type: op.service_type,
-                    provider_id: Box::new(op.provider_id),
-                })
-            } else if existing.zk_id == op.zk_id {
-                Err(SdpError::DuplicateZkId {
-                    service_type: op.service_type,
-                    zk_id: op.zk_id,
-                })
-            } else {
-                Ok(())
-            }
-        })
+    if provider_index.contains_key(&op.provider_id) {
+        return Err(SdpError::DuplicateProviderId {
+            service_type: op.service_type,
+            provider_id: Box::new(op.provider_id),
+        });
+    }
+    Ok(())
 }
 
 pub struct SDPDeclarePreverificationContext<'a> {
@@ -141,6 +137,7 @@ pub struct SDPDeclareVerificationContext<'a> {
     pub service_notes: &'a ServiceNotes,
     pub tx_hash_view: &'a TxHashView,
     pub declarations: &'a Declarations,
+    pub provider_index: &'a ProviderIndex,
     pub min_stake: &'a MinStake,
 }
 
@@ -149,6 +146,7 @@ pub struct SDPDeclareGenesisValidationContext<'a> {
     pub channels: &'a Channels,
     pub service_notes: &'a ServiceNotes,
     pub declarations: &'a Declarations,
+    pub provider_index: &'a ProviderIndex,
     pub min_stake: &'a MinStake,
 }
 
@@ -156,6 +154,7 @@ pub struct SDPDeclareExecutionContext {
     pub utxo_tree: Utxos,
     pub epoch: Epoch,
     pub declarations: Declarations,
+    pub provider_index: ProviderIndex,
     pub service_notes: ServiceNotes,
     pub min_stake: MinStake,
 }
@@ -164,12 +163,6 @@ impl ProvableOperation for SDPDeclareOp {
     type Proof = ZkAndEd25519Proof;
     const CODE: u8 = 0x20;
 }
-
-impl OperationGas<MainnetGasProfile> for SDPDeclareOp {
-    const GAS_COST: Gas = Gas::new(646);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for SDPDeclareOp {}
 
 impl PreverifiableOperation<StandardMode>
     for SignedOperation<SDPDeclareOp, Unverified, StandardMode>
@@ -200,7 +193,8 @@ impl VerifiableOperation<StandardMode>
 
         // Defer the proof verification, so that the caller can batch it.
         // Ed25519 verification is done by `preverify`.
-        // Ensure service note exists and ownership over the service note and `zk_id`.
+        // Ensure service note exists and ownership over the service note and
+        // `zk_id`.
         let note = utxo.note;
         let inputs = public_inputs_from_pks(
             (*context.tx_hash_view.as_fr()).into(),
@@ -213,8 +207,9 @@ impl VerifiableOperation<StandardMode>
             note,
             context.channels,
             context.declarations,
+            context.provider_index,
             context.service_notes,
-            context.min_stake,
+            *context.min_stake,
         )?;
 
         Ok(DeferredZkSig::new(*self.proof().zk_sig.as_proof(), inputs))
@@ -253,8 +248,9 @@ impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverif
             note,
             context.channels,
             context.declarations,
+            context.provider_index,
             context.service_notes,
-            context.min_stake,
+            *context.min_stake,
         )?;
 
         Ok(())
@@ -290,8 +286,11 @@ mod tests {
     use crate::{
         mantle::{
             TxHash, Utxo,
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
-            ledger::Declarations,
+            gas::{
+                Gas,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
+            ledger::{Declarations, ProviderIndex},
             ops::{channel::ChannelId, op_proof::samples::SampleProof as _},
         },
         sdp::{Declaration, ServiceType},
@@ -322,33 +321,25 @@ mod tests {
     /// per-service uniqueness check.
     #[test]
     fn rejects_duplicate_provider_id_within_service() {
-        let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
-        let declare_b = declare_op(1, 2, "/ip4/2.2.2.2/udp/0");
+        let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/3000");
+        let declare_b = declare_op(1, 2, "/ip4/2.2.2.2/udp/3000");
 
-        let declarations = Declarations::new_sync()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
+        let provider_index =
+            ProviderIndex::new_sync().insert(declare_a.provider_id, declare_a.id());
 
         assert!(matches!(
-            validate_service_scoped_uniqueness(&declare_b, &declarations),
+            validate_service_scoped_uniqueness(&declare_b, &provider_index),
             Err(SdpError::DuplicateProviderId { .. })
         ));
     }
 
-    /// Two declarations in the same service sharing the same `zk_id`
-    /// (different `provider_id` and locators) must be rejected by the SDP
-    /// per-service uniqueness check.
+    /// The declaration ID itself is the per-service `zk_id` uniqueness key.
     #[test]
-    fn rejects_duplicate_zk_id_within_service() {
-        let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
-        let declare_b = declare_op(2, 1, "/ip4/2.2.2.2/udp/0");
+    fn same_service_and_zk_id_produce_the_same_declaration_id() {
+        let declare_a = declare_op(1, 1, "/ip4/1.1.1.1/udp/3000");
+        let declare_b = declare_op(2, 1, "/ip4/2.2.2.2/udp/3000");
 
-        let declarations = Declarations::new_sync()
-            .insert(declare_a.id(), Declaration::new(Epoch::new(0), &declare_a));
-
-        assert!(matches!(
-            validate_service_scoped_uniqueness(&declare_b, &declarations),
-            Err(SdpError::DuplicateZkId { .. })
-        ));
+        assert_eq!(declare_a.id(), declare_b.id());
     }
 
     mod standard_mode {
@@ -381,7 +372,7 @@ mod tests {
             let other_view = TxHashView::from(TxHash::from([12u8; 32]));
 
             let signed_operation = SignedOperation::<_, Unverified, StandardMode>::new(
-                declare_op(1, 1, "/ip4/1.1.1.1/udp/0"),
+                declare_op(1, 1, "/ip4/1.1.1.1/udp/3000"),
                 ZkAndEd25519Proof::new(
                     ZkSignature::sample(),
                     signing_key.sign_payload(signed_view.as_bytes().as_ref()),
@@ -404,7 +395,7 @@ mod tests {
 
         #[test]
         fn verify_rejects_a_locked_note_that_is_not_in_the_ledger() {
-            let operation = declare_op(1, 1, "/ip4/1.1.1.1/udp/0");
+            let operation = declare_op(1, 1, "/ip4/1.1.1.1/udp/3000");
             let service_note_id = operation.service_note_id;
 
             let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
@@ -418,10 +409,8 @@ mod tests {
                         service_notes: &ServiceNotes::new(),
                         tx_hash_view: &tx_hash_view,
                         declarations: &Declarations::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        provider_index: &ProviderIndex::new_sync(),
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::InexistingNote(service_note_id)
@@ -436,7 +425,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let declaration_id = operation.id();
             let declarations = Declarations::new_sync()
@@ -457,10 +446,8 @@ mod tests {
                         service_notes: &ServiceNotes::new(),
                         tx_hash_view: &tx_hash_view,
                         declarations: &declarations,
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        provider_index: &ProviderIndex::new_sync(),
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::DuplicateDeclaration(declaration_id)
@@ -475,7 +462,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let declaration_key = ZkKey::from(BigUint::from(1u64));
 
@@ -497,10 +484,8 @@ mod tests {
                         service_notes: &ServiceNotes::new(),
                         tx_hash_view: &tx_hash_view,
                         declarations: &Declarations::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        provider_index: &ProviderIndex::new_sync(),
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::ChannelNote(utxo.id())
@@ -515,7 +500,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let declaration_key = ZkKey::from(BigUint::from(1u64));
 
@@ -533,9 +518,9 @@ mod tests {
                         service_notes: &ServiceNotes::new(),
                         tx_hash_view: &tx_hash_view,
                         declarations: &Declarations::new_sync(),
+                        provider_index: &ProviderIndex::new_sync(),
                         min_stake: &MinStake {
                             threshold: utxo.note.value + 1,
-                            timestamp: 0,
                         },
                     })
                     .unwrap_err(),
@@ -554,7 +539,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let declaration_key = ZkKey::from(BigUint::from(1u64));
 
@@ -564,16 +549,16 @@ mod tests {
 
             let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
 
-            signed_operation
+            let _deferred_proof = signed_operation
                 .verify(&SDPDeclareVerificationContext {
                     utxo_tree: &utxos,
                     channels: &Channels::new(),
                     service_notes: &ServiceNotes::new(),
                     tx_hash_view: &tx_hash_view,
                     declarations: &Declarations::new_sync(),
+                    provider_index: &ProviderIndex::new_sync(),
                     min_stake: &MinStake {
                         threshold: utxo.note.value,
-                        timestamp: 0,
                     },
                 })
                 .expect("a locked note exactly meeting the minimum stake is accepted");
@@ -587,7 +572,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let declaration_key = ZkKey::from(BigUint::from(1u64));
 
@@ -595,12 +580,15 @@ mod tests {
             let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
                 .expect("signing should succeed");
 
-            let min_stake = MinStake {
-                threshold: 0,
-                timestamp: 0,
-            };
+            let min_stake = MinStake { threshold: 0 };
             let locked_notes = ServiceNotes::new()
-                .lock(&min_stake, ServiceType::BlendNetwork, utxo.note, &utxo.id())
+                .lock(
+                    &min_stake,
+                    ServiceType::BlendNetwork,
+                    operation.id(),
+                    utxo.note,
+                    &utxo.id(),
+                )
                 .expect("the note covers the minimum stake");
 
             let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
@@ -613,6 +601,7 @@ mod tests {
                         service_notes: &locked_notes,
                         tx_hash_view: &tx_hash_view,
                         declarations: &Declarations::new_sync(),
+                        provider_index: &ProviderIndex::new_sync(),
                         min_stake: &min_stake,
                     })
                     .unwrap_err(),
@@ -636,7 +625,7 @@ mod tests {
             let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
             let zk_sig =
@@ -649,10 +638,8 @@ mod tests {
                     service_notes: &ServiceNotes::new(),
                     tx_hash_view: &tx_hash_view,
                     declarations: &Declarations::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    provider_index: &ProviderIndex::new_sync(),
+                    min_stake: &MinStake { threshold: 0 },
                 })
                 .expect("verify leaves the proof to the batch")
         }
@@ -680,7 +667,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let declaration_key = ZkKey::from(BigUint::from(1u64));
 
@@ -690,17 +677,15 @@ mod tests {
 
             let signed_operation = preverified(operation, zk_sig, &tx_hash_view);
 
-            signed_operation
+            let _deferred_proof = signed_operation
                 .verify(&SDPDeclareVerificationContext {
                     utxo_tree: &utxos,
                     channels: &Channels::new(),
                     service_notes: &ServiceNotes::new(),
                     tx_hash_view: &tx_hash_view,
                     declarations: &Declarations::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    provider_index: &ProviderIndex::new_sync(),
+                    min_stake: &MinStake { threshold: 0 },
                 })
                 .expect("a well-formed declaration is accepted");
         }
@@ -723,7 +708,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
             let declaration_id = operation.id();
             let service_type = operation.service_type;
@@ -735,11 +720,9 @@ mod tests {
                     utxo_tree: utxos,
                     epoch,
                     declarations: Declarations::new_sync(),
+                    provider_index: ProviderIndex::new_sync(),
                     service_notes: ServiceNotes::new(),
-                    min_stake: MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    min_stake: MinStake { threshold: 0 },
                 })
                 .expect("the locked note is in the ledger");
 
@@ -758,18 +741,16 @@ mod tests {
             let note_key = ZkKey::from(BigUint::from(3u64));
             let operation = SDPDeclareOp {
                 service_note_id: locked_utxo(&note_key).id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
 
             drop(verified(operation).execute(SDPDeclareExecutionContext {
                 utxo_tree: Utxos::new(),
                 epoch: Epoch::new(4),
                 declarations: Declarations::new_sync(),
+                provider_index: ProviderIndex::new_sync(),
                 service_notes: ServiceNotes::new(),
-                min_stake: MinStake {
-                    threshold: 0,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 0 },
             }));
         }
 
@@ -781,7 +762,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
 
             assert_eq!(
@@ -790,10 +771,10 @@ mod tests {
                         utxo_tree: utxos,
                         epoch: Epoch::new(4),
                         declarations: Declarations::new_sync(),
+                        provider_index: ProviderIndex::new_sync(),
                         service_notes: ServiceNotes::new(),
                         min_stake: MinStake {
                             threshold: utxo.note.value + 1,
-                            timestamp: 0,
                         },
                     })
                     .map(|_| ())
@@ -806,7 +787,8 @@ mod tests {
         fn sdp_declare_op_execution_gas_does_not_scale_with_the_threshold() {
             for threshold in [0, 1, 3] {
                 assert_eq!(
-                    SDPDeclareOp::sample().execution_gas(&FixedThresholds(threshold)),
+                    crate::mantle::OpRef::from(&SDPDeclareOp::sample())
+                        .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                     Ok(Gas::new(646))
                 );
             }
@@ -839,7 +821,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id,
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
 
             let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
@@ -852,10 +834,8 @@ mod tests {
                         channels: &Channels::new(),
                         service_notes: &ServiceNotes::new(),
                         declarations: &Declarations::new_sync(),
-                        min_stake: &MinStake {
-                            threshold: 0,
-                            timestamp: 0,
-                        },
+                        provider_index: &ProviderIndex::new_sync(),
+                        min_stake: &MinStake { threshold: 0 },
                     })
                     .unwrap_err(),
                 SdpError::InexistingNote(service_note_id)
@@ -869,7 +849,7 @@ mod tests {
             let other_view = TxHashView::from(TxHash::from([12u8; 32]));
 
             let signed_operation = SignedOperation::<_, Unverified, GenesisMode>::new(
-                declare_op(1, 1, "/ip4/1.1.1.1/udp/0"),
+                declare_op(1, 1, "/ip4/1.1.1.1/udp/3000"),
                 ZkAndEd25519Proof::new(
                     ZkSignature::sample(),
                     signing_key.sign_payload(signed_view.as_bytes().as_ref()),
@@ -898,7 +878,7 @@ mod tests {
 
             let operation = SDPDeclareOp {
                 service_note_id: utxo.id(),
-                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/0")
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
             };
 
             let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
@@ -910,10 +890,8 @@ mod tests {
                     channels: &Channels::new(),
                     service_notes: &ServiceNotes::new(),
                     declarations: &Declarations::new_sync(),
-                    min_stake: &MinStake {
-                        threshold: 0,
-                        timestamp: 0,
-                    },
+                    provider_index: &ProviderIndex::new_sync(),
+                    min_stake: &MinStake { threshold: 0 },
                 })
                 .expect("a genesis declaration needs no ZK signature");
         }

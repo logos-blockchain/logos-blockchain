@@ -62,8 +62,9 @@ impl SendQueue {
     pub fn enter_new_round_and_refresh_shares(&mut self, new_round: Round) -> usize {
         self.share.refresh(new_round);
 
-        // The queue is FIFO and every message is given the same lifetime, so deadlines
-        // are non-decreasing and the expired ones are exactly the prefix.
+        // The queue is FIFO and every message is given the same lifetime, so
+        // deadlines are non-decreasing and the expired ones are exactly
+        // the prefix.
         let mut discarded = 0usize;
         while self
             .queue

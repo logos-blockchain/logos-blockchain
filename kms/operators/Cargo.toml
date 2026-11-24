@@ -25,6 +25,10 @@ lb-utxotree                   = { workspace = true }
 tokio                         = { features = ["rt"], workspace = true }
 tracing                       = { workspace = true }
 
+[dev-dependencies]
+lb-blend-proofs = { features = ["unsafe-test-functions"], workspace = true }
+tokio           = { features = ["rt", "time"], workspace = true }
+
 [features]
 tokio-task-names = ["lb-utils/tokio-task-names"]
 unsafe           = []

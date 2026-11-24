@@ -993,8 +993,7 @@ async fn validate_submission_fee_horizon(
         .map_err(|source| StepError::StepFail {
             message: format!("submission fee-horizon consensus query failed: {source}"),
         })?;
-    let current_epoch =
-        consensus.cryptarchia_info.slot.into_inner() / world.chain.slots_per_epoch.get();
+    let current_epoch = consensus.cryptarchia_info.slot.into_inner() / world.chain.slots_per_epoch;
     validate_submission_epoch(current_epoch, Some(policy))
 }
 
@@ -1008,7 +1007,7 @@ pub(crate) async fn validate_fee_horizon_after_wallet_batch(
     prepared_count: usize,
 ) -> Result<(), StepError> {
     let (_, _, consensus) = sanitize_best_node_info(world, wallet_name, None).await?;
-    let current_epoch = consensus.slot.into_inner() / world.chain.slots_per_epoch.get();
+    let current_epoch = consensus.slot.into_inner() / world.chain.slots_per_epoch;
     let valid_through_epoch = u64::from(policy.horizon.valid_through_epoch.into_inner());
     if current_epoch > valid_through_epoch {
         return Err(StepError::FeeHorizonExceededAfterWalletBatch {
@@ -1425,10 +1424,12 @@ async fn reserve_user_wallet_transaction_submission(
         transaction_intent
     };
 
+    let fork_digest = world.fork_digest_in_force().await?;
     let submission = prepare_wallet_transaction_work_item(
         transaction_intent,
         funding_resources,
         priority_fee_percent,
+        fork_digest,
     )
     .map_err(wallet_transaction_error)
     .inspect_err(|e| {
@@ -1673,7 +1674,7 @@ fn group_key_for_wallet(world: &CucumberWorld, wallet_name: &str) -> Result<Stri
 #[cfg(test)]
 mod cache_removal_tests {
     use lb_chain_service::Epoch;
-    use lb_core::{header::HeaderId, mantle::Note};
+    use lb_core::{era::ForkDigest, header::HeaderId, mantle::Note};
     use rand::{SeedableRng as _, seq::SliceRandom as _};
     use rand_chacha::ChaCha8Rng;
 
@@ -1949,6 +1950,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::new(source),
             priority_fee_percent,
+            ForkDigest::new([0x11; 32]),
         )
     }
 
@@ -1975,6 +1977,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::fee_sponsored(sender, fee_sponsor),
             0,
+            ForkDigest::new([0x11; 32]),
         )
     }
 

@@ -14,10 +14,14 @@ pub trait BlendBackend<NodeId, RuntimeServiceId>
 where
     NodeId: Clone,
 {
+    /// The backend's settings that are the same in every era.
     type Settings: Clone + Send + Sync + 'static;
+    /// The backend's settings in one era.
+    type EraSettings: Clone + Send + Sync + 'static;
 
     fn new<Rng>(
         settings: Self::Settings,
+        era_settings: Self::EraSettings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<NodeId>,
         rng: Rng,

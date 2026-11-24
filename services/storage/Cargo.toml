@@ -34,7 +34,6 @@ tracing               = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
-default          = []
 tokio-task-names = ["lb-utils/tokio-task-names"]
 
 [[bin]]

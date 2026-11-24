@@ -124,10 +124,9 @@ impl DependentTransactionLoadState {
         let parent_inscription_counter = lineage.current_counter;
         let operation = InscriptionOp {
             channel_id: self.channel_id,
-            inscription: Inscription::try_from(current_inscription_counter.to_le_bytes().to_vec())
-                .map_err(|error| StepError::LogicalError {
-                    message: format!("dependent inscription payload is invalid: {error}"),
-                })?,
+            inscription: Inscription::new_unchecked(
+                current_inscription_counter.to_le_bytes().to_vec(),
+            ),
             parent: parent_id,
             signer: self.signing_key.public_key().into_unverified(),
         };

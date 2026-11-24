@@ -13,6 +13,7 @@ use crate::mantle::{
 
 codec_fixtures!(
     Op,
+    context = u32::MAX,
     Self::Transfer(TRANSFER.clone()) => TRANSFER_HEX,
     Self::ChannelConfig(CHANNEL_CONFIG.clone()) => CHANNEL_CONFIG_HEX,
     Self::ChannelInscribe(INSCRIPTION.clone()) => INSCRIPTION_HEX,

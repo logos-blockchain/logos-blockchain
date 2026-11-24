@@ -29,6 +29,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::MANTLE_METRICS => crate::api::handlers::mantle_metrics, mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::MANTLE_STATUS => crate::api::handlers::mantle_status, mantle_status::<MempoolStorageAdapter, RuntimeServiceId>;
             get lb_http_api_common::paths::CHAIN_ID => crate::api::handlers::chain_id, chain_id;
+            get lb_http_api_common::paths::CHAIN_FORK => crate::api::handlers::chain_fork, chain_fork::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_INFO => crate::api::handlers::cryptarchia_info, cryptarchia_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::TIME_INFO => crate::api::handlers::time_info, time_info::<RuntimeServiceId>;
             get lb_http_api_common::paths::CRYPTARCHIA_HEADERS => crate::api::handlers::cryptarchia_headers, cryptarchia_headers::<RuntimeServiceId>;
@@ -36,8 +37,10 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::NETWORK_INFO => crate::api::handlers::libp2p_info, libp2p_info::<RuntimeServiceId>;
             post lb_http_api_common::paths::DIAL_PEER => crate::api::handlers::dial_peer, dial_peer::<RuntimeServiceId>;
             get lb_http_api_common::paths::BLEND_NETWORK_INFO => crate::api::handlers::blend_info, blend_info::<BlendService, RuntimeServiceId>;
-            post lb_http_api_common::paths::BLEND_JOIN_NETWORK => crate::api::handlers::blend_join_network, blend_join_network::<BlendService, RuntimeServiceId>;
+            post lb_http_api_common::paths::BLEND_JOIN_NETWORK => crate::api::handlers::blend_join_network, blend_join_network::<BlendService, WalletService, RuntimeServiceId>;
             get lb_http_api_common::paths::BLEND_PENDING_TRANSACTIONS => crate::api::handlers::blend_pending_transactions, blend_pending_transactions::<BlendService, RuntimeServiceId>;
+            get lb_http_api_common::paths::BLEND_REWARDS => crate::api::handlers::blend_rewards, blend_rewards::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
+            get lb_http_api_common::paths::BLEND_STATUS => crate::api::handlers::blend_status, blend_status::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, BlendService, RuntimeServiceId>;
             post lb_http_api_common::paths::MEMPOOL_ADD_TX => crate::api::handlers::add_tx, add_tx::<MempoolStorageAdapter, RuntimeServiceId>;
             post lb_http_api_common::paths::BLEND_DISPERSE_TRANSACTION => crate::api::handlers::blend_tx, blend_tx::<BlendService, RuntimeServiceId>;
             get lb_http_api_common::paths::MEMPOOL_VIEW => crate::api::handlers::mempool_view, mempool_view::<MempoolStorageAdapter, RuntimeServiceId>;
@@ -49,6 +52,8 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::SDP_POST_SET_DECLARATION_ID => crate::api::handlers::post_set_declaration_id, post_set_declaration_id::<SdpMempool, SdpWallet, Cryptarchia<RuntimeServiceId>, SdpStateStorage, RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_DECLARATIONS => crate::api::handlers::get_sdp_declarations, get_sdp_declarations::<RuntimeServiceId>;
             get lb_http_api_common::paths::MANTLE_SDP_SNAPSHOT => crate::api::handlers::get_sdp_snapshot, get_sdp_snapshot::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATION => crate::api::handlers::get_finalized_sdp_declaration, get_finalized_sdp_declaration::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_SDP_FINALIZED_DECLARATIONS => crate::api::handlers::get_finalized_sdp_declarations, get_finalized_sdp_declarations::<RuntimeServiceId>;
             post lb_http_api_common::paths::LEADER_CLAIM => crate::api::handlers::leader_claim, leader_claim::<ChainLeader, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_START_MINING => crate::api::handlers::pow_start_mining, pow_start_mining::<PoWService, RuntimeServiceId>;
             put lb_http_api_common::paths::POW_STOP_MINING => crate::api::handlers::pow_stop_mining, pow_stop_mining::<PoWService, RuntimeServiceId>;
@@ -61,6 +66,7 @@ macro_rules! api_routes {
             get lb_http_api_common::paths::LEADER_AGED_NOTES => crate::api::handlers::wallet::get_leader_aged_notes, wallet::get_leader_aged_notes::<WalletService, _>;
             get lb_http_api_common::paths::wallet::BALANCE => crate::api::handlers::wallet::get_balance, wallet::get_balance::<WalletService, _>;
             get lb_http_api_common::paths::MANTLE_GAS_PRICES => crate::api::handlers::get_gas_prices, get_gas_prices::<RuntimeServiceId>;
+            get lb_http_api_common::paths::MANTLE_LIMITS => crate::api::handlers::get_limits, get_limits::<RuntimeServiceId>;
             post lb_http_api_common::paths::wallet::TRANSACTIONS_TRANSFER_FUNDS => crate::api::handlers::wallet::post_transactions_transfer_funds, wallet::post_transactions_transfer_funds::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::SIGN_TX_ED25519 => crate::api::handlers::wallet::sign_tx_ed25519, wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::SIGN_TX_ZK => crate::api::handlers::wallet::sign_tx_zk, wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>;

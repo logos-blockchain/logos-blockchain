@@ -1,9 +1,9 @@
 use libp2p::gossipsub::{IdentTopic, MessageId, PublishError, SubscriptionError, TopicHash};
-use rand::RngCore;
+use rand_010::SeedableRng;
 
 use crate::Swarm;
 
-impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> Swarm<Rng> {
     /// Subscribes to a topic
     ///
     /// Returns true if the topic is newly subscribed or false if already

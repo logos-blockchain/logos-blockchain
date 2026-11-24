@@ -8,8 +8,6 @@ use crate::mantle::ops::op_proof::samples::sample_proof_for;
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        GasProfile,
-        gas::Gas,
         ledger::ProvableOperation as _,
         ops::{
             OPERATION_ID_V1, OpRef,
@@ -100,7 +98,7 @@ impl<'de> Deserialize<'de> for Op {
             OpDe::deserialize(deserializer).map(Self::from)
         } else {
             let bytes = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes, &())
+            Self::decode(&bytes, &u32::MAX)
                 .map(|(_, op)| op)
                 .map_err(serde::de::Error::custom)
         }
@@ -119,22 +117,23 @@ impl BinaryEncode for Op {
 }
 
 impl BinaryDecode for Op {
-    type Context = ();
+    /// The most bytes of data an Operation may carry in the era it is decoded
+    /// under: an inscription, or a deposit's metadata.
+    type Context = u32;
 
     fn decode<'input>(
         input: &'input [u8],
-        (): &Self::Context,
+        max_op_data_size: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (input, opcode) = u8::decode(input, &())?;
 
         match opcode {
-            InscriptionOp::CODE => InscriptionOp::decode(input, &())
+            InscriptionOp::CODE => InscriptionOp::decode(input, max_op_data_size)
                 .map(|(rest, op)| (rest, Self::ChannelInscribe(op))),
             ChannelConfigOp::CODE => ChannelConfigOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelConfig(op))),
-            DepositOp::CODE => {
-                DepositOp::decode(input, &()).map(|(rest, op)| (rest, Self::ChannelDeposit(op)))
-            }
+            DepositOp::CODE => DepositOp::decode(input, max_op_data_size)
+                .map(|(rest, op)| (rest, Self::ChannelDeposit(op))),
             ChannelWithdrawOp::CODE => ChannelWithdrawOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
             ChannelTransferOp::CODE => ChannelTransferOp::decode(input, &())
@@ -170,11 +169,6 @@ impl Op {
     #[must_use]
     pub fn as_str(&self) -> &'static str {
         self.by_ref().as_str()
-    }
-
-    #[must_use]
-    pub fn gas_cost<Profile: GasProfile>(&self) -> Gas {
-        self.by_ref().gas_cost::<Profile>()
     }
 
     #[cfg(any(test, feature = "test-utils"))]

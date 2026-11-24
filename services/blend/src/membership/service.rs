@@ -92,8 +92,8 @@ where
 {
     let provider_id_bytes = provider_id.as_ref();
     // TODO: Once we provide a proper API for non-empty vectors, we can expose a
-    // `first()` method that returns `&T` instead of `Option<&T>`, and remove this
-    // `expect`.
+    // `first()` method that returns `&T` instead of `Option<&T>`, and remove
+    // this `expect`.
     let address = locators
         .first()
         .expect("Locators set cannot be empty")
@@ -103,8 +103,8 @@ where
             warn!(target: LOG_TARGET, "Failed to decode provider_id to node ID: {e:?}");
         })
         .ok()?;
-    // We know this is a valid Ed25519 public key because provider ID only accept
-    // valid keys.
+    // We know this is a valid Ed25519 public key because provider ID only
+    // accept valid keys.
     let public_key = provider_id.0;
     Some(ZkNode {
         node: Node {

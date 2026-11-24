@@ -85,9 +85,9 @@ pub fn prove(inputs: PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), P
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
             error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
-            // We panic here because this should never happen, and if it does, it's a
-            // critical error that we want to be immediately visible during
-            // development and testing.
+            // We panic here because this should never happen, and if it does,
+            // it's a critical error that we want to be immediately
+            // visible during development and testing.
             panic!("Fatal CompressedGroth16Proof::try_from: {e}")
         }),
         verifier_inputs
@@ -134,7 +134,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use lb_groth16::Fr;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::ProperFraction;
     use num_bigint::BigUint;
 
     use super::*;
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn test_full_flow() {
         let (lottery_0, lottery_1) =
-            LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
+            LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap())
                 .compute_lottery_values(5000);
 
         let chain_data = PolChainInputsData {

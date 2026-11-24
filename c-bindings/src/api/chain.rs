@@ -4,7 +4,7 @@ use lb_c_macros::panic_to_error;
 
 use crate::{
     LogosBlockchainNode, OperationStatus, errors::OperationStatusCode, result::FfiStatusResult,
-    return_error_if_null_pointer,
+    return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 /// Result type for [`get_chain_id`]. On success, `value` is a pointer to a
@@ -12,10 +12,6 @@ use crate::{
 pub type FfiGetChainIdResult = FfiStatusResult<*mut c_char>;
 
 /// Returns the chain ID of the deployment the given node was started with.
-///
-/// The chain ID is fixed by the node's deployment settings and never changes
-/// while the node runs, so it is captured on the node handle at startup rather
-/// than queried from a running service.
 ///
 /// # Arguments
 ///
@@ -52,14 +48,170 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
         ));
     };
 
-    // Hand the caller its own copy: the node keeps ownership of its own string
-    // for as long as it lives, and the caller frees this one with
-    // `free_cstring`.
-    match CString::new(chain_id.to_bytes()) {
-        Ok(chain_id) => FfiGetChainIdResult::ok(chain_id.into_raw()),
-        Err(error) => FfiGetChainIdResult::err(OperationStatus::error(
+    FfiGetChainIdResult::ok(chain_id.into_raw())
+}
+
+/// Result type for [`get_fork_digest`]. On success, `value` is a pointer to a
+/// NUL-terminated C string holding the fork digest in lowercase hexadecimal.
+pub type FfiGetForkDigestResult = FfiStatusResult<*mut c_char>;
+
+/// Returns the fork digest a transaction signed now must carry: that of the era
+/// the node's clock is in, in lowercase hexadecimal, as a transaction's JSON
+/// carries it.
+///
+/// The fork digest changes when an era starts, so a caller asks for it right
+/// before signing a transaction rather than keeping it.
+///
+/// # Arguments
+///
+/// - `node`: A pointer to the node returned by
+///   [`start_lb_node`](super::lifecycle::start_lb_node).
+///
+/// # Returns
+///
+/// A [`FfiGetForkDigestResult`] containing a pointer to an allocated C string
+/// on success, or an [`OperationStatus`] error on failure.
+///
+/// # Safety
+///
+/// `node` must be a valid pointer to a [`LogosBlockchainNode`] that has not
+/// been stopped.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[must_use]
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_fork_digest(
+    node: *const LogosBlockchainNode,
+) -> FfiGetForkDigestResult {
+    return_error_if_null_pointer!(node);
+    let node = unsafe { &*node };
+    let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
+    let fork_digest = unwrap_or_return_error!(runtime_handle.block_on(node.fork_digest_in_force()));
+
+    match CString::new(hex::encode(<[u8; 32]>::from(fork_digest))) {
+        Ok(fork_digest) => FfiGetForkDigestResult::ok(fork_digest.into_raw()),
+        Err(error) => FfiGetForkDigestResult::err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to create CString: {error}"),
         )),
+    }
+}
+
+pub mod api {
+    use lb_chain_service::{
+        BlendRewards, CryptarchiaInfo, Epoch, State, api::CryptarchiaServiceApi,
+    };
+    use lb_core::sdp::DeclarationId;
+    use lb_node::{RuntimeServiceId, generic_services::CryptarchiaService};
+    use overwatch::overwatch::OverwatchHandle;
+
+    use crate::{
+        OperationStatus, OperationStatusCode, StatusResult, api::common::overwatch::ensure_ready,
+    };
+
+    type NodeChainApi = CryptarchiaServiceApi<CryptarchiaService<RuntimeServiceId>>;
+
+    pub struct ChainFfiApi {
+        api: NodeChainApi,
+    }
+
+    impl ChainFfiApi {
+        /// Creates a Chain FFI Api from the service api
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::ServiceError`] if the chain
+        /// service isn't ready.
+        pub async fn new(
+            api: NodeChainApi,
+            overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        ) -> StatusResult<Self> {
+            ensure_ready::<CryptarchiaService<RuntimeServiceId>>(overwatch_handle).await?;
+            Ok(Self { api })
+        }
+
+        /// Creates a Chain FFI Api, including the internal service api
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::ServiceError`] if the chain
+        /// service isn't ready.
+        pub async fn from_overwatch_handle(
+            overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        ) -> StatusResult<Self> {
+            let api = NodeChainApi::from_overwatch_handle(overwatch_handle).await;
+            Self::new(api, overwatch_handle).await
+        }
+
+        /// Gets the epoch of the current chain tip, but only once the chain is
+        /// `Online`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if the chain service
+        /// can't be reached, and with [`OperationStatusCode::ServiceError`]
+        /// while the chain is still bootstrapping or if the tip's epoch state
+        /// can't be computed.
+        pub async fn get_online_epoch(&self) -> StatusResult<Epoch> {
+            let tip_slot = self.get_online_cryptarchia_info().await?.slot;
+            let epoch_state = self.api.get_epoch_state(tip_slot).await?.map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    format!("Failed to get the epoch state at slot {tip_slot:?}: {error}"),
+                )
+            })?;
+            Ok(epoch_state.epoch)
+        }
+
+        /// Fails unless the chain is `Online`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if the chain service
+        /// can't be reached, and with [`OperationStatusCode::ServiceError`]
+        /// while the chain is still bootstrapping.
+        pub async fn ensure_online(&self) -> StatusResult<()> {
+            self.get_online_cryptarchia_info().await?;
+            Ok(())
+        }
+
+        /// Gets the Blend rewards at the tip of the declaration
+        /// `declaration_id`.
+        ///
+        /// # Errors
+        ///
+        /// Fails with [`OperationStatusCode::RelayError`] if the chain service
+        /// can't be reached, and with [`OperationStatusCode::NotFound`] if
+        /// the declaration is not in the ledger.
+        pub async fn get_blend_rewards(
+            &self,
+            declaration_id: DeclarationId,
+        ) -> StatusResult<BlendRewards> {
+            self.api
+                .get_blend_rewards(declaration_id)
+                .await?
+                .ok_or_else(|| {
+                    OperationStatus::error(
+                        OperationStatusCode::NotFound,
+                        "The node has no Blend declaration in the ledger.",
+                    )
+                })
+        }
+
+        /// Gets the chain info, but only once the chain is `Online`.
+        async fn get_online_cryptarchia_info(&self) -> StatusResult<CryptarchiaInfo> {
+            let cryptarchia_info = self.api.info().await?.cryptarchia_info;
+            if cryptarchia_info.state != State::Online {
+                return Err(OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    "The node is not online yet.",
+                ));
+            }
+            Ok(cryptarchia_info)
+        }
     }
 }

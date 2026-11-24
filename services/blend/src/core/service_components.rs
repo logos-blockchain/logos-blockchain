@@ -7,7 +7,6 @@ use crate::core::{BlendService, backends::BlendBackend, dispatcher::PayloadDispa
 /// service expects.
 pub trait ServiceComponents<RuntimeServiceId> {
     type PayloadDispatcher: PayloadDispatcher<RuntimeServiceId>;
-    type BackendSettings;
     type NodeId;
     type Rng;
     type ProofsGenerator;
@@ -49,7 +48,6 @@ where
         + Sync,
 {
     type PayloadDispatcher = Network;
-    type BackendSettings = Backend::Settings;
     type NodeId = NodeId;
     type Rng = ChaCha20Rng;
     type ProofsGenerator = ProofsGenerator;
@@ -59,8 +57,6 @@ pub type NetworkBackendOfService<Service, RuntimeServiceId> =
     <<Service as ServiceComponents<RuntimeServiceId>>::PayloadDispatcher as PayloadDispatcher<
         RuntimeServiceId,
     >>::Backend;
-pub type BlendBackendSettingsOfService<Service, RuntimeServiceId> =
-    <Service as ServiceComponents<RuntimeServiceId>>::BackendSettings;
 
 /// The mempool service the core service's dispatcher hands transactions to.
 pub type MempoolOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
@@ -70,8 +66,3 @@ pub type MempoolOfService<Service, RuntimeServiceId> = <<Service as ServiceCompo
 pub type ChainNetworkOfService<Service, RuntimeServiceId> = <<Service as ServiceComponents<
     RuntimeServiceId,
 >>::PayloadDispatcher as PayloadDispatcher<RuntimeServiceId>>::ChainNetworkService;
-
-pub type PayloadDispatcherSettingsOfService<Service, RuntimeServiceId> =
-    <<Service as ServiceComponents<RuntimeServiceId>>::PayloadDispatcher as PayloadDispatcher<
-        RuntimeServiceId,
-    >>::Settings;

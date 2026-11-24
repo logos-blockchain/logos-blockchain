@@ -1,20 +1,11 @@
-use lb_binary_codec::canonical::{BinaryCodec, BinaryEncode as _};
-#[cfg(feature = "test-utils")]
-use lb_groth16::Fr;
-#[cfg(feature = "test-utils")]
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "test-utils")]
-use crate::mantle::{Note, NoteId};
 use crate::{
     events::TxEvent,
     mantle::{
-        TxHash, Value,
+        TxHash,
         channel::{Channels, Error},
-        gas::{
-            Gas, GasOverflow, MainnetGasProfile, OpGasCalculator, OperationGas, ThresholdSource,
-        },
         ledger::{
             ExecutableOperation, Inputs, Outputs, PreverifiableOperation, ProvableOperation, Utxo,
             Utxos, VerifiableOperation,
@@ -35,7 +26,7 @@ use crate::{
 };
 
 // ChannelTransfer = ChannelId Inputs Outputs — plain field-order concat.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
@@ -50,6 +41,11 @@ impl ChannelTransferOp {
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn sample() -> Self {
+        use lb_groth16::Fr;
+        use lb_key_management_system_keys::keys::ZkPublicKey;
+
+        use crate::mantle::{Note, NoteId};
+
         Self {
             channel_id: ChannelId::from([20u8; 32]),
             inputs: crate::mantle::ledger::BoundedInputs::from(NoteId(Fr::from(21u64))).into(),
@@ -82,16 +78,6 @@ pub struct ChannelTransferExecutionContext {
 impl ProvableOperation for ChannelTransferOp {
     type Proof = ChannelMultiSigProof;
     const CODE: u8 = 0x14;
-}
-
-impl OperationGas<MainnetGasProfile> for ChannelTransferOp {
-    const GAS_COST: Gas = Gas::new(56);
-}
-
-impl OpGasCalculator<MainnetGasProfile> for ChannelTransferOp {
-    fn execution_gas(&self, thresholds: &impl ThresholdSource) -> Result<Gas, GasOverflow> {
-        Self::GAS_COST.checked_mul(Value::from(thresholds.transfer_threshold(&self.channel_id)))
-    }
 }
 
 impl PreverifiableOperation<StandardMode>
@@ -168,7 +154,8 @@ impl VerifiableOperation<StandardMode>
             });
         }
 
-        // Check the signatures. Don't defer this because ed25519 verification is cheap.
+        // Check the signatures. Don't defer this because ed25519 verification
+        // is cheap.
         for (index, signature) in signatures {
             if channel
                 .accredited_keys
@@ -227,7 +214,10 @@ mod test {
             Note, TxHash, Utxo, Value,
             channel::{Channels, Error},
             channel_notes,
-            gas::{Gas, OpGasCalculator as _, test_utils::FixedThresholds},
+            gas::{
+                Gas, GasOverflow, GasProfile,
+                test_utils::{FixedThresholds, GAS_PROFILE},
+            },
             ledger::{
                 BoundedInputs, Inputs, InputsError, Outputs, OutputsError,
                 PreverifiableOperation as _, Utxos, VerifiableOperation as _,
@@ -908,7 +898,8 @@ mod test {
     fn channel_transfer_op_execution_gas_scales_with_the_threshold() {
         for (threshold, expected) in [(1, 56), (2, 112), (3, 168)] {
             assert_eq!(
-                ChannelTransferOp::sample().execution_gas(&FixedThresholds(threshold)),
+                crate::mantle::OpRef::from(&ChannelTransferOp::sample())
+                    .execution_gas(&GAS_PROFILE, &FixedThresholds(threshold)),
                 Ok(Gas::new(expected))
             );
         }
@@ -917,8 +908,22 @@ mod test {
     #[test]
     fn channel_transfer_op_execution_gas_is_zero_against_an_unknown_channel() {
         assert_eq!(
-            ChannelTransferOp::sample().execution_gas(&FixedThresholds(0)),
+            crate::mantle::OpRef::from(&ChannelTransferOp::sample())
+                .execution_gas(&GAS_PROFILE, &FixedThresholds(0)),
             Ok(Gas::new(0))
+        );
+    }
+
+    #[test]
+    fn channel_transfer_op_execution_gas_reports_overflow() {
+        let schedule = GasProfile {
+            channel_transfer: Gas::new(Value::MAX),
+            ..GAS_PROFILE
+        };
+        assert_eq!(
+            crate::mantle::OpRef::from(&ChannelTransferOp::sample())
+                .execution_gas(&schedule, &FixedThresholds(2)),
+            Err(GasOverflow)
         );
     }
 }

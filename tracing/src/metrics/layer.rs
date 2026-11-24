@@ -10,7 +10,7 @@ use crate::{
     OtlpProtocol,
     metrics::{
         emit::reset_cached_instruments,
-        open_metrics::OpenMetrics,
+        open_metrics::{OpenMetrics, OpenMetricsConfig},
         otlp::{OtlpMetricsConfig, build_grpc_exporter, build_http_exporter},
     },
 };
@@ -26,8 +26,8 @@ pub type MetricsSetup<S> = (
 /// # Parameters
 ///
 /// - `otlp_config`: `OTLP` push endpoint; `None` disables `OTLP` export.
-/// - `enable_open_metrics`: whether to enable on-demand `OpenMetrics`
-///   rendering.
+/// - `open_metrics_config`: on-demand `OpenMetrics` rendering; disabled unless
+///   `enabled`.
 ///
 /// # Returns
 ///
@@ -40,12 +40,12 @@ pub type MetricsSetup<S> = (
 /// If the `OTLP` exporter or the `OpenMetrics` reader fails to build.
 pub fn create_metrics_layer<S>(
     otlp_config: Option<OtlpMetricsConfig>,
-    enable_open_metrics: bool,
+    open_metrics_config: &OpenMetricsConfig,
 ) -> Result<Option<MetricsSetup<S>>, Box<dyn Error + Send + Sync>>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
-    if otlp_config.is_none() && !enable_open_metrics {
+    if otlp_config.is_none() && !open_metrics_config.enabled {
         return Ok(None);
     }
 
@@ -69,7 +69,7 @@ where
             .with_resource(resource);
     }
 
-    let open_metrics = if enable_open_metrics {
+    let open_metrics = if open_metrics_config.enabled {
         let (open_metrics, reader) = OpenMetrics::new()?;
         meter_provider_builder = meter_provider_builder.with_reader(reader);
         Some(open_metrics)

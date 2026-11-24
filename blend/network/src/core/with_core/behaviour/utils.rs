@@ -1,10 +1,12 @@
-use core::{convert::Infallible, num::NonZeroU64, task::Waker};
+use core::{convert::Infallible, task::Waker};
 use std::{collections::VecDeque, sync::Arc};
 
 use either::Either;
 use lb_blend_message::{
     deserialize_encapsulated_message,
-    encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+    encap::{
+        MessageLayout, ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    },
 };
 use lb_cryptarchia_engine::Epoch;
 use libp2p::{
@@ -53,8 +55,8 @@ where
         return Err(SendError::NoPeers);
     }
 
-    // Serialized once and then put inside an `Arc` to avoid serializing each copy
-    // or cloning the serialized bytes multiple times.
+    // Serialized once and then put inside an `Arc` to avoid serializing each
+    // copy or cloning the serialized bytes multiple times.
     let serialized_message = OutgoingMessage::from(message);
 
     peer_connections.for_each(|(peer_id, connection_id)| {
@@ -89,7 +91,7 @@ pub fn handle_received_serialized_encapsulated_message<Verifier>(
     pending_verifications: &PendingPoQVerifications,
     waker: &mut Option<Waker>,
     epoch: Epoch,
-    num_blend_layers: NonZeroU64,
+    message_layout: MessageLayout,
     proofs_verifier: &Arc<Verifier>,
 ) -> Result<(), ReceiveError>
 where
@@ -97,11 +99,11 @@ where
 {
     // Deserialize the message.
     let deserialized_encapsulated_message =
-        deserialize_encapsulated_message(serialized_message, &num_blend_layers)
+        deserialize_encapsulated_message(serialized_message, &message_layout)
             .map_err(|_| ReceiveError::UndeserializableMessage)?;
 
-    // Exit early if we've received this message already and we know it's a valid
-    // one.
+    // Exit early if we've received this message already and we know it's a
+    // valid one.
     if message_cache.is_message_processed(&deserialized_encapsulated_message) {
         return Ok(());
     }
@@ -111,8 +113,8 @@ where
         .verify_header_signature()
         .map_err(|_| ReceiveError::InvalidHeaderSignature)?;
 
-    // Verify the `PoQ` before the message is reported to the swarm, entered into
-    // the cache, and hence before it can be relayed any further.
+    // Verify the `PoQ` before the message is reported to the swarm, entered
+    // into the cache, and hence before it can be relayed any further.
     spawn_poq_verification(
         pending_verifications,
         validated_message,

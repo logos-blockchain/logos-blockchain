@@ -1,15 +1,16 @@
-use core::{iter::once, num::NonZeroU64, time::Duration};
+use core::{
+    iter::once,
+    num::{NonZeroU32, NonZeroU64},
+    time::Duration,
+};
 use std::{collections::VecDeque, sync::Arc};
 
 use futures::{
     StreamExt as _,
-    stream::{empty, repeat},
+    stream::{empty, pending, repeat},
 };
 use lb_blend::{
-    message::{
-        MAX_PAYLOAD_BODY_SIZE,
-        reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
-    },
+    message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     proofs::{
         quota::{VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
         selection::VerifiedProofOfSelection,
@@ -20,9 +21,11 @@ use lb_blend::{
 };
 use lb_chain_service::{Epoch, Slot};
 use lb_core::{crypto::ZkHash, header::HeaderId, sdp::ActivityMetadata};
+use lb_cryptarchia_engine::Era;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, Quota};
+use lb_utils::math::PositiveRatio;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha20Rng;
 use rayon::ThreadPoolBuilder;
@@ -47,7 +50,7 @@ use crate::{
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestPayloadDispatcher, backend_epoch_info, dummy_overwatch_resources,
+            TestPayloadDispatcher, ZK_KEY_ID, backend_epoch_info, dummy_overwatch_resources,
             dummy_pol_private_inputs, new_crypto_processor, new_epoch_info, new_membership,
             new_stream, outgoing_messages_recorder, published_epochs_recorder,
             recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_epoch_info,
@@ -64,12 +67,14 @@ use crate::{
     message::{DataPayload, ServiceMessage},
     pending::{NextLocalMessage, PendingTransactions, next_local_message},
     test_utils::{
+        PAYLOAD_BODY_SIZE,
         crypto::{
             GatedPowProofsGenerator, MockCoreAndLeaderProofsGenerator, PolAwareProofsGenerator,
             PowGate, recorded_starting_core_key_indices, reset_starting_core_key_indices,
         },
         dispatcher::{TestBroadcastingChannel, TestPayloadDispatcher as ObservingDispatcher},
         epoch::{GatedPolStreamProvider, OncePolStreamProvider, PolGate},
+        era::single_era,
     },
 };
 
@@ -146,17 +151,16 @@ async fn test_handle_incoming_blend_message() {
     let mut epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -209,8 +213,8 @@ async fn test_handle_incoming_blend_message() {
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -310,8 +314,8 @@ async fn test_handle_incoming_blend_message() {
     epoch = epoch.strict_add(1.into());
     let mut future_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -385,10 +389,9 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     let epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         // data_replication_factor: the panic is independent of this value; the
         // realistic trigger is the >1 replicas the service emits per message.
         1,
@@ -396,8 +399,8 @@ async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -479,10 +482,9 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
 
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
 
@@ -491,8 +493,8 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     let public_info_0 = new_epoch_info(epoch_0, membership.clone(), &settings);
     let mut processor_0 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -512,8 +514,8 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     let public_info_1 = new_epoch_info(epoch_1, membership, &settings);
     let processor_1 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -564,10 +566,9 @@ async fn test_handle_epoch_transition_expired() {
     let epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     // Set a long rounds_per_epoch to make the core quota large enough,
@@ -577,10 +578,12 @@ async fn test_handle_epoch_transition_expired() {
     // Create backend.
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        (),
+        Era::genesis(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
+        local_node.non_ephemeral_signing_key.clone(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
 
@@ -647,17 +650,16 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key,
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     let public_info = new_epoch_info(epoch, membership, &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -671,17 +673,19 @@ async fn test_handle_epoch_event_discards_queued_proposals() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        (),
+        Era::genesis(),
         overwatch_handle,
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
+        local_node.non_ephemeral_signing_key.clone(),
     );
     drop(backend);
     let (old_crypto_processor, old_scheduler) = (
         new_crypto_processor(
             EpochCryptographicProcessorSettings {
-                non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-                num_blend_layers: settings.num_blend_layers,
+                non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+                message_layout: settings.message_layout(),
                 pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
                 spent_core_quota: Quota::ZERO,
             },
@@ -734,17 +738,16 @@ async fn test_handle_epoch_event() {
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -758,10 +761,12 @@ async fn test_handle_epoch_event() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        (),
+        Era::genesis(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
+        local_node.non_ephemeral_signing_key.clone(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -777,6 +782,8 @@ async fn test_handle_epoch_event() {
         }
         .into(),
         &settings,
+        None,
+        &local_node,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -860,6 +867,8 @@ async fn test_handle_epoch_event() {
             epoch_nonce: ZkHash::ZERO,
         },
         &settings,
+        None,
+        &local_node,
         current_crypto_processor,
         current_scheduler,
         new_recovery_checkpoint,
@@ -886,17 +895,16 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -910,10 +918,12 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        (),
+        Era::genesis(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
+        local_node.non_ephemeral_signing_key.clone(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
     let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
@@ -936,6 +946,8 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         }
         .into(),
         &settings,
+        None,
+        &local_node,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -986,17 +998,16 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1010,10 +1021,12 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        (),
+        Era::genesis(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
+        local_node.non_ephemeral_signing_key.clone(),
     );
     let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
@@ -1046,6 +1059,8 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         }
         .into(),
         &settings,
+        None,
+        &local_node,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -1097,17 +1112,16 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1121,10 +1135,12 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        (),
+        Era::genesis(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
+        local_node.non_ephemeral_signing_key.clone(),
     );
     let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
@@ -1133,6 +1149,8 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     let output = handle_epoch_event(
         (empty_epoch, ZkHash::from(1)).into(),
         &settings,
+        None,
+        &local_node,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -1171,18 +1189,17 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
 
     let public_info = new_epoch_info(epoch, membership, &settings);
     let crypto_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1196,10 +1213,12 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     );
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _, _>>::new(
-        settings.clone(),
+        (),
+        Era::genesis(),
         overwatch_handle.clone(),
         backend_epoch_info(&public_info),
         ChaCha20Rng::from_entropy(),
+        local_node.non_ephemeral_signing_key.clone(),
     );
     let (_sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
@@ -1209,6 +1228,8 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
             epoch_nonce: ZkHash::ZERO,
         },
         &settings,
+        None,
+        &local_node,
         crypto_processor,
         scheduler,
         ServiceState::with_epoch(
@@ -1241,10 +1262,9 @@ async fn complete_old_epoch_after_main_loop_done() {
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
     // Create settings.
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
 
@@ -1292,7 +1312,10 @@ async fn complete_old_epoch_after_main_loop_done() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -1307,6 +1330,7 @@ async fn complete_old_epoch_after_main_loop_done() {
     // Run the event loop of the service in a separate task.
     let settings_cloned = settings.clone();
     let join_handle = tokio::spawn(async move {
+        let blend_configs = single_era(settings_cloned);
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
@@ -1315,9 +1339,11 @@ async fn complete_old_epoch_after_main_loop_done() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings_cloned,
+            &mut pending(),
+            &blend_configs,
+            &local_node,
             &mut backend,
-            &TestPayloadDispatcher,
+            &mut TestPayloadDispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -1334,11 +1360,13 @@ async fn complete_old_epoch_after_main_loop_done() {
         retire(
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
+            pending(),
             backend,
             TestPayloadDispatcher,
             sdp_relay,
             rng,
             retiring_epoch,
+            &blend_configs,
             None,
         )
         .await;
@@ -1389,10 +1417,9 @@ async fn stop_on_empty_epoch() {
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
     // Create settings.
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
 
@@ -1440,7 +1467,10 @@ async fn stop_on_empty_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -1455,6 +1485,7 @@ async fn stop_on_empty_epoch() {
     // Run the event loop of the service in a separate task.
     let settings_cloned = settings.clone();
     let join_handle = tokio::spawn(async move {
+        let blend_configs = single_era(settings_cloned);
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
@@ -1463,9 +1494,11 @@ async fn stop_on_empty_epoch() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings_cloned,
+            &mut pending(),
+            &blend_configs,
+            &local_node,
             &mut backend,
-            &TestPayloadDispatcher,
+            &mut TestPayloadDispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -1482,11 +1515,13 @@ async fn stop_on_empty_epoch() {
         retire(
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
+            pending(),
             backend,
             TestPayloadDispatcher,
             sdp_relay,
             rng,
             retiring_epoch,
+            &blend_configs,
             None,
         )
         .await;
@@ -1526,10 +1561,9 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
     // Create settings.
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
 
@@ -1577,7 +1611,10 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -1591,6 +1628,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
     // Run the event loop of the service in a separate task.
     let settings_cloned = settings.clone();
     let join_handle = tokio::spawn(async move {
+        let blend_configs = single_era(settings_cloned);
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
@@ -1599,9 +1637,11 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings_cloned,
+            &mut pending(),
+            &blend_configs,
+            &local_node,
             &mut backend,
-            &TestPayloadDispatcher,
+            &mut TestPayloadDispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -1618,11 +1658,13 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
         retire(
             blend_message_stream.map(|(msg, _)| msg),
             remaining_epoch_stream,
+            pending(),
             backend,
             TestPayloadDispatcher,
             sdp_relay,
             rng,
             retiring_epoch,
+            &blend_configs,
             None,
         )
         .await;
@@ -1662,10 +1704,9 @@ async fn test_proof_generator_epoch_binding() {
     let epoch_1 = 1.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = settings(
+    let (settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
 
@@ -1675,8 +1716,8 @@ async fn test_proof_generator_epoch_binding() {
 
     let mut generator_0 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1686,8 +1727,8 @@ async fn test_proof_generator_epoch_binding() {
 
     let mut generator_1 = new_crypto_processor(
         EpochCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
+            non_ephemeral_encryption_key: local_node.non_ephemeral_signing_key.derive_x25519(),
+            message_layout: settings.message_layout(),
             pow_mining_pool: Arc::new(ThreadPoolBuilder::new().build().unwrap()),
             spent_core_quota: Quota::ZERO,
         },
@@ -1812,17 +1853,17 @@ async fn test_proof_generator_epoch_binding() {
 async fn test_initialize_recovers_matching_saved_state() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let settings = {
-        let mut settings = settings(
+    let (settings, local_node) = {
+        let (mut settings, local_node) = settings(
             local_private_key.clone(),
             u64::from(minimal_network_size).try_into().unwrap(),
-            (),
             0,
         );
-        // More than one layer, so the emission slots the recovery state counts and the
-        // key indices the generator resumes from cannot be confused for each other.
+        // More than one layer, so the emission slots the recovery state counts
+        // and the key indices the generator resumes from cannot be
+        // confused for each other.
         settings.num_blend_layers = 3.try_into().unwrap();
-        settings
+        (settings, local_node)
     };
 
     let initial_epoch = 0.into();
@@ -1848,7 +1889,8 @@ async fn test_initialize_recovers_matching_saved_state() {
         dummy_overwatch_resources();
     let (sdp_relay_1, _sdp_relay_receiver) = sdp_relay();
 
-    // Build a pre-populated saved state with matching epoch and some spent quota.
+    // Build a pre-populated saved state with matching epoch and some spent
+    // quota.
     let public_info = new_epoch_info(initial_epoch, membership.clone(), &settings);
     let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let saved_state = ServiceState::with_epoch(
@@ -1885,7 +1927,10 @@ async fn test_initialize_recovers_matching_saved_state() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle,
         MockKmsAdapter,
@@ -1902,17 +1947,17 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Matching epoch: spent_quota should be restored from saved state"
     );
     assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
-    // A transaction still waiting for a `PoW` solution has not been encapsulated
-    // and so belongs to no epoch: a restart must not lose it.
+    // A transaction still waiting for a `PoW` solution has not been
+    // encapsulated and so belongs to no epoch: a restart must not lose it.
     assert_eq!(
         recovered_checkpoint.pending_transactions().front(),
         Some(&b"transaction".to_vec()),
         "Matching epoch: a queued transaction should be restored from saved state"
     );
-    // The restored quota is also what tells the core proof generator where to pick
-    // up — it is counted in proofs, and the generator hands out one per key index.
-    // Re-proving an index re-derives a key nullifier this node already put on the
-    // wire, and peers drop that as a duplicate.
+    // The restored quota is also what tells the core proof generator where to
+    // pick up — it is counted in proofs, and the generator hands out one
+    // per key index. Re-proving an index re-derives a key nullifier this
+    // node already put on the wire, and peers drop that as a duplicate.
     assert_eq!(
         recorded_starting_core_key_indices(),
         vec![Quota::new::<15>()],
@@ -1975,7 +2020,10 @@ async fn test_initialize_recovers_matching_saved_state() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream2,
         overwatch_handle2,
         MockKmsAdapter,
@@ -2017,14 +2065,13 @@ async fn test_initialize_recovers_matching_saved_state() {
 async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
-    // A long epoch makes the core quota, and with it the activity threshold, high
-    // enough for a single token to clear it.
+    // A long epoch makes the core quota, and with it the activity threshold,
+    // high enough for a single token to clear it.
     settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
 
     // Saved under epoch 0; the node comes back up in epoch 1.
@@ -2083,7 +2130,10 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle,
         MockKmsAdapter,
@@ -2119,10 +2169,9 @@ async fn test_initialize_submits_activity_proof_for_the_previous_epoch() {
 async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
@@ -2173,7 +2222,10 @@ async fn test_initialize_drops_activity_proof_older_than_one_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle,
         MockKmsAdapter,
@@ -2210,16 +2262,16 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
 ) {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key,
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     // No cover traffic, so the only message that can come out is the proposal.
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
     settings.time.round_duration_in_seconds = FALLBACK_TEST_ROUND_IN_SECONDS;
     let deadline = Duration::from_secs(
         FALLBACK_TEST_ROUND_IN_SECONDS.get() * settings.max_data_message_delay_in_rounds().get(),
@@ -2265,7 +2317,10 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2276,13 +2331,11 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
     )
     .await;
 
-    let (payload_dispatcher, broadcasting_channel) = ObservingDispatcher::new();
+    let (mut payload_dispatcher, broadcasting_channel) = ObservingDispatcher::new();
     tokio::spawn(async move {
         let secret_pol_info_stream =
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
         let mut deliveries = FailureDetector::new(
-            settings.max_data_message_delay_in_rounds(),
-            settings.time.round_duration_in_seconds,
             PayloadDispatcher::<RuntimeServiceId>::observe_broadcasts(&payload_dispatcher).await,
         );
         run_event_loop(
@@ -2290,9 +2343,11 @@ async fn spawn_core_watching_the_broadcasting_channel() -> (
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &mut pending(),
+            &single_era(settings),
+            &local_node,
             &mut backend,
-            &payload_dispatcher,
+            &mut payload_dispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -2377,20 +2432,21 @@ async fn a_proposal_the_network_delivers_is_never_broadcast_in_the_clear() {
 /// most visibly at startup, when the node wins the very first slot it is asked
 /// to lead. The proposal used to be encapsulated where it arrived, fail, and be
 /// dropped with an error, silently losing a block this node had just produced.
+#[expect(clippy::too_many_lines, reason = "Test function")]
 #[test_log::test(tokio::test)]
 async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     // No cover traffic, so the only message that can come out is the proposal.
     // See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2434,7 +2490,10 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2453,9 +2512,11 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &mut pending(),
+            &single_era(settings),
+            &local_node,
             &mut backend,
-            &TestPayloadDispatcher,
+            &mut TestPayloadDispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -2470,8 +2531,8 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
         .await;
     });
 
-    // The gate is shut, so the leadership branch has nothing to give: this is the
-    // window the proposal used to die in.
+    // The gate is shut, so the leadership branch has nothing to give: this is
+    // the window the proposal used to die in.
     inbound_message_sender
         .send(ServiceMessage::Blend(DataPayload::BlockProposal(
             b"proposal".to_vec(),
@@ -2523,16 +2584,16 @@ async fn a_proposal_arriving_before_the_pol_info_is_still_sent() {
 async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     // No cover traffic, so the only message that can come out is the queued
     // transaction. See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
@@ -2574,7 +2635,10 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2593,9 +2657,11 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &mut pending(),
+            &single_era(settings),
+            &local_node,
             &mut backend,
-            &TestPayloadDispatcher,
+            &mut TestPayloadDispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -2661,20 +2727,21 @@ async fn the_previous_epoch_keeps_releasing_under_its_own_epoch() {
 /// most visibly at startup, when the node wins the very first slot it is asked
 /// to lead. The proposal used to be encapsulated where it arrived, fail, and be
 /// dropped with an error, silently losing a block this node had just produced.
+#[expect(clippy::too_many_lines, reason = "Test function")]
 #[test_log::test(tokio::test)]
 async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     // No cover traffic, so the only message that can come out is the one this
     // test expects. See the `PoW` liveness test for why this quota silences it.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2717,7 +2784,10 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2736,9 +2806,11 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &mut pending(),
+            &single_era(settings),
+            &local_node,
             &mut backend,
-            &TestPayloadDispatcher,
+            &mut TestPayloadDispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(
@@ -2756,10 +2828,9 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
     // One byte over what a payload can hold, so encapsulating it fails the same
     // way however long it waits.
     inbound_message_sender
-        .send(ServiceMessage::Blend(DataPayload::BlockProposal(vec![
-            0;
-            MAX_PAYLOAD_BODY_SIZE + 1
-        ])))
+        .send(ServiceMessage::Blend(DataPayload::BlockProposal(
+            vec![0; usize::from(PAYLOAD_BODY_SIZE) + 1],
+        )))
         .await
         .unwrap();
     inbound_message_sender
@@ -2789,10 +2860,9 @@ async fn a_message_that_can_never_be_sent_does_not_block_the_rest() {
 async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
-    let mut settings = settings(
+    let (mut settings, local_node) = settings(
         local_private_key.clone(),
         u64::from(minimal_network_size).try_into().unwrap(),
-        (),
         0,
     );
     // No cover traffic, so every message the service sends is one this test put
@@ -2803,7 +2873,8 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
     // Anything in `(0, 0.1]` gives the same quota, so the halfway point keeps
     // float drift well clear of either rounding boundary.
     settings.num_blend_layers = NonZeroU64::try_from(2).unwrap();
-    settings.scheduler.cover.message_frequency_per_round = 0.05.try_into().unwrap();
+    settings.scheduler.cover.message_frequency_per_round =
+        PositiveRatio::new(1, NonZeroU32::new(20).unwrap()).unwrap();
 
     let (inbound_relay, inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
@@ -2847,7 +2918,10 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
         MockKmsAdapter,
         RuntimeServiceId,
     >(
-        settings.clone(),
+        single_era(settings.clone()),
+        &local_node,
+        ZK_KEY_ID.to_owned(),
+        (),
         membership_stream,
         overwatch_handle.clone(),
         MockKmsAdapter,
@@ -2866,9 +2940,11 @@ async fn a_transaction_awaiting_a_pow_solution_does_not_stall_the_event_loop() {
             &mut blend_message_stream,
             secret_pol_info_stream,
             &mut remaining_epoch_stream,
-            &settings,
+            &mut pending(),
+            &single_era(settings),
+            &local_node,
             &mut backend,
-            &TestPayloadDispatcher,
+            &mut TestPayloadDispatcher,
             &sdp_relay,
             &mut rng,
             CurrentEpoch::new(

@@ -1,5 +1,7 @@
+use std::net::Ipv4Addr;
+
 use lb_log_targets::libp2p as lb_log_targets_libp2p;
-use multiaddr::Multiaddr;
+use multiaddr::{Multiaddr, Protocol};
 use upnp::UpnpProtocol;
 
 use crate::{
@@ -61,10 +63,50 @@ impl NatMapper for ProtocolManager {
     }
 }
 
+/// The external address of a mapping: the local address with its IP and port
+/// replaced by the public ones, keeping the components after the port (such as
+/// `/quic-v1`).
+fn build_public_address(
+    local_address: &Multiaddr,
+    public_ip: Ipv4Addr,
+    public_port: u16,
+) -> Result<Multiaddr, AddressMapperError> {
+    let with_ip = local_address
+        .replace(0, |_| Some(Protocol::Ip4(public_ip)))
+        .ok_or_else(|| {
+            AddressMapperError::MultiaddrParseError("No IP address found in multiaddr".to_owned())
+        })?;
+
+    with_ip
+        .replace(1, |p| match p {
+            Protocol::Tcp(_) => Some(Protocol::Tcp(public_port)),
+            Protocol::Udp(_) => Some(Protocol::Udp(public_port)),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            AddressMapperError::MultiaddrParseError(
+                "No TCP or UDP port found in multiaddr".to_owned(),
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_address_keeps_the_transport_after_the_port() {
+        let local_address: Multiaddr = "/ip4/192.168.1.5/udp/3000/quic-v1".parse().unwrap();
+
+        assert_eq!(
+            build_public_address(&local_address, Ipv4Addr::new(203, 0, 113, 7), 3001).unwrap(),
+            "/ip4/203.0.113.7/udp/3001/quic-v1".parse().unwrap()
+        );
+    }
+}
+
 #[cfg(test)]
 mod real_gateway_tests {
-    use rand::{Rng as _, thread_rng};
-
     use super::*;
 
     /// Run with: `NAT_TEST_LOCAL_IP="192.168.1.100`" cargo test
@@ -73,7 +115,7 @@ mod real_gateway_tests {
     #[ignore = "Runs against a real gateway"]
     async fn map_address_via_protocol_manager_real_gateway() {
         let local_ip = std::env::var("NAT_TEST_LOCAL_IP").expect("NAT_TEST_LOCAL_IP");
-        let random_port: u64 = thread_rng().gen_range(10000..=64000);
+        let random_port: u64 = rand_010::random_range(10000..=64000);
         let local_address = format!("/ip4/{local_ip}/tcp/{random_port}");
 
         println!("Testing NAT mapping for local address: {local_address}");

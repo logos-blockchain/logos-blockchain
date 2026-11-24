@@ -3,11 +3,7 @@
 //! Spec: [Wallet Technical Standard](https://lip.logos.co/blockchain/raw/wallet-technical-standard.html)
 
 use core::fmt::Debug;
-use std::{
-    fmt::{self},
-    str::FromStr,
-    sync::LazyLock,
-};
+use std::{fmt, str::FromStr, sync::LazyLock};
 
 pub use arbitrary_int::u31;
 use bip39::Language;

@@ -61,12 +61,14 @@ fn find_repo_git_dir() -> Option<PathBuf> {
 }
 
 fn emit_rerun_if_changed(path: &Path) {
-    println!("cargo:rerun-if-changed={}", path.to_string_lossy());
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.to_string_lossy());
+    }
 }
 
 fn emit_git_watchers(git_dir: &Path) {
-    // Watch the HEAD file, this changes when the current branch changes or when a
-    // new commit is made on a detached HEAD.
+    // Watch the HEAD file, this changes when the current branch changes or when
+    // a new commit is made on a detached HEAD.
     let head_path = git_dir.join("HEAD");
     emit_rerun_if_changed(&head_path);
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryEncode, BinaryDecode)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -37,7 +37,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryCodec)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, BinaryEncode, BinaryDecode)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {
@@ -232,7 +232,8 @@ impl ChannelState {
         let timeframe_elapsed = tip_sequencer_duration.checked_div(posting_timeframe); // None if timeframe == 0
 
         // Timeout-based rotation takes priority when timed out.
-        // Falls back to timeframe-based rotation, then to the current sequencer.
+        // Falls back to timeframe-based rotation, then to the current
+        // sequencer.
         let index = sequencers_timed_out
             .filter(|_| is_timed_out)
             .or(timeframe_elapsed)
@@ -295,7 +296,10 @@ mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, UnverifiedEd25519PublicKey};
 
     use super::*;
-    use crate::mantle::transactions::{GasPrices, tx_list::ops::OpsGasContext};
+    use crate::mantle::{
+        gas::test_utils::GAS_PROFILE,
+        transactions::{GasPrices, tx_list::ops::OpsGasContext},
+    };
 
     fn test_public_key(seed: u8) -> UnverifiedEd25519PublicKey {
         Ed25519Key::from_bytes(&[seed; 32])
@@ -374,7 +378,8 @@ mod tests {
             channel_notes: ChannelNotes::new(),
         };
 
-        let gas_context = OpsGasContext::from_channels(&channels, GasPrices::new(0, 0));
+        let gas_context =
+            OpsGasContext::from_channels(&channels, GasPrices::new(0, 0), GAS_PROFILE);
 
         assert_eq!(gas_context.transfer_threshold(&first_id), Some(1));
         assert_eq!(gas_context.transfer_threshold(&second_id), Some(2));

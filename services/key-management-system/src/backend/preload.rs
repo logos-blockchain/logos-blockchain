@@ -21,6 +21,7 @@ pub enum PreloadBackendError {
     AlreadyRegisteredKeyId(KeyId),
 }
 
+#[derive(Clone)]
 pub struct PreloadKMSBackend {
     keys: HashMap<KeyId, Key>,
 }
@@ -48,8 +49,8 @@ impl KMSBackend for PreloadKMSBackend {
         }
     }
 
-    // Keys created after initialization will be held in memory but not persisted
-    // across restarts
+    // Keys created after initialization will be held in memory but not
+    // persisted across restarts
     fn register(&mut self, key_id: &Self::KeyId, key: Self::Key) -> Result<(), Self::Error> {
         if self.keys.contains_key(key_id) {
             return Err(PreloadBackendError::AlreadyRegisteredKeyId(key_id.clone()));
@@ -100,13 +101,13 @@ impl KMSBackend for PreloadKMSBackend {
     }
 
     async fn execute(
-        &mut self,
+        &self,
         key_id: &Self::KeyId,
         operator: Self::KeyOperations,
     ) -> Result<(), Self::Error> {
         let key = self
             .keys
-            .get_mut(key_id)
+            .get(key_id)
             .ok_or_else(|| PreloadBackendError::NotRegisteredKeyId(key_id.to_owned()))?;
 
         key.execute(operator)

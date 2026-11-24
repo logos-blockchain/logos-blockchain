@@ -27,18 +27,18 @@ use lb_core::{
     crypto::{Digest as _, Hasher},
     mantle::{
         Note, SignedOps, Utxo, Value,
-        gas::MainnetGasProfile,
         ledger::verification_mode::StandardMode,
         transactions::{
             GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, states::Preverified,
         },
     },
+    proofs::leader_proof::LeaderProof as _,
     sdp::Declarations,
 };
 use lb_cryptarchia_engine::{Branch, Cryptarchia, Slot, State, UncleSlots};
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::ZkKey;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::ProperFraction;
 use num_bigint::BigUint;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
@@ -47,10 +47,10 @@ use crate::{
     cryptarchia::{
         EpochState, LedgerState, UtxoTree,
         block_density::BlockDensity,
-        stake::StakeInference,
-        tests::{config, generate_proof},
+        tests::{GENESIS_POW_REWARD_POOL, config, generate_proof},
     },
     mantle::sdp::SdpLedger,
+    test_utils::single_era,
 };
 
 type HeaderId = [u8; 32];
@@ -142,8 +142,11 @@ fn simulate(scenario: Scenario) -> Outcome {
     let config = simulation_config();
     let utxo = leader_utxo();
     let mut ledger = genesis_ledger(&config, utxo);
-    let mut engine =
-        Cryptarchia::from_genesis(GENESIS, config.consensus_config.clone(), State::Online);
+    let mut engine = Cryptarchia::from_genesis(
+        GENESIS,
+        Arc::new(single_era(config.clone()).map(|era| era.parameters.consensus_config.clone())),
+        State::Online,
+    );
     let mut rng = StdRng::seed_from_u64(scenario.seed);
     let mut total_blocks = 0;
     let mut blocks_on_forks = 0;
@@ -178,12 +181,14 @@ fn simulation_config() -> Config {
     let mut config = config();
     config.consensus_config = lb_cryptarchia_engine::Config::new(
         NonZero::new(SECURITY_PARAM).unwrap(),
-        NonNegativeRatio::new(
+        ProperFraction::new(
             SLOT_ACTIVATION_COEFF.0,
             NonZero::new(SLOT_ACTIVATION_COEFF.1).unwrap(),
-        ),
+        )
+        .unwrap(),
         1f64.try_into().expect("1 > 0"),
-        NonZero::new(UNCLE_REFERENCE_WINDOW_IN_BLOCK).unwrap(),
+        UNCLE_REFERENCE_WINDOW_IN_BLOCK,
+        4,
     );
     config
 }
@@ -226,12 +231,7 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
             epoch: 1.into(),
             ..epoch_state.clone()
         },
-        stake_inference: Arc::new(StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        )),
-        block_density: BlockDensity::new(config.epoch(0.into()), config),
+        block_density: BlockDensity::from_genesis_config(config),
         epoch_state,
         fee_window: [0.into(); WINDOW_SIZE],
         average_execution_gas: 0.into(),
@@ -242,10 +242,14 @@ fn genesis_ledger(config: &Config, leader_utxo: Utxo) -> Ledger<HeaderId> {
     };
     let state = crate::LedgerState {
         block_number: 0,
-        mantle_ledger: crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state()),
+        mantle_ledger: crate::mantle::LedgerState::new(
+            config,
+            GENESIS_POW_REWARD_POOL,
+            cryptarchia_ledger.epoch_state(),
+        ),
         cryptarchia_ledger,
     };
-    Ledger::new(GENESIS, state, config.clone())
+    Ledger::new(GENESIS, state, Arc::new(single_era(config.clone())))
 }
 
 fn block_id(parent: HeaderId, slot: Slot) -> HeaderId {
@@ -329,7 +333,7 @@ fn select_uncles(
         .into_iter()
         .map(Branch::slot)
         .collect::<Vec<_>>();
-    UncleSlots::try_from(uncle_slots).unwrap()
+    UncleSlots::try_new(uncle_slots, 4).unwrap()
 }
 
 /// Applies a block to both the ledger and the engine, and drops the ledger
@@ -368,17 +372,21 @@ fn apply_block_to_ledger(
             slot,
             &SdpLedger::new(0.into()),
             &crate::cryptarchia::tests::pow_state(),
-            ledger.config(),
+            ledger.era_schedule(),
         )
         .expect("epoch state update");
     let id = block_id(parent, slot);
     let proof = generate_proof(&parent_state, &utxo, slot);
+    // The ledger applies a header without verifying its proof of leadership,
+    // so verify it here as Block Header Verification does.
+    assert!(proof.verify(&ledger.leader_public(parent, slot).expect("leader public")));
     let update = ledger
-        .prepare_update::<_, _, MainnetGasProfile>(
+        .prepare_update(
             id,
             parent,
             slot,
-            &proof,
+            &proof.entropy(),
+            *proof.voucher_cm(),
             uncle_slots,
             std::iter::empty::<SignedOps<Preverified, StandardMode>>(),
         )

@@ -7,12 +7,13 @@ use std::{
 use bytes::Bytes;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_services_utils::overwatch::RecoveryData;
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
+use lb_tracing::logging::local::TextKind;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path};
 use tracing::Level;
 
 use crate::{
     UserConfig,
-    cli::{CliArgs, build_run_config_from_env},
+    cli::{CliArgs, InitArgs, build_run_config_from_env},
     config::{
         DeploymentSettings, RequiredValues as ConfigRequiredValues,
         blend::{
@@ -22,7 +23,10 @@ use crate::{
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
+        keystore::{KeyTitle, Keystore},
         mempool::ServiceConfig as MempoolServiceConfig,
+        migrations::ConfigVersion,
+        network::serde::nat,
         parse_log_filter_layer,
         sdp::{
             ServiceConfig as SdpServiceConfig,
@@ -35,6 +39,9 @@ use crate::{
         tracing::serde::{
             console::{Layer as ConsoleLayer, TokioConfig},
             filter::{EnvConfig, Layer},
+            logger::{LogFormat, OtlpConfig as LoggerOtlpConfig},
+            metrics::{Layer as MetricsLayer, OtlpConfig as MetricsOtlpConfig},
+            tracing::{Layer as TracingLayer, OtlpConfig as TracingOtlpConfig},
         },
         wallet::{
             ServiceConfig as WalletServiceConfig,
@@ -70,6 +77,15 @@ fn tokio_console_config_defaults_to_loopback_default_console_port() {
     assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
     assert_eq!(config.port, 6_669);
     assert_eq!(config.recording_path, None);
+}
+
+#[test]
+fn log_format_defaults_to_text_and_accepts_json() {
+    assert_eq!(LogFormat::default(), LogFormat::Text(TextKind::Ansi));
+    assert_eq!(
+        serde_yaml::from_str::<LogFormat>("Json").unwrap(),
+        LogFormat::Json
+    );
 }
 
 #[test]
@@ -157,7 +173,8 @@ fn build_run_config_from_env_applies_environment_overrides() {
     let state_path = "/tmp/env-override-test-state";
 
     // SAFETY: The test is serialized via `#[serial]`, and the variables are
-    // removed again before any assertion runs, so no other thread observes them.
+    // removed again before any assertion runs, so no other thread observes
+    // them.
     unsafe { std::env::set_var("HTTP_HOST", http_host) };
     // SAFETY: see above.
     unsafe { std::env::set_var("STATE_PATH", state_path) };
@@ -223,23 +240,12 @@ fn service_settings_receive_recovery_data() {
     };
 
     let deployment_settings = DeploymentSettings::default();
-    let protocol_names = deployment_settings.genesis_protocol_names();
-    let genesis_parameters = deployment_settings.eras.into_genesis_era_parameters();
-
-    let (blend_service_settings, _, _) = BlendServiceConfig {
+    let (_, blend_core_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
-        deployment: genesis_parameters.blend,
     }
-    .into_blend_services_settings(
-        recovery_data.clone(),
-        &genesis_parameters.time,
-        &genesis_parameters.cryptarchia,
-        protocol_names.blend,
-        protocol_names.cryptarchia_topic,
-    );
+    .into_blend_services_settings(recovery_data.clone(), deployment_settings.era_schedule());
     assert_eq!(
-        blend_service_settings
-            .common
+        blend_core_service_settings
             .recovery_data
             .take(BLEND_RECOVERY_MARKER)
             .unwrap(),
@@ -249,7 +255,7 @@ fn service_settings_receive_recovery_data() {
     let wallet_service_settings = WalletServiceConfig {
         user: user_config.wallet.clone(),
     }
-    .into_wallet_service_settings(recovery_data.clone());
+    .into_wallet_service_settings(recovery_data.clone(), deployment_settings.era_schedule());
     assert_eq!(
         wallet_service_settings
             .recovery_data
@@ -261,7 +267,7 @@ fn service_settings_receive_recovery_data() {
     let mempool_service_settings = MempoolServiceConfig {
         user: user_config.mempool.clone(),
     }
-    .into_mempool_service_settings(protocol_names.mempool_topic, recovery_data.clone());
+    .into_mempool_service_settings(deployment_settings.era_schedule(), &recovery_data);
     assert_eq!(
         mempool_service_settings
             .recovery_data
@@ -387,6 +393,98 @@ fn env_config_deserialization_rejects_unknown_blend_target() {
     );
 }
 
+#[test]
+#[serial_test::serial]
+fn init_config_writes_only_overrides_and_load_fills_them_from_the_keystore() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("user_config.yaml");
+    let mut args = InitArgs::default();
+    args.output.clone_from(&config_path);
+    args.network.port = Some(4000);
+    args.log.directory = Some("/logs".into());
+    crate::cli::config::init::run(args).unwrap();
+
+    let written: serde_yaml::Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        written,
+        serde_yaml::from_str::<serde_yaml::Value>(&format!(
+            "{{version: {}, network: {{backend: {{swarm: {{port: 4000}}}}}}, tracing: \
+             {{logger: {{file: {{directory: /logs}}}}}}}}",
+            ConfigVersion::current()
+        ))
+        .unwrap()
+    );
+
+    let keystore = Keystore::load(&dir.path().join("keystore.yaml")).unwrap();
+    let (_, node_key) = keystore.get_ed25519(KeyTitle::NETWORK_SWARM).unwrap();
+    let config = UserConfig::load(&config_path).unwrap();
+    assert_eq!(config.network.backend.swarm.port, 4000);
+    assert_eq!(
+        config.tracing.logger.file.unwrap().directory,
+        Path::new("/logs")
+    );
+    assert_eq!(
+        config.network.backend.swarm.node_key.as_ref(),
+        node_key.as_bytes()
+    );
+    assert_eq!(config.kms.backend.keys.len(), keystore.get_all().count());
+
+    std::fs::write(&config_path, "").unwrap();
+    assert!(UserConfig::load(&config_path).is_ok());
+}
+
+#[test]
+fn redacted_config_hides_the_keys_and_the_otlp_authorization_headers() {
+    let mut config = minimal_user_config();
+    config.tracing.logger.otlp = Some(LoggerOtlpConfig {
+        authorization_header: Some("Bearer logs".into()),
+        ..Default::default()
+    });
+    config.tracing.metrics = MetricsLayer::new(
+        Some(MetricsOtlpConfig {
+            authorization_header: Some("Bearer metrics".into()),
+            ..Default::default()
+        }),
+        None,
+    );
+    config.tracing.tracing = TracingLayer::Otlp(TracingOtlpConfig {
+        authorization_header: Some("Bearer traces".into()),
+        ..Default::default()
+    });
+
+    let redacted = serde_yaml::to_string(&config.redacted().unwrap()).unwrap();
+    assert!(!redacted.contains("Bearer"));
+    assert!(!redacted.contains(&hex::encode(config.network.backend.swarm.node_key.as_ref())));
+    assert_eq!(redacted.matches("<secret>").count(), 5);
+}
+
+#[test]
+fn nat_config_defaults_its_type_and_rejects_unknown_keys() {
+    let nat = |yaml| {
+        deserialize_from_value::<nat::Config>(
+            serde_yaml::from_str(yaml).unwrap(),
+            OnUnknownKeys::Fail,
+        )
+        .map_err(|error| error.to_string())
+    };
+
+    assert!(matches!(
+        nat("{autonat: {max_candidates: 3}}").unwrap(),
+        nat::Config::Traversal(config) if config.autonat.max_candidates == Some(3)
+    ));
+    assert!(matches!(
+        nat("{type: static, external_address: /ip4/1.2.3.4/udp/1/quic-v1}").unwrap(),
+        nat::Config::Static { .. }
+    ));
+    assert!(
+        nat("{autonat: {probe_intreval: 5s}}")
+            .unwrap_err()
+            .contains("[\"autonat.probe_intreval\"]")
+    );
+    assert!(nat("{type: static, autonat: {}}").is_err());
+}
+
 fn repo_file(path_from_crate_root: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(path_from_crate_root)
 }
@@ -418,19 +516,21 @@ fn standalone_deployment_config_deserializes() {
         yaml_path.exists(),
         "standalone deployment config should exist at {yaml_path:?}"
     );
-    let bytes = std::fs::read(&yaml_path).expect("standalone deployment config should exist");
-
-    let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
-    assert!(
-        parsed.is_ok(),
-        "standalone deployment config should deserialize ({:?})",
-        parsed.err(),
-    );
 
     let parsed = deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail);
     assert!(
         parsed.is_ok(),
         "standalone deployment config should deserialize via loader, got: {:?}",
         parsed.err()
+    );
+}
+
+#[test]
+fn partial_blend_backend_keeps_the_peering_degree_check_default() {
+    let backend: crate::config::blend::serde::core::BackendConfig =
+        serde_yaml::from_str("listening_address: /ip4/0.0.0.0/udp/3500/quic-v1").unwrap();
+    assert_eq!(
+        backend.peering_degree_check_interval,
+        Some(std::time::Duration::from_mins(1))
     );
 }

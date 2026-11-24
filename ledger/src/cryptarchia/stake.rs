@@ -1,10 +1,13 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
+
+use crate::config::{EraScheduledConfig, config_for_epoch};
 
 const LOG_TARGET: &str = ledger::cryptarchia::STAKE;
 
 pub const PRECISION: u64 = 1000;
 
-#[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Copy, Clone)]
 pub struct StakeInference {
     learning_rate: f64,
     slot_activation_coefficient: f64,
@@ -12,11 +15,17 @@ pub struct StakeInference {
 }
 
 impl StakeInference {
-    pub const fn new(learning_rate: f64, slot_activation_coefficient: f64, period: u64) -> Self {
+    /// The inference closing `epoch`: it measures the block density of `epoch`
+    /// with the slot activation coefficient and the period of the era of
+    /// `epoch`, and infers the total stake of the epoch after it with the
+    /// learning rate of the era of that epoch.
+    pub fn after_epoch(eras: &EraScheduledConfig, epoch: Epoch) -> Self {
+        let measured = config_for_epoch(eras, epoch);
+        let inferred = config_for_epoch(eras, epoch.strict_add(1.into()));
         Self {
-            learning_rate,
-            slot_activation_coefficient,
-            period,
+            learning_rate: inferred.consensus_config.stake_inference_learning_rate(),
+            slot_activation_coefficient: measured.consensus_config.slot_activation_coeff().as_f64(),
+            period: measured.total_stake_inference_period(),
         }
     }
 
@@ -72,16 +81,17 @@ impl StakeInference {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, num::NonZeroU32, sync::Arc};
 
-    use lb_core::sdp::MinStake;
+    use lb_core::{era::AcceptedForkDigests, sdp::MinStake};
     use lb_groth16::ModulusShift;
-    use lb_utils::math::NonNegativeRatio;
+    use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
     use crate::{
         Config,
         mantle::sdp::{ServiceRewardsParameters, rewards::blend},
+        test_utils::{FORK_DIGEST, single_era},
     };
 
     const SECURITY_PARAM: u32 = 10;
@@ -89,8 +99,8 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_zero_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
+        let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let period_block_density = 0u64;
 
@@ -103,15 +113,16 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_high_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
+        let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference) * 2;
 
         let result = inference
             .total_stake_inference::<PRECISION>(total_stake_estimate, measured_block_density);
 
-        // total stake should decrease because blocks more than expected were produced
+        // total stake should decrease because blocks more than expected were
+        // produced
         assert!(
             result > total_stake_estimate,
             "result({result}) must be > total_stake_estimate({total_stake_estimate})"
@@ -120,8 +131,8 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_exact_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
+        let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference);
 
@@ -135,8 +146,8 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_intermediate_block_density() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
+        let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = 1000u64;
         let measured_block_density = expected_density(&inference) / 2;
 
@@ -153,8 +164,8 @@ mod tests {
 
     #[test]
     fn test_total_stake_inference_very_high_stake() {
-        let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
-        let inference = stake_inference_from(&config);
+        let config = config(ProperFraction::new(1, 2.try_into().unwrap()).unwrap());
+        let inference = StakeInference::after_epoch(&single_era(config), Epoch::genesis());
         let total_stake_estimate = u64::MAX; //maximum stake supported is half
         let measured_block_density = expected_density(&inference) / 2;
 
@@ -168,15 +179,7 @@ mod tests {
         );
     }
 
-    fn stake_inference_from(config: &Config) -> StakeInference {
-        StakeInference::new(
-            config.consensus_config.stake_inference_learning_rate(),
-            config.consensus_config.slot_activation_coeff().as_f64(),
-            config.total_stake_inference_period(),
-        )
-    }
-
-    fn config(slot_activation_coeff: NonNegativeRatio) -> Config {
+    fn config(slot_activation_coeff: ProperFraction) -> Config {
         Config {
             epoch_config: lb_cryptarchia_engine::EpochConfig {
                 epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
@@ -188,6 +191,7 @@ mod tests {
                 slot_activation_coeff,
                 LEARNING_RATE.try_into().unwrap(),
                 12.try_into().unwrap(),
+                4,
             ),
             // Not used in the tests
             sdp_config: crate::mantle::sdp::Config {
@@ -195,19 +199,38 @@ mod tests {
                 service_rewards_params: ServiceRewardsParameters {
                     blend: blend::RewardsParameters {
                         rounds_per_epoch: 10.try_into().unwrap(),
-                        message_frequency_per_round: 1.0.try_into().unwrap(),
+                        message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN)
+                            .unwrap(),
+                        cover_replication_factor: 0,
                         num_blend_layers: 1.try_into().unwrap(),
                         data_replication_factor: 0,
                         minimum_network_size: 1.try_into().unwrap(),
                         activity_threshold_sensitivity: 1,
                     },
                 },
-                min_stake: MinStake {
-                    threshold: 0,
-                    timestamp: 0,
-                },
+                min_stake: MinStake { threshold: 0 },
             },
-            faucet_pk: None,
+            max_transactions: 1024,
+            max_transactions_size: 2 * 1024 * 1024,
+            max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            execution_market: crate::config::ExecutionMarketConfig {
+                max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+                fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+            },
+            storage_market: crate::config::StorageMarketConfig {
+                max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+                ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+            },
+            block_rewards: crate::config::BlockRewardsConfig::new(
+                3_000_000_000,
+                120_000_000.try_into().unwrap(),
+                10_512,
+                NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+                ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+            )
+            .unwrap(),
+            gas_profile: crate::cryptarchia::tests::GAS_PROFILE,
             pow_config: crate::config::PoWConfig {
                 blend: crate::config::BlendPoWConfig {
                     base_difficulty: ModulusShift::new::<19>(),
@@ -218,6 +241,7 @@ mod tests {
                 },
                 reward: crate::cryptarchia::tests::disabled_reward_config(),
             },
+            accepted_fork_digests: AcceptedForkDigests::new(vec![FORK_DIGEST]),
         }
     }
 

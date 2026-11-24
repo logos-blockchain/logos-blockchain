@@ -1,8 +1,8 @@
-use lb_binary_codec::canonical::BinaryCodec;
+use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryCodec)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BinaryEncode, BinaryDecode)]
 pub struct ZkAndEd25519Proof {
     pub zk_sig: ZkSignature,
     pub ed25519_sig: Ed25519Signature,

@@ -6,9 +6,11 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
+use lb_cryptarchia_engine::Era;
+use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use overwatch::overwatch::handle::OverwatchHandle;
 
-use crate::{core::settings::RunningBlendConfig as BlendConfig, message::NetworkInfo};
+use crate::message::NetworkInfo;
 
 pub mod libp2p;
 
@@ -33,10 +35,12 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
     type Settings: Clone + Debug + Send + Sync + 'static;
 
     fn new(
-        service_config: BlendConfig<Self::Settings>,
+        settings: Self::Settings,
+        current_era: Era,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         current_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
         rng: Rng,
+        non_ephemeral_signing_key: UnsecuredEd25519Key,
     ) -> Self;
     fn shutdown(self);
     /// Publish a message to the blend network.
@@ -45,8 +49,14 @@ pub trait BlendBackend<NodeId, Rng, ProofsVerifier, RuntimeServiceId> {
         msg: EncapsulatedMessageWithVerifiedPublicHeader,
         intended_epoch: Epoch,
     );
-    /// Rotate epoch.
-    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>);
+    /// Rotate epoch, and potentially the era as well, if scheduled. Passing
+    /// them together ensures we rotate all epoch and era based clocks at the
+    /// same time.
+    async fn rotate_epoch(
+        &mut self,
+        new_epoch_info: BackendEpochInfo<NodeId, ProofsVerifier>,
+        new_era: Option<Era>,
+    );
     /// Complete the epoch transition, dropping the old epoch's state and its
     /// `PoQ` verifier.
     async fn complete_epoch_transition(&mut self);

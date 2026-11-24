@@ -7,16 +7,16 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
-use lb_libp2p::identity::Keypair;
 use lb_log_targets::blend;
 use libp2p::PeerId;
 use overwatch::overwatch::OverwatchHandle;
 use rand::RngCore;
-pub use settings::Libp2pBlendBackendSettings;
+pub use settings::{Libp2pBlendBackendEraSettings, Libp2pBlendBackendSettings};
 use swarm::BlendSwarm;
 use tokio::sync::mpsc;
 
 use super::BlendBackend;
+use crate::membership::node_id::libp2p::keypair;
 
 const LOG_TARGET: &str = blend::service::edge::backend::LIBP2P;
 
@@ -33,9 +33,11 @@ const CHANNEL_SIZE: usize = 64;
 #[async_trait::async_trait]
 impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBackend {
     type Settings = Libp2pBlendBackendSettings;
+    type EraSettings = Libp2pBlendBackendEraSettings;
 
     fn new<Rng>(
         settings: Self::Settings,
+        era_settings: Self::EraSettings,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         membership: Membership<PeerId>,
         rng: Rng,
@@ -44,14 +46,17 @@ impl<RuntimeServiceId> BlendBackend<PeerId, RuntimeServiceId> for Libp2pBlendBac
     where
         Rng: RngCore + Send + 'static,
     {
+        let Libp2pBlendBackendSettings {
+            max_dial_attempts_per_peer_per_message,
+            replication_factor,
+        } = settings;
+        let Libp2pBlendBackendEraSettings { protocol_name } = era_settings;
         let (swarm_command_sender, swarm_command_receiver) = mpsc::channel(CHANNEL_SIZE);
-        let swarm_identity = {
-            let mut non_ephemeral_signing_key_bytes = non_ephemeral_signing_key.to_bytes();
-            Keypair::ed25519_from_bytes(&mut non_ephemeral_signing_key_bytes)
-                .expect("Cryptographic secret key should be a valid Ed25519 private key.")
-        };
+        let swarm_identity = keypair(&non_ephemeral_signing_key);
         let swarm = BlendSwarm::new(
-            settings,
+            max_dial_attempts_per_peer_per_message,
+            replication_factor,
+            protocol_name.into_inner(),
             membership,
             rng,
             swarm_command_receiver,

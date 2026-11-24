@@ -1,0 +1,4 @@
+# Replaces the root .dockerignore when building .oss-scanner/Dockerfile. That one leaves out .github and .gitignore,
+# which `git status` and `git diff` in /src would then report as deleted. Only local build output stays out.
+target
+tempo-data

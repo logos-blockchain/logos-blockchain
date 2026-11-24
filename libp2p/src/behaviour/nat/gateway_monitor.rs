@@ -1,5 +1,5 @@
 use std::{
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr},
     pin::Pin,
     task::{Context, Poll},
 };
@@ -26,6 +26,10 @@ pub enum GatewayMonitorEvent {
 pub trait GatewayDetector: Send + Sync {
     /// Detect the current gateway address
     fn detect() -> Result<IpAddr, String>;
+
+    /// The IPv4 addresses of the network interface that holds the default
+    /// route, i.e. the local addresses that the default gateway can map.
+    fn default_interface_addresses() -> Result<Vec<Ipv4Addr>, String>;
 }
 
 /// System gateway detector that uses the OS's routing table to find the default
@@ -46,6 +50,16 @@ impl GatewayDetector for SystemGatewayDetector {
             .map(|addr| IpAddr::V4(*addr))
             .or_else(|| gateway.ipv6.first().map(|addr| IpAddr::V6(*addr)))
             .ok_or_else(|| "Gateway has no IP address".to_owned())
+    }
+
+    fn default_interface_addresses() -> Result<Vec<Ipv4Addr>, String> {
+        let interface = netdev::get_default_interface()
+            .map_err(|e| format!("Failed to get default interface: {e}"))?;
+        Ok(interface
+            .ipv4
+            .iter()
+            .map(netdev::ipnet::Ipv4Net::addr)
+            .collect())
     }
 }
 
@@ -162,6 +176,10 @@ mod tests {
             } else {
                 Ok("192.168.1.254".parse().unwrap())
             }
+        }
+
+        fn default_interface_addresses() -> Result<Vec<Ipv4Addr>, String> {
+            Ok(Vec::new())
         }
     }
 

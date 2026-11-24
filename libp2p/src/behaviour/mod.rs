@@ -7,8 +7,8 @@ use std::{collections::HashMap, error::Error};
 
 use lb_cryptarchia_sync::ChainSyncError;
 use lb_utils::net::MAX_WIRE_MESSAGE_SIZE;
-use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad, swarm::NetworkBehaviour};
-use rand::RngCore;
+use libp2p::{PeerId, StreamProtocol, autonat, identify, identity, kad};
+use rand_010::SeedableRng;
 use thiserror::Error;
 
 use crate::{
@@ -20,6 +20,8 @@ pub mod gossipsub;
 pub mod kademlia;
 pub mod nat;
 
+pub use composed::{Behaviour, BehaviourEvent};
+
 pub(crate) struct BehaviourConfig {
     pub gossipsub_config: libp2p::gossipsub::Config,
     pub kademlia_config: KademliaSettings,
@@ -30,6 +32,7 @@ pub(crate) struct BehaviourConfig {
     pub chain_sync_protocol_name: StreamProtocol,
     pub public_key: identity::PublicKey,
     pub chain_sync_config: lb_cryptarchia_sync::Config,
+    pub chain_sync_max_block_size: usize,
     pub max_data_size_by_topic: HashMap<libp2p::gossipsub::TopicHash, usize>,
 }
 
@@ -41,28 +44,41 @@ pub enum BehaviourError {
     ChainSyncError(#[from] ChainSyncError),
 }
 
-#[derive(NetworkBehaviour)]
-pub struct Behaviour<Rng: Clone + Send + RngCore + 'static> {
-    pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
-    // todo: support persistent store if needed
-    pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    pub(crate) identify: identify::Behaviour,
-    pub(crate) chain_sync: lb_cryptarchia_sync::Behaviour,
-    // The spec makes it mandatory to run an autonat server for a public node.
-    pub(crate) autonat_server: autonat::v2::server::Behaviour<Rng>,
-    pub(crate) nat: nat::Behaviour<Rng>,
+// A module of its own so the expectation covers only the derived code.
+#[expect(
+    unreachable_code,
+    reason = "The `NetworkBehaviour` derive forwards `chain_sync`'s `Infallible` handler events. Remove when updating to a version that fixes this."
+)]
+mod composed {
+    use libp2p::{autonat, identify, kad, swarm::NetworkBehaviour};
+    use rand_010::SeedableRng;
+
+    use super::nat;
+
+    #[derive(NetworkBehaviour)]
+    pub struct Behaviour<Rng: rand_010::Rng + SeedableRng + Send + 'static> {
+        pub(crate) gossipsub: libp2p::gossipsub::Behaviour,
+        // todo: support persistent store if needed
+        pub(crate) kademlia: kad::Behaviour<kad::store::MemoryStore>,
+        pub(crate) identify: identify::Behaviour,
+        pub(crate) chain_sync: lb_cryptarchia_sync::Behaviour,
+        // The spec makes it mandatory to run an autonat server for a public node.
+        pub(crate) autonat_server: autonat::v2::server::Behaviour<Rng>,
+        pub(crate) nat: nat::Behaviour<Rng>,
+    }
 }
 
-impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> Behaviour<Rng> {
     pub(crate) fn new(
         config: BehaviourConfig,
-        rng: Rng,
+        mut rng: Rng,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let BehaviourConfig {
             gossipsub_config,
             kademlia_config,
             identify_config,
             chain_sync_config,
+            chain_sync_max_block_size,
             nat_config,
             kad_protocol_name,
             identify_protocol_name,
@@ -99,11 +115,14 @@ impl<Rng: Clone + Send + RngCore + 'static> Behaviour<Rng> {
             kademlia_config.to_libp2p_config(kad_protocol_name),
         );
 
-        let autonat_server = autonat::v2::server::Behaviour::new(rng.clone());
+        let autonat_server = autonat::v2::server::Behaviour::new(rng.fork());
         let nat = nat::Behaviour::new(rng, &nat_config);
 
-        let chain_sync =
-            lb_cryptarchia_sync::Behaviour::new(chain_sync_protocol_name, chain_sync_config);
+        let chain_sync = lb_cryptarchia_sync::Behaviour::new(
+            chain_sync_protocol_name,
+            chain_sync_config,
+            chain_sync_max_block_size,
+        );
 
         Ok(Self {
             gossipsub,
@@ -122,7 +141,7 @@ mod tests {
 
     use lb_cryptarchia_sync::Config as ChainSyncConfig;
     use libp2p::gossipsub as libp2p_gossipsub;
-    use rand::rngs::OsRng;
+    use rand_010::rngs::StdRng;
 
     use super::*;
     use crate::behaviour::gossipsub::configure_topic_size_limits;
@@ -144,7 +163,8 @@ mod tests {
         .unwrap();
         let topic_limit = gossipsub_config.max_transmit_size_for_topic(&topic_hash);
 
-        let mut behaviour = Behaviour::<OsRng>::new(
+        let rng = StdRng::seed_from_u64(0);
+        let mut behaviour = Behaviour::<StdRng>::new(
             BehaviourConfig {
                 gossipsub_config,
                 kademlia_config: KademliaSettings::default(),
@@ -157,10 +177,12 @@ mod tests {
                 chain_sync_config: ChainSyncConfig {
                     peer_response_timeout: Duration::from_secs(1),
                     max_inbound_requests: NonZeroUsize::new(1).unwrap(),
+                    inbound_download_stream_timeout: Duration::from_secs(120),
                 },
+                chain_sync_max_block_size: 1_024,
                 max_data_size_by_topic: HashMap::new(),
             },
-            OsRng,
+            rng,
         )
         .unwrap();
 

@@ -5,5 +5,7 @@ use utoipa::ToSchema;
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct JoinBlendRequestBody {
     pub locator: Locator,
-    pub service_note_id: NoteId,
+    /// When omitted, the node picks a note held by its blend ZK key.
+    #[serde(default)]
+    pub service_note_id: Option<NoteId>,
 }

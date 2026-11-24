@@ -9,7 +9,6 @@ use lb_http_api_common::bodies::{
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::config::UserConfig;
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serde::{Deserialize, de::IntoDeserializer as _};
 use url::Url;
 
@@ -125,14 +124,12 @@ async fn post_blend_declaration(
         password,
     }: PostBlendDeclarationArgs,
 ) -> Result<()> {
-    let user_config =
-        deserialize_value_at_path::<UserConfig>(&user_config_path, OnUnknownKeys::Fail)
-            .with_context(|| {
-                format!(
-                    "Failed to read user config at '{}'",
-                    user_config_path.display()
-                )
-            })?;
+    let user_config = UserConfig::load(&user_config_path).map_err(|error| {
+        anyhow!(
+            "Failed to read user config at '{}': {error}",
+            user_config_path.display()
+        )
+    })?;
 
     let client = {
         let credentials = username.map(|u| BasicAuthCredentials::new(u, password));
@@ -148,7 +145,7 @@ async fn post_blend_declaration(
             &node_address,
             JoinBlendRequestBody {
                 locator: blend_addr,
-                service_note_id,
+                service_note_id: Some(service_note_id),
             },
         )
         .await
@@ -229,7 +226,8 @@ async fn verify_service_note_id_value(
 
     // Preflight guard: fail early when the provided note does not belong to the
     // declaration ZK key according to the wallet view at `node_address`.
-    // TODO: Also verify minimum stake amount once that threshold is exposed here.
+    // TODO: Also verify minimum stake amount once that threshold is exposed
+    // here.
     if !notes.contains_key(&service_note_id) {
         bail!(
             "Service note ID '{service_note_id:?}' was not found in wallet notes for provided Blend ZK ID",

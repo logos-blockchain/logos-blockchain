@@ -2,7 +2,7 @@ use libp2p::PeerId;
 use thiserror::Error;
 use tokio::time::error::Elapsed;
 
-use crate::{BlocksUnavailableReason, GetTipResponseReason, libp2p::packing::PackingError};
+use crate::{BlocksUnavailableReason, TipResponseFailureReason, libp2p::packing::PackingError};
 
 #[derive(Debug, Error)]
 pub enum ChainSyncErrorKind {
@@ -10,7 +10,7 @@ pub enum ChainSyncErrorKind {
     RequestBlocksDownloadError(String),
 
     #[error("Failed to request tip: {0}")]
-    RequestTipError(GetTipResponseReason),
+    RequestTipError(TipResponseFailureReason),
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
@@ -28,7 +28,7 @@ pub enum ChainSyncErrorKind {
     ChannelSendError(String),
 
     #[error("Block provider error: {0}")]
-    ReceivingBlocksError(String),
+    BlockProviderError(String),
 
     #[error("Block provider unavailable: {0}")]
     BlockProviderUnavailable(BlocksUnavailableReason),
@@ -116,7 +116,7 @@ impl Clone for ChainSyncErrorKind {
             Self::RequestTipError(s) => Self::RequestTipError(*s),
             Self::ChannelReceiveError(s) => Self::ChannelReceiveError(s.clone()),
             Self::ChannelSendError(s) => Self::ChannelSendError(s.clone()),
-            Self::ReceivingBlocksError(s) => Self::ReceivingBlocksError(s.clone()),
+            Self::BlockProviderError(s) => Self::BlockProviderError(s.clone()),
             Self::BlockProviderUnavailable(reason) => {
                 Self::BlockProviderUnavailable(reason.clone())
             }

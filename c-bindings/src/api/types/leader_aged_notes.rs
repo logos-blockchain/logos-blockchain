@@ -25,8 +25,7 @@ pub struct LeaderAgedNote {
 /// current epoch's snapshot yet.
 ///
 /// The set is reported unfiltered. The leader service additionally skips the
-/// faucet UTXO when a `faucet_pk` is configured, which only matters on a
-/// faucet node.
+/// UTXOs of the keys in `consensus_excluded_keys`.
 #[repr(C)]
 pub struct LeaderAgedNotes {
     pub tip: HeaderId,

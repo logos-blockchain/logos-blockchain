@@ -130,3 +130,19 @@ impl std::fmt::Debug for OperationStatus {
             .finish()
     }
 }
+
+mod conversions {
+    use lb_chain_service::api::ApiError as ChainApiError;
+
+    use crate::{OperationStatus, OperationStatusCode};
+
+    impl From<ChainApiError> for OperationStatus {
+        fn from(error: ChainApiError) -> Self {
+            let code = match error {
+                ChainApiError::CommsFailure(_) => OperationStatusCode::RelayError,
+                _ => OperationStatusCode::ServiceError,
+            };
+            Self::error(code, error.to_string())
+        }
+    }
+}

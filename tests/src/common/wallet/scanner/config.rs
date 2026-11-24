@@ -3,9 +3,12 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use lb_core::{header::HeaderId, mantle::Utxo};
 use lb_testing_framework::NodeHttpClient;
 
-use super::state::{ScannerStateCheckpoint, SharedWalletScannerState};
+use super::{
+    accounting::ScannerAccountingSnapshot,
+    state::{ScannerStateCheckpoint, SharedWalletScannerState},
+};
 use crate::{
-    common::wallet::{TrackedWalletKeys, WalletUtxos},
+    common::wallet::TrackedWalletKeys,
     cucumber::{
         error::StepError,
         wallet::best_node::{BestNodeInfo, display_group_key},
@@ -45,8 +48,8 @@ pub enum ScannerSeed {
     /// Start from a restored wallet snapshot and verify a trailing slot window
     /// before scanning blocks after the snapshot tip.
     Snapshot {
-        /// UTXOs restored for wallets tracked by this scanner.
-        wallet_utxos: WalletUtxos,
+        /// Full scanner accounting state, including service-locked UTXOs.
+        accounting: Box<ScannerAccountingSnapshot>,
         /// Snapshot chain tip.
         tip: HeaderId,
         /// Snapshot chain height.
@@ -68,7 +71,7 @@ impl ScannerSeed {
     /// Return a copy of this seed containing only UTXOs for `wallet_keys`.
     pub fn filtered_for_wallets(&self, wallet_keys: &[TrackedWalletKeys]) -> Self {
         let Self::Snapshot {
-            wallet_utxos,
+            accounting,
             tip,
             height,
             slot,
@@ -85,19 +88,17 @@ impl ScannerSeed {
             .map(|wallet| wallet.wallet_id().clone())
             .collect::<std::collections::HashSet<_>>();
 
-        let filter_utxos = |utxos: &WalletUtxos| {
-            utxos
-                .iter()
-                .filter(|(wallet_id, _)| wallet_ids.contains(*wallet_id))
-                .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos.clone()))
-                .collect::<WalletUtxos>()
-        };
-
-        let wallet_utxos = filter_utxos(wallet_utxos);
+        let accounting = Box::new(accounting.filtered_for_wallets(&wallet_ids));
         let fallback_checkpoints = fallback_checkpoints
             .iter()
             .map(|checkpoint| ScannerStateCheckpoint {
-                wallet_utxos: filter_utxos(&checkpoint.wallet_utxos),
+                wallet_utxos: checkpoint
+                    .wallet_utxos
+                    .iter()
+                    .filter(|(wallet_id, _)| wallet_ids.contains(*wallet_id))
+                    .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos.clone()))
+                    .collect(),
+                accounting: checkpoint.accounting.filtered_for_wallets(&wallet_ids),
                 tip: checkpoint.tip,
                 height: checkpoint.height,
                 slot: checkpoint.slot,
@@ -105,7 +106,7 @@ impl ScannerSeed {
             .collect();
 
         Self::Snapshot {
-            wallet_utxos,
+            accounting,
             tip: *tip,
             height: *height,
             slot: *slot,

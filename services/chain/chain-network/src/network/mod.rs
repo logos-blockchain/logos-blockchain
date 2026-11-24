@@ -4,12 +4,13 @@ use std::collections::HashSet;
 
 use futures::Stream;
 use lb_core::header::HeaderId;
-use lb_cryptarchia_sync::GetTipResponse;
-use lb_network_service::{NetworkService, backends::NetworkBackend, message::ChainSyncEvent};
-use overwatch::{
-    DynError,
-    services::{ServiceData, relay::OutboundRelay},
+use lb_cryptarchia_engine::Era;
+use lb_cryptarchia_sync::TipResponse;
+use lb_network_service::{
+    backends::NetworkBackend,
+    message::{BackendNetworkMsg, ChainSyncEvent},
 };
+use overwatch::{DynError, services::relay::OutboundRelay};
 
 pub(crate) type BoxedStream<T> = Box<dyn Stream<Item = T> + Send + Unpin>;
 
@@ -23,22 +24,26 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 
     async fn new(
         settings: Self::Settings,
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        current_era: Era,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
     ) -> Self;
+
+    async fn rotate_era(&mut self, era: Era);
+    async fn complete_era_transition(&mut self, ended_era: Era);
+
     async fn proposals_stream(&self) -> Result<BoxedStream<Self::Proposal>, DynError>;
 
     async fn chainsync_events_stream(&self) -> Result<BoxedStream<ChainSyncEvent>, DynError>;
 
-    async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError>;
+    async fn request_tip(&self, peer: Self::PeerId) -> Result<TipResponse, DynError>;
 
     /// Sample up to `max_peers` currently-connected peers and request their
-    /// chain tip via `GetTip`, concurrently. The returned stream yields each
-    /// successful response as it resolves; per-peer failures are dropped.
+    /// chain tip via tip requests, concurrently. The returned stream yields
+    /// each successful response as it resolves; per-peer failures are
+    /// dropped.
     ///
     /// Used by the proactive tip-polling lag watchdog.
-    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse>;
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<TipResponse>;
 
     async fn request_blocks_from_peer(
         &self,

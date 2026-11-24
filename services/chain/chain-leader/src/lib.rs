@@ -9,18 +9,17 @@ mod tx_selection;
 mod wallet;
 
 use core::fmt::Debug;
-use std::{fmt::Display, pin::Pin, time::Duration};
+use std::{fmt::Display, pin::Pin, sync::Arc};
 
 use futures::{Stream, StreamExt as _, stream};
+use lb_blend_service::message::proposal_diagnostic_timestamp_unix_ms;
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{
-        Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE, UncleHeaders,
-    },
+    block::{Block, BlockTransactions, Error as BlockError, UncleHeaders},
     header::HeaderId,
     mantle::{
         OpRef, SignedOps,
@@ -28,16 +27,19 @@ use lb_core::{
         traits::{Hashable, MantleTx, SignedMantleTx, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderProof as _},
     sdp::blend::PolEpochState,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
-use lb_ledger::LedgerState;
+use lb_ledger::{
+    ConsensusExcludedKeys, LedgerState,
+    config::{EraScheduledConfig, config_for_slot},
+};
 use lb_log_targets::{chain, diagnostic::BLEND_REACHABILITY};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_storage_service::StorageService;
-use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
+use lb_time_service::{SlotTick, TimeService, TimeServiceMessage, api::TimeServiceApi};
 use lb_tx_service::{
     TxMempoolService,
     backend::{MemPool, RecoverableMempool},
@@ -50,11 +52,11 @@ use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{Level, error, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 use tx_selection::{TransactionSelection, select_transactions};
 
@@ -186,9 +188,11 @@ impl Debug for LeaderMsg {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct LeaderSettings {
-    pub config: lb_ledger::Config,
+    /// The ledger config of every era.
+    pub era_schedule: Arc<EraScheduledConfig>,
+    pub consensus_excluded_keys: ConsensusExcludedKeys,
     pub wallet_config: LeaderWalletConfig,
 }
 
@@ -332,7 +336,13 @@ where
         + AsServiceId<BlendService>
         + AsServiceId<StorageService<RuntimeServiceId>>
         + AsServiceId<
-            TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>,
+            TxMempoolService<
+                MempoolNetAdapter,
+                Mempool,
+                Mempool::Storage,
+                TimeBackend,
+                RuntimeServiceId,
+            >,
         >
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<CryptarchiaService>
@@ -351,17 +361,42 @@ where
 
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     async fn run(mut self) -> Result<(), DynError> {
-        let relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
-            Self,
-            TimeBackend,
-            CryptarchiaService,
-        >(&self.service_resources_handle)
-        .await;
-
         // Create the API wrapper for chain service communication
         let cryptarchia_api = CryptarchiaServiceApi::<CryptarchiaService>::from_overwatch_handle(
             &self.service_resources_handle.overwatch_handle,
         )
+        .await;
+
+        wait_until_services_are_ready!(
+            &self.service_resources_handle.overwatch_handle,
+            None,
+            TxMempoolService<_, _, _, _, _>,
+            TimeService<_, _>,
+            PreloadKmsService<_>,
+            CryptarchiaService,
+            ChainNetwork,
+            BlendService,
+            Wallet
+        )
+        .await?;
+
+        // Wait until the chain becomes Online mode.
+        // We should not propose blocks while the chain is in Bootstrapping
+        // mode.
+        info!(target: LOG_TARGET, "Waiting for chain to become online");
+        cryptarchia_api
+            .wait_until_chain_becomes_online()
+            .await
+            .expect("Waiting for chain to be online should succeed");
+        info!(target: LOG_TARGET, "Chain is online. Starting block proposals.");
+
+        // Only the chain service is needed before the chain is online: the
+        // rest is set up once the leader starts proposing.
+        let mut relays = CryptarchiaConsensusRelays::from_service_resources_handle::<
+            Self,
+            TimeBackend,
+            CryptarchiaService,
+        >(&self.service_resources_handle)
         .await;
 
         let chain_network_api = ChainNetworkServiceApi::<ChainNetwork>::new(
@@ -373,7 +408,8 @@ where
         );
 
         let LeaderSettings {
-            config: ledger_config,
+            era_schedule,
+            consensus_excluded_keys,
             wallet_config,
         } = self
             .service_resources_handle
@@ -398,45 +434,17 @@ where
 
         let blend_adapter = BlendAdapter::<BlendService>::new(relays.blend_relay().clone());
 
-        // Wait for other services to become ready, with timeout.
-        // (except Chain, ChainNetwork, and Blend)
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_mins(1)),
-            TxMempoolService<_, _, _, _>,
-            TimeService<_, _>,
-            Wallet,
-            PreloadKmsService<_>
-        )
-        .await?;
-        // Wait for the remaining dependencies to become ready, without timeout
-        wait_until_services_are_ready!(
-            &self.service_resources_handle.overwatch_handle,
-            None,
-            CryptarchiaService, // becomes ready after recoverying blocks
-            ChainNetwork,       // becomes ready after IBD
-            BlendService        // becomes ready after chain becomes online
-        )
-        .await?;
-
-        let mut slot_timer = {
-            let (sender, receiver) = oneshot::channel();
-            relays
-                .time_relay()
-                .send(TimeServiceMessage::Subscribe { sender })
-                .await
-                .expect("Request time subscription to time service should succeed");
-            receiver.await?
+        let (mut current_era, mut slot_timer, mut era_transition_ends) = {
+            let time_service_api =
+                TimeServiceApi::<TimeService<TimeBackend, RuntimeServiceId>>::new(
+                    &self.service_resources_handle.overwatch_handle,
+                )
+                .await?;
+            let (current_slot_tick, slot_timer) =
+                time_service_api.subscribe_to_epoch_slots().await?;
+            let era_transition_ends = time_service_api.subscribe_to_era_transition_ends().await?;
+            (current_slot_tick.era, slot_timer, era_transition_ends)
         };
-
-        // Wait until the chain becomes Online mode.
-        // We should not propose blocks while the chain is in Bootstrapping mode.
-        info!(target: LOG_TARGET, "Waiting for chain to become online");
-        cryptarchia_api
-            .wait_until_chain_becomes_online()
-            .await
-            .expect("Waiting for chain to be online should succeed");
-        info!(target: LOG_TARGET, "Chain is online. Starting block proposals.");
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -448,14 +456,28 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    Some(SlotTick { slot, epoch }) = slot_timer.next() => {
+                    Some(SlotTick { era, slot, epoch }) = slot_timer.next() => {
                         trace!(target: LOG_TARGET, "Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
+                        if era > current_era {
+                            relays.mempool_adapter_mut().rotate_era(era).await;
+                            current_era = era;
+                        }
                         let Some(SlotContext { wallet_tip, epoch_state, eligible_aged, .. }) =
-                            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
+                            fetch_slot_context(&cryptarchia_api, &wallet_api, &consensus_excluded_keys, slot).await
                         else {
                             error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
                             continue;
                         };
+                        tracing::debug!(
+                            target: LOG_TARGET,
+                            event = "leader_eligible_notes",
+                            path = "block_production",
+                            slot = ?slot,
+                            epoch = ?epoch,
+                            note_count = eligible_aged.len(),
+                            total_value = eligible_aged.iter().map(|note| note.utxo.note.value).sum::<u64>(),
+                            "Eligible notes for block production"
+                        );
 
                         // The block-proposal proof must prove the winning note is still
                         // unspent, so it needs the latest tip ledger state (fetched per slot).
@@ -488,7 +510,7 @@ where
                                     target: LOG_TARGET,
                                     diagnostic = BLEND_REACHABILITY,
                                     event = "leadership_proof_failure",
-                                    epoch = u32::from(ledger_config.epoch(slot)),
+                                    epoch = u32::from(era_schedule.epoch_for_slot(slot)),
                                     slot = u64::from(slot),
                                     error = %e,
                                     "Failed to build leadership proof"
@@ -507,7 +529,7 @@ where
                                 &cryptarchia_api,
                                 &relays,
                                 tip_state,
-                                &ledger_config,
+                                &era_schedule,
                             )
                             .await
                             {
@@ -522,8 +544,12 @@ where
                         }
                     }
 
+                    Some(transition_end) = era_transition_ends.next() => {
+                        relays.mempool_adapter_mut().complete_era_transition(transition_end.era()).await;
+                    }
+
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &ledger_config, &wallet_config, relays.mempool_adapter()).await;
+                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &era_schedule, &consensus_excluded_keys, &wallet_config, relays.mempool_adapter()).await;
                     }
                 }
             }
@@ -615,7 +641,7 @@ where
         skip(
             relays,
             ledger_state,
-            ledger_config,
+            era_schedule,
             cryptarchia_api,
             proof,
             signing_key
@@ -635,7 +661,7 @@ where
             RuntimeServiceId,
         >,
         mut ledger_state: LedgerState,
-        ledger_config: &lb_ledger::Config,
+        era_schedule: &EraScheduledConfig,
     ) -> Result<Block<Mempool::Item>, Error> {
         let txs_stream = relays
             .mempool_adapter()
@@ -654,21 +680,20 @@ where
                 UncleHeaders::empty()
             });
 
-        (ledger_state, _) = ledger_state
-            .clone()
-            .try_apply_header::<Groth16LeaderProof, HeaderId>(
-                slot,
-                &proof,
-                &uncle_headers.slots(),
-                ledger_config,
-            )?;
+        (ledger_state, _) = ledger_state.clone().try_apply_header::<HeaderId>(
+            slot,
+            &proof.entropy(),
+            *proof.voucher_cm(),
+            &uncle_headers.slots(),
+            era_schedule,
+        )?;
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
         let TransactionSelection {
             ledger_state,
             selected_txs,
             invalid_tx_hashes,
-        } = select_transactions(ledger_state, tx_stream.collect().await, ledger_config);
+        } = select_transactions(ledger_state, tx_stream.collect().await, era_schedule);
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -680,9 +705,31 @@ where
         }
 
         let valid_tx_stream = stream::iter(selected_txs);
-        let txs = txs_for_block(valid_tx_stream).await;
+        let config = config_for_slot(era_schedule, slot);
+        let txs = txs_for_block(
+            valid_tx_stream,
+            config.max_transactions,
+            config.max_transactions_size,
+        )
+        .await;
 
-        let block = Block::create(parent, slot, uncle_headers, proof, txs, signing_key)?;
+        let block = Block::create(
+            parent,
+            slot,
+            uncle_headers,
+            proof,
+            txs,
+            config.max_transactions_size,
+            signing_key,
+        )?;
+        debug!(
+            target: LOG_TARGET,
+            event = "leader_proposal_created",
+            timestamp_unix_ms = proposal_diagnostic_timestamp_unix_ms(),
+            block_id = %block.header().id(),
+            slot = u64::from(block.header().slot()),
+            "Created local block proposal"
+        );
         if tracing::enabled!(Level::DEBUG) {
             log_sdp_activity_selected_for_proposal(&block, &ledger_state);
         }
@@ -734,7 +781,8 @@ where
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
         time_relay: &OutboundRelay<TimeServiceMessage>,
-        ledger_config: &lb_ledger::Config,
+        era_schedule: &Arc<EraScheduledConfig>,
+        consensus_excluded_keys: &ConsensusExcludedKeys,
         config: &LeaderWalletConfig,
         mempool: &MempoolAdapter<Mempool::Item>,
     ) {
@@ -743,9 +791,10 @@ where
                 Self::handle_claim_message(cryptarchia, wallet, config, mempool, sender).await;
             }
             LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
-                // Spawn a dedicated, off-main-loop task that scans winning slots
-                // for this subscriber and streams them in, with the bounded
-                // channel providing backpressure.
+                // Spawn a dedicated, off-main-loop task that scans winning
+                // slots for this subscriber and streams them
+                // in, with the bounded channel providing
+                // backpressure.
                 let (epoch_handoff_sender, epoch_handoff_receiver) =
                     mpsc::channel(WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE);
                 spawn(
@@ -755,7 +804,8 @@ where
                         (*wallet).clone(),
                         (*kms).clone(),
                         (*time_relay).clone(),
-                        (*ledger_config).clone(),
+                        Arc::clone(era_schedule),
+                        consensus_excluded_keys.clone(),
                         epoch_handoff_sender,
                     ),
                 );
@@ -819,16 +869,21 @@ where
 }
 
 /// Select transactions for a block, truncating the stream at the first
-/// transaction that trips the block size or count limits.
-async fn txs_for_block<Tx, S>(mut txs: S) -> BlockTransactions<Tx>
+/// transaction that trips the era's limits: `max_transactions` transactions,
+/// taking at most `max_transactions_size` bytes.
+async fn txs_for_block<Tx, S>(
+    mut txs: S,
+    max_transactions: u16,
+    max_transactions_size: u32,
+) -> BlockTransactions<Tx>
 where
     Tx: StorageSize,
     S: Stream<Item = Tx> + Unpin,
 {
     let mut block_transactions_size: usize = 0;
-    let mut selected_txs = BlockTransactions::empty();
+    let mut selected_txs = Vec::new();
 
-    loop {
+    while selected_txs.len() < usize::from(max_transactions) {
         let Some(tx) = txs.next().await else {
             break;
         };
@@ -839,17 +894,16 @@ where
             break;
         };
 
-        if next_block_transactions_size > MAX_BLOCK_TRANSACTIONS_SIZE {
+        if next_block_transactions_size > max_transactions_size as usize {
             break;
         }
 
-        if selected_txs.try_push(tx).is_err() {
-            break;
-        }
+        selected_txs.push(tx);
         block_transactions_size = next_block_transactions_size;
     }
 
-    selected_txs
+    BlockTransactions::try_new(selected_txs, max_transactions)
+        .expect("No more transactions than the era allows are selected.")
 }
 
 #[cfg(test)]
@@ -867,35 +921,35 @@ mod tests {
         }
     }
 
+    /// The most transactions the tests' blocks may hold.
+    const MAX_TRANSACTIONS: u16 = 1024;
+    /// The most bytes the tests' blocks' transactions may take.
+    const MAX_TRANSACTIONS_SIZE: u32 = 2 * 1024 * 1024;
+    /// [`MAX_TRANSACTIONS_SIZE`], as transaction sizes are counted.
+    const MAX_SIZE: usize = MAX_TRANSACTIONS_SIZE as usize;
+
     #[tokio::test]
     async fn block_tx_selection_respects_transaction_count_limit() {
-        let txs = stream::iter(vec![
-            TestTx { size: 1 };
-            BlockTransactions::<TestTx>::MAX + 1
-        ]);
+        let txs = stream::iter(vec![TestTx { size: 1 }; usize::from(MAX_TRANSACTIONS) + 1]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
 
-        assert_eq!(selected.len(), BlockTransactions::<TestTx>::MAX);
+        assert_eq!(selected.len(), usize::from(MAX_TRANSACTIONS));
     }
 
     #[tokio::test]
     async fn block_tx_selection_respects_block_size_limit() {
         let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
-            },
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
-            },
+            TestTx { size: MAX_SIZE / 2 },
+            TestTx { size: MAX_SIZE / 2 },
             TestTx { size: 1 },
         ]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
         let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
 
         assert_eq!(selected.len(), 2);
-        assert_eq!(selected_size, MAX_BLOCK_TRANSACTIONS_SIZE);
+        assert_eq!(selected_size, MAX_SIZE);
     }
 
     #[tokio::test]
@@ -905,13 +959,11 @@ mod tests {
         // own) ahead of it — doing so could drop a dependency of the third.
         let txs = stream::iter(vec![
             TestTx { size: 10 },
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE,
-            },
+            TestTx { size: MAX_SIZE },
             TestTx { size: 10 },
         ]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected.as_slice()[0].storage_size(), 10);
@@ -920,17 +972,13 @@ mod tests {
     #[tokio::test]
     async fn block_tx_selection_stops_at_leading_oversized_transaction() {
         // A transaction larger than the whole block can never fit. Selection
-        // stops at it rather than skipping past to later transactions, which may
-        // depend on it. (In practice such transactions are filtered out before
-        // reaching here, but the prefix invariant must hold regardless.)
-        let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_TRANSACTIONS_SIZE + 1,
-            },
-            TestTx { size: 1 },
-        ]);
+        // stops at it rather than skipping past to later transactions, which
+        // may depend on it. (In practice such transactions are filtered
+        // out before reaching here, but the prefix invariant must hold
+        // regardless.)
+        let txs = stream::iter(vec![TestTx { size: MAX_SIZE + 1 }, TestTx { size: 1 }]);
 
-        let selected = txs_for_block(txs).await;
+        let selected = txs_for_block(txs, MAX_TRANSACTIONS, MAX_TRANSACTIONS_SIZE).await;
 
         assert!(selected.is_empty());
     }

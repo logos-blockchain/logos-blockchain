@@ -10,7 +10,9 @@ use futures::{Stream, StreamExt as _, stream::pending};
 use lb_blend::{
     message::{
         crypto::{key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey},
-        encap::{ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader},
+        encap::{
+            MessageLayout, ProofsVerifier, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+        },
     },
     network::core::{
         CommonConfig, Config, NetworkBehaviour, with_core::behaviour::Config as CoreToCoreConfig,
@@ -41,7 +43,7 @@ use crate::{
         BackendEpochInfo,
         libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
     },
-    test_utils::PROTOCOL_NAME,
+    test_utils::{PAYLOAD_BODY_SIZE, PROTOCOL_NAME},
 };
 
 /// A `PoQ` verifier for the swarm tests, which accepts every proof it is
@@ -201,6 +203,7 @@ pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
     peering_degree: Option<NonZeroUsize>,
+    liveness_window_in_rounds: Option<NonZeroU128>,
     proofs_verifier: TestProofsVerifier,
 }
 
@@ -210,6 +213,7 @@ impl BlendBehaviourBuilder {
             peer_id,
             membership,
             peering_degree: None,
+            liveness_window_in_rounds: None,
             proofs_verifier: TestProofsVerifier,
         }
     }
@@ -217,6 +221,11 @@ impl BlendBehaviourBuilder {
     /// Sets `Φ_CC`, which must be within the range the specification allows.
     pub fn with_peering_degree(mut self, peering_degree: NonZeroUsize) -> Self {
         self.peering_degree = Some(peering_degree);
+        self
+    }
+
+    pub fn with_liveness_window_in_rounds(mut self, window_in_rounds: NonZeroU128) -> Self {
+        self.liveness_window_in_rounds = Some(window_in_rounds);
         self
     }
 
@@ -228,7 +237,10 @@ impl BlendBehaviourBuilder {
                 &Config {
                     common: CommonConfig {
                         minimum_network_size: 1.try_into().unwrap(),
-                        num_blend_layers: 3.try_into().unwrap(),
+                        message_layout: MessageLayout {
+                            num_blend_layers: 3.try_into().unwrap(),
+                            payload_body_size: PAYLOAD_BODY_SIZE,
+                        },
                         round_duration_in_seconds: 1.try_into().unwrap(),
                     },
                     with_core: CoreToCoreConfig {
@@ -238,7 +250,9 @@ impl BlendBehaviourBuilder {
                         target_peering_degree: peering_degree,
                         // Long enough that no connection in a test goes stale
                         // by accident.
-                        liveness_window_in_rounds: u128::from(u32::MAX).try_into().unwrap(),
+                        liveness_window_in_rounds: self
+                            .liveness_window_in_rounds
+                            .unwrap_or_else(|| u128::from(u32::MAX).try_into().unwrap()),
                     },
                     with_edge: CoreToEdgeConfig {
                         connection_timeout: Duration::from_secs(1),

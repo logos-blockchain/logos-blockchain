@@ -1,6 +1,6 @@
 use super::{
     GenesisTime, OffsetDateTime, StepError,
-    genesis::{resolve_step_genesis_time, validate_genesis_time_change},
+    genesis::{resolve_step_genesis_time, set_explicit_genesis_time, validate_genesis_time_change},
 };
 
 #[test]
@@ -11,6 +11,22 @@ fn step_relative_genesis_time_uses_now_plus_offset() {
         .expect("offset should produce a valid genesis time");
 
     assert_eq!(genesis_time, GenesisTime::new(1_060));
+}
+
+#[tokio::test]
+async fn explicit_step_genesis_expiry_is_rejected_without_resetting_it() {
+    let mut world = crate::cucumber::world::CucumberWorld::default();
+    world.set_genesis_time(GenesisTime::new(10)); // Simulate automatic before-hook assignment.
+    let past = OffsetDateTime::now_utc() - time::Duration::seconds(10);
+    let explicit =
+        resolve_step_genesis_time("the chain starts 0 seconds from now", past, 0).unwrap();
+    set_explicit_genesis_time(&mut world, explicit);
+    let error =
+        super::super::operations::start_node(&mut world, "start", "NODE_1", &[], &[], false, &[])
+            .await
+            .expect_err("expired explicitly configured genesis must fail before startup");
+    assert!(error.to_string().contains("expired"));
+    assert_eq!(world.lifecycle.genesis_time, Some(explicit));
 }
 
 #[test]

@@ -2,14 +2,14 @@ use core::fmt::{self, Display, Formatter};
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
-    num::NonZeroU64,
     sync::Arc,
     task::{Context, Poll, Waker},
 };
 
 use either::Either;
 use lb_blend_message::encap::{
-    ProofsVerifier as ProofsVerifierTrait, validated::EncapsulatedMessageWithVerifiedPublicHeader,
+    MessageLayout, ProofsVerifier as ProofsVerifierTrait,
+    validated::EncapsulatedMessageWithVerifiedPublicHeader,
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
@@ -61,7 +61,7 @@ pub struct OldEpoch<ProofsVerifier> {
     waker: Option<Waker>,
     message_cache: MessageCache,
     epoch: Epoch,
-    num_blend_layers: NonZeroU64,
+    message_layout: MessageLayout,
     /// Verifier for the `PoQ`s of the messages still arriving for this epoch.
     proofs_verifier: Arc<ProofsVerifier>,
 }
@@ -72,7 +72,7 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
         negotiated_peers: HashMap<PeerId, ConnectionId>,
         message_cache: MessageCache,
         epoch: Epoch,
-        num_blend_layers: NonZeroU64,
+        message_layout: MessageLayout,
         proofs_verifier: Arc<ProofsVerifier>,
     ) -> Self {
         Self {
@@ -81,7 +81,7 @@ impl<ProofsVerifier> OldEpoch<ProofsVerifier> {
             events: VecDeque::new(),
             waker: None,
             epoch,
-            num_blend_layers,
+            message_layout,
             proofs_verifier,
         }
     }
@@ -301,7 +301,7 @@ where
             pending_verifications,
             &mut self.waker,
             self.epoch,
-            self.num_blend_layers,
+            self.message_layout,
             &self.proofs_verifier,
         ).inspect_err(|receive_error| {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}.");

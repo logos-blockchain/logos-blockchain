@@ -21,8 +21,9 @@ null
 # Integration test temp dirs
 tests/.run_*
 
-# Wildcard for any file that contains ignore
+# Wildcard for any file that contains ignore, except the ignore file of the OSS scanner's Dockerfile
 *ignore*
+!.oss-scanner/Dockerfile.dockerignore
 
 # C headers
 c-bindings/logos_blockchain.h
@@ -31,6 +32,8 @@ c-bindings/logos_blockchain.h
 node_modules
 *.database
 /tests/cucumber_tests/temp/
+/tests/clients/*/cucumber_tests/temp/
+/tests/clients/*/.e2e_artefacts
 /tests/.e2e_artefacts
 
 # Nix

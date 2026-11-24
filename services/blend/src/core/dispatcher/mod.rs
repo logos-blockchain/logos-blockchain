@@ -1,9 +1,9 @@
 use std::fmt::Debug;
 
 use futures::stream::BoxStream;
-use lb_network_service::{NetworkService, backends::NetworkBackend};
+use lb_cryptarchia_engine::Era;
+use lb_network_service::{backends::NetworkBackend, message::BackendNetworkMsg};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use serde::{Serialize, de::DeserializeOwned};
 
 use crate::message::DataPayload;
 
@@ -26,19 +26,21 @@ pub trait PayloadDispatcher<RuntimeServiceId> {
     /// The chain-network service asked about the block proposals it receives.
     type ChainNetworkService: ServiceData<Message: Send + 'static> + 'static;
     /// Settings used to broadcast messages using the network service.
-    type Settings: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static;
+    type Settings: Clone + Debug + Send + Sync + 'static;
 
     fn new(
-        network_relay: OutboundRelay<
-            <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
-        >,
+        network_relay: OutboundRelay<BackendNetworkMsg<Self::Backend, RuntimeServiceId>>,
         mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>,
         chain_network_relay: OutboundRelay<<Self::ChainNetworkService as ServiceData>::Message>,
         settings: Self::Settings,
+        current_era: Era,
     ) -> Self;
 
+    async fn rotate_era(&mut self, era: Era);
+    async fn complete_era_transition(&mut self, ended_era: Era);
+
     /// Deliver a decapsulated payload to the local service that owns it.
-    async fn dispatch(&self, payload: DataPayload);
+    async fn dispatch(&self, payload: DataPayload, era: Era);
 
     /// Return a stream of payloads appearing on the broadcasting channel.
     async fn observe_broadcasts(&self) -> BoxStream<'static, DataPayload>;

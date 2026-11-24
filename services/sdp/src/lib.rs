@@ -1,8 +1,10 @@
+pub mod activity_submission;
 pub mod api;
 mod intent;
 pub mod mempool;
 mod metrics;
 pub mod state;
+pub mod status;
 pub mod wallet;
 
 use std::fmt::{Debug, Display};
@@ -16,13 +18,14 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, SignedOps,
+        gas::GasCost,
         ledger::verification_mode::StandardMode,
         traits::Hashable as _,
         transactions::{MantleTxBuilder, TxHash, states::Preverified},
     },
     sdp::{
-        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locators, ProviderId,
-        ServiceType, WithdrawMessage, declaration_id,
+        ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locators, Nonce,
+        ProviderId, ServiceType, WithdrawMessage,
     },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -40,15 +43,17 @@ use tokio_stream::{
     StreamExt as _,
     wrappers::{BroadcastStream, errors::BroadcastStreamRecvError},
 };
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
-pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 use crate::{
+    activity_submission::{ActivityProofReport, ActivityProofSubmissionError, ActivitySubmission},
     intent::IntentTracker,
     mempool::SdpMempoolAdapter,
     state::{SdpState, SdpStateStorage},
-    wallet::{SdpWalletAdapter, SdpWalletConfig},
+    status::SdpBlendStatus,
+    wallet::{SdpWalletAdapter, SdpWalletConfig, SdpWalletError},
 };
+pub use crate::{api::SdpServiceApi, intent::Config as ActiveMessageTrackerConfig};
 
 const LOG_TARGET: &str = sdp::ROOT;
 
@@ -75,12 +80,7 @@ pub struct DeclarationConfig {
 impl DeclarationConfig {
     #[must_use]
     pub fn id(&self) -> DeclarationId {
-        declaration_id(
-            self.service_type,
-            &self.provider_id,
-            &self.zk_id,
-            &self.locators,
-        )
+        DeclarationId::derive(self.service_type, self.zk_id)
     }
 }
 
@@ -125,14 +125,18 @@ pub struct RuntimeDeclaration {
     pub id: DeclarationId,
     pub zk_id: ZkPublicKey,
     pub service_note_id: NoteId,
-    pub nonce: u64,
+    pub nonce: Nonce,
     pub tip: HeaderId,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ActivitySubmission {
-    tip: HeaderId,
-    tx_id: TxHash,
+pub struct SdpStatus {
+    pub participation: Option<Participation>,
+    pub last_activity_proof_report: Option<ActivityProofReport>,
+}
+
+const fn next_message_nonce(current_ledger_nonce: Nonce) -> Option<Nonce> {
+    current_ledger_nonce.checked_next()
 }
 
 #[derive(Clone, Debug)]
@@ -174,10 +178,39 @@ pub enum SdpMessage {
         declaration_id: DeclarationId,
         reply_channel: oneshot::Sender<Result<SdpSubmission, DynError>>,
     },
+    GetStatus {
+        reply_channel: oneshot::Sender<SdpStatus>,
+    },
+    GetBlendStatus {
+        reply_channel: oneshot::Sender<Result<SdpBlendStatus, DynError>>,
+    },
     SetCurrentDeclarationId {
         declaration_id: Option<DeclarationId>,
         reply_channel: oneshot::Sender<Result<(), SdpError>>,
     },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum Participation {
+    Live(DeclarationId),
+    Withdrawn(DeclarationId),
+}
+
+impl Participation {
+    #[must_use]
+    pub const fn declaration_id(&self) -> DeclarationId {
+        match self {
+            Self::Live(id) | Self::Withdrawn(id) => *id,
+        }
+    }
+
+    #[must_use]
+    pub const fn live(&self) -> Option<DeclarationId> {
+        match self {
+            Self::Live(id) => Some(*id),
+            Self::Withdrawn(_) => None,
+        }
+    }
 }
 
 pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
@@ -186,12 +219,15 @@ where
     StateStorage: SdpStateStorage<RuntimeServiceId>,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    declaration_id: Option<DeclarationId>,
+    participation: Option<Participation>,
     wallet_config: SdpWalletConfig,
     active_message_tracker_config: intent::Config,
     active_message_tracker: Option<IntentTracker<Activity, CryptarchiaServiceApi<ChainService>>>,
     /// Activity message restored from the previous run, to be tracked again.
     restored_activity: Option<Activity>,
+    last_activity_proof_report: Option<ActivityProofReport>,
+    /// The fee of the last activity proof submitted.
+    last_activity_fee: Option<GasCost>,
     _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
@@ -238,18 +274,20 @@ where
             .notifier()
             .get_updated_settings();
 
-        let declaration_id = initial_state
+        let participation = initial_state
             .updated
-            .and(initial_state.declaration_id)
-            .or_else(|| settings.declaration_id());
+            .and(initial_state.participation)
+            .or_else(|| settings.declaration_id().map(Participation::Live));
 
         Ok(Self {
-            declaration_id,
+            participation,
             service_resources_handle,
             wallet_config: settings.wallet_config,
             active_message_tracker_config: settings.active_message_tracker,
             active_message_tracker: None,
             restored_activity: initial_state.pending_activity,
+            last_activity_proof_report: initial_state.last_activity_proof_report,
+            last_activity_fee: initial_state.last_activity_fee,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -282,7 +320,7 @@ where
         let mut new_blocks = BroadcastStream::new(chain_api.subscribe_new_blocks().await?);
 
         self.service_resources_handle.status_updater.notify_ready();
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
@@ -379,6 +417,17 @@ where
                 )
                 .await;
             }
+            SdpMessage::GetStatus { reply_channel } => {
+                if reply_channel.send(self.status()).is_err() {
+                    error!(target: LOG_TARGET, "Failed to send status response.");
+                }
+            }
+            SdpMessage::GetBlendStatus { reply_channel } => {
+                let status = self.blend_status(chain_api).await;
+                if reply_channel.send(status).is_err() {
+                    error!(target: LOG_TARGET, "Failed to send Blend status response.");
+                }
+            }
             SdpMessage::SetCurrentDeclarationId {
                 declaration_id,
                 reply_channel,
@@ -386,6 +435,32 @@ where
                 self.handle_set_current_declaration_id(declaration_id, reply_channel, chain_api)
                     .await;
             }
+        }
+    }
+
+    async fn blend_status(
+        &self,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
+    ) -> Result<SdpBlendStatus, DynError> {
+        let declaration_id = self
+            .participation
+            .map(|participation| participation.declaration_id());
+        let Some(chain_status) = chain_api.get_blend_status(declaration_id).await? else {
+            return Err("Ledger state not found for the tip".into());
+        };
+        Ok(SdpBlendStatus::new(
+            self.participation,
+            self.last_activity_proof_report,
+            self.last_activity_fee,
+            chain_status,
+        ))
+    }
+
+    #[must_use]
+    const fn status(&self) -> SdpStatus {
+        SdpStatus {
+            participation: self.participation,
+            last_activity_proof_report: self.last_activity_proof_report,
         }
     }
 
@@ -450,7 +525,7 @@ where
     }
 
     async fn handle_active_message_status(
-        &self,
+        &mut self,
         activity: Activity,
         status: IntentStatus,
         wallet_adapter: &WalletAdapter,
@@ -460,7 +535,7 @@ where
         match status {
             IntentStatus::NotApplied => {
                 trace!(target: LOG_TARGET, "active message status: not applied in the tip ledger: resubmitting it");
-                self.submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
+                self.handle_submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
                     .await;
             }
             IntentStatus::Applied => {
@@ -483,15 +558,15 @@ where
             .await?
             .map_or_else(
                 || {
-                    tracing::warn!(target: LOG_TARGET, ?declaration_id, "Declaration not found in ledger");
+                    warn!(target: LOG_TARGET, ?declaration_id, "Declaration not found in ledger");
                     Err(SdpError::DeclarationNotFound(declaration_id))
                 },
                 |declaration| {
-                    tracing::info!(
+                    info!(
                         target: LOG_TARGET,
                         {
                             declaration.declaration.id = ?declaration.declaration.id,
-                            declaration.declaration.nonce = declaration.declaration.nonce,
+                            declaration.declaration.nonce = ?declaration.declaration.nonce,
                         },
                         "Loaded declaration from ledger"
                     );
@@ -511,7 +586,7 @@ where
             cryptarchia_info, ..
         } = chain_api.info().await?;
         let tip = cryptarchia_info.tip;
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             "Fetching declaration state for {declaration_id:?} from ledger tip {tip:?}"
         );
@@ -545,19 +620,22 @@ where
         &self,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), DynError> {
-        let Some(id) = self.declaration_id else {
+        let Some(Participation::Live(declaration_id)) = self.participation else {
             return Ok(());
         };
 
-        match self.try_fetch_runtime_declaration(id, chain_api).await {
+        match self
+            .try_fetch_runtime_declaration(declaration_id, chain_api)
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) => match e {
                 SdpError::ChainApi(err) => {
-                    tracing::error!(target: LOG_TARGET, "Chain API error during declaration resolution: {err}");
+                    error!(target: LOG_TARGET, "Chain API error during declaration resolution: {err}");
                     Err(err)
                 }
                 SdpError::DeclarationNotFound(id) => {
-                    tracing::warn!(
+                    warn!(
                         target: LOG_TARGET,
                         declaration_id = ?id,
                         "Declaration not found in ledger"
@@ -565,7 +643,7 @@ where
                     Ok(())
                 }
                 SdpError::LedgerStateNotFound(tip) => {
-                    tracing::error!(target: LOG_TARGET, "Could not find ledger state for tip {tip:?}");
+                    error!(target: LOG_TARGET, "Could not find ledger state for tip {tip:?}");
                     Err(format!("Missing ledger state at {tip:?}").into())
                 }
             },
@@ -601,7 +679,7 @@ where
         let provider_id = declaration.provider_id;
         let zk_id = declaration.zk_id;
 
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_submission_requested",
@@ -617,7 +695,7 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!(target: LOG_TARGET, "Failed to create declaration transaction: {:?}", e);
+                error!(target: LOG_TARGET, "Failed to create declaration transaction: {:?}", e);
                 metrics::declaration_tx_failures_total();
                 Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
                 return;
@@ -625,7 +703,7 @@ where
         };
 
         let tx_id = signed_tx.hash();
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_tx_created",
@@ -637,13 +715,13 @@ where
         );
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!(target: LOG_TARGET, "Failed to post declaration to mempool: {:?}", e);
+            error!(target: LOG_TARGET, "Failed to post declaration to mempool: {:?}", e);
             metrics::declaration_mempool_failures_total();
             Self::reply(Some(reply_channel), Err(e.into()), "post declaration");
             return;
         }
 
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_declaration_submitted",
@@ -661,7 +739,7 @@ where
             "post declaration",
         );
 
-        self.declaration_id = Some(declaration_id);
+        self.participation = Some(Participation::Live(declaration_id));
         self.update_state();
     }
 
@@ -673,7 +751,7 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
         reply_channel: Option<oneshot::Sender<Result<SdpSubmission, DynError>>>,
     ) {
-        let Some(declaration_id) = self.declaration_id else {
+        let Some(Participation::Live(declaration_id)) = self.participation else {
             tracing::error!(target: LOG_TARGET, "No declaration_id set. Cannot post activity without declaration.");
             Self::reply(
                 reply_channel,
@@ -691,7 +769,7 @@ where
         };
 
         let submission = self
-            .submit_activity(activity.clone(), wallet_adapter, mempool_adapter, chain_api)
+            .handle_submit_activity(activity.clone(), wallet_adapter, mempool_adapter, chain_api)
             .await;
 
         Self::reply(
@@ -722,18 +800,41 @@ where
         self.update_state();
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        clippy::too_many_lines,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
-    async fn submit_activity(
-        &self,
+    /// Submits `activity` and records the outcome for
+    /// [`SdpMessage::GetStatus`].
+    async fn handle_submit_activity(
+        &mut self,
         activity: Activity,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Option<ActivitySubmission> {
+        let epoch = activity.metadata.origin_epoch();
+        let submission = self
+            .try_submit_activity(activity, wallet_adapter, mempool_adapter, chain_api)
+            .await;
+
+        self.last_activity_proof_report = Some(ActivityProofReport { epoch, submission });
+        if let Ok(ActivitySubmission { fee, .. }) = submission {
+            self.last_activity_fee = Some(fee);
+        }
+        self.update_state();
+
+        submission.ok()
+    }
+
+    #[expect(
+        clippy::cognitive_complexity,
+        clippy::too_many_lines,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
+    async fn try_submit_activity(
+        &self,
+        activity: Activity,
+        wallet_adapter: &WalletAdapter,
+        mempool_adapter: &MempoolAdapter,
+        chain_api: &CryptarchiaServiceApi<ChainService>,
+    ) -> Result<ActivitySubmission, ActivityProofSubmissionError> {
         trace!(
             target: LOG_TARGET,
             epoch = ?activity.metadata.submission_epoch(),
@@ -749,18 +850,18 @@ where
             .try_fetch_runtime_declaration(activity.declaration_id, chain_api)
             .await
         else {
-            tracing::error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
-            return None;
+            error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
+            return Err(ActivityProofSubmissionError::DeclarationNotFound);
         };
 
-        let Some(nonce) = declaration.nonce.checked_add(1) else {
-            tracing::error!(target: LOG_TARGET, "Can't bump nonce");
-            return None;
+        let Some(nonce) = next_message_nonce(declaration.nonce) else {
+            error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post activity");
+            return Err(ActivityProofSubmissionError::TransactionBuildFailed);
         };
 
         let proof_epoch = u32::from(activity.metadata.origin_epoch());
 
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_submission_requested",
@@ -781,13 +882,13 @@ where
 
         let tx_builder = MantleTxBuilder::new();
 
-        let signed_tx = match wallet_adapter
+        let (signed_tx, fee) = match wallet_adapter
             .active_tx(tx_builder, active_message, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!(
+                error!(
                     target: LOG_TARGET,
                     diagnostic = BLEND_REACHABILITY,
                     event = "sdp_activity_tx_failed",
@@ -802,12 +903,15 @@ where
                     "Failed to create SDP activity transaction"
                 );
                 metrics::activity_tx_failures_total();
-                return None;
+                if matches!(e, SdpWalletError::Funding(_)) {
+                    return Err(ActivityProofSubmissionError::FundingFailed);
+                }
+                return Err(ActivityProofSubmissionError::TransactionBuildFailed);
             }
         };
 
         let tx_id = signed_tx.hash();
-        tracing::debug!(
+        debug!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_tx_created",
@@ -822,7 +926,7 @@ where
         );
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!(
+            error!(
                 target: LOG_TARGET,
                 diagnostic = BLEND_REACHABILITY,
                 event = "sdp_activity_tx_failed",
@@ -838,10 +942,10 @@ where
                 "Failed to submit SDP activity transaction"
             );
             metrics::activity_mempool_failures_total();
-            return None;
+            return Err(ActivityProofSubmissionError::MempoolRejected);
         }
 
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
             diagnostic = BLEND_REACHABILITY,
             event = "sdp_activity_tx_submitted",
@@ -855,9 +959,10 @@ where
             "Submitted SDP activity transaction"
         );
         metrics::activity_success_total();
-        Some(ActivitySubmission {
+        Ok(ActivitySubmission {
             tip: declaration.tip,
             tx_id,
+            fee,
         })
     }
 
@@ -877,7 +982,7 @@ where
             .try_fetch_runtime_declaration(declaration_id, chain_api)
             .await
         else {
-            tracing::error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
+            error!(target: LOG_TARGET, "Can't find declaration. Cannot post activity without declaration.");
             metrics::withdrawal_validation_failures_total();
             Self::reply(
                 Some(reply_channel),
@@ -889,8 +994,8 @@ where
             return;
         };
 
-        let Some(nonce) = declaration.nonce.checked_add(1) else {
-            tracing::error!(target: LOG_TARGET, "Can't bump nonce");
+        let Some(nonce) = next_message_nonce(declaration.nonce) else {
+            error!(target: LOG_TARGET, "SDP nonce sequence exhausted; cannot post withdrawal");
             metrics::withdrawal_validation_failures_total();
             Self::reply(
                 Some(reply_channel),
@@ -902,7 +1007,6 @@ where
 
         let withdraw_message = WithdrawMessage {
             declaration_id,
-            service_note_id: declaration.service_note_id,
             nonce,
         };
 
@@ -914,17 +1018,16 @@ where
         {
             Ok(tx) => tx,
             Err(e) => {
-                tracing::error!(target: LOG_TARGET, "Failed to create withdrawal transaction: {:?}", e);
+                error!(target: LOG_TARGET, "Failed to create withdrawal transaction: {:?}", e);
                 metrics::withdrawal_tx_failures_total();
                 Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
                 return;
             }
         };
-
         let tx_id = signed_tx.hash();
 
         if let Err(e) = mempool_adapter.post_tx(signed_tx).await {
-            tracing::error!(target: LOG_TARGET, "Failed to post withdrawal to mempool: {:?}", e);
+            error!(target: LOG_TARGET, "Failed to post withdrawal to mempool: {:?}", e);
             metrics::withdrawal_mempool_failures_total();
             Self::reply(Some(reply_channel), Err(e.into()), "post withdrawal");
             return;
@@ -938,7 +1041,7 @@ where
             "post withdrawal",
         );
 
-        self.declaration_id = None;
+        self.participation = Some(Participation::Withdrawn(declaration_id));
         self.active_message_tracker = None;
         self.update_state();
     }
@@ -950,20 +1053,20 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) {
         let result = self
-            .validate_declaration_id(declaration_id, chain_api)
+            .set_current_declaration_id(declaration_id, chain_api)
             .await;
 
         if let Err(e) = reply_channel.send(result) {
-            tracing::error!(target: LOG_TARGET, "Failed to send response for set declaration: {e:?}");
+            error!(target: LOG_TARGET, "Failed to send response for set declaration: {e:?}");
         }
     }
 
-    async fn validate_declaration_id(
+    async fn set_current_declaration_id(
         &mut self,
         declaration_id: Option<DeclarationId>,
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), SdpError> {
-        let validated_id = match declaration_id {
+        let validated_declaration_id = match declaration_id {
             Some(id) => self
                 .try_fetch_runtime_declaration(id, chain_api)
                 .await
@@ -971,7 +1074,7 @@ where
             None => None,
         };
 
-        self.declaration_id = validated_id;
+        self.participation = validated_declaration_id.map(Participation::Live);
         self.update_state();
 
         Ok(())
@@ -1014,7 +1117,10 @@ where
         chain_api: &CryptarchiaServiceApi<ChainService>,
     ) -> Result<(), DynError> {
         let tip_epoch = self.fetch_tip_epoch(chain_api).await?;
-        Ok(activity.validate(self.declaration_id, tip_epoch)?)
+        let live_declaration_id = self
+            .participation
+            .and_then(|participation| participation.live());
+        Ok(activity.validate(live_declaration_id, tip_epoch)?)
     }
 
     async fn fetch_tip_epoch(
@@ -1037,7 +1143,12 @@ where
             .map(|tracker| tracker.intent().clone());
         self.service_resources_handle
             .state_updater
-            .update(Some(SdpState::new(self.declaration_id, pending_activity)));
+            .update(Some(SdpState::new(
+                self.participation,
+                pending_activity,
+                self.last_activity_proof_report,
+                self.last_activity_fee,
+            )));
     }
 }
 
@@ -1166,6 +1277,14 @@ mod tests {
         activity.validate(Some(DECLARATION_ID), 2.into()).unwrap();
         // the tip epoch lags behind the submission epoch
         activity.validate(Some(DECLARATION_ID), 1.into()).unwrap();
+    }
+
+    #[test]
+    fn next_message_nonce_continues_from_recovered_ledger_declaration() {
+        assert_eq!(
+            next_message_nonce(Nonce::new(Epoch::new(10), 41)),
+            Some(Nonce::new(Epoch::new(10), 42))
+        );
     }
 
     fn activity(proof_epoch: u32) -> Activity {

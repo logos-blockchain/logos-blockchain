@@ -71,23 +71,22 @@ async fn start_blocks_streaming_cluster(
     .await
 }
 
-const fn blocks_streaming_config(mut config: RunConfig) -> RunConfig {
+fn blocks_streaming_config(mut config: RunConfig) -> RunConfig {
     config
         .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
+            parameters.cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 4;
+        })
+        .expect("The changed deployment must be valid.");
     config
         .user
         .cryptarchia
         .service
         .bootstrap
         .prolonged_bootstrap_period = Duration::ZERO;
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(SECURITY_PARAM).unwrap();
 
     config
 }
@@ -667,7 +666,8 @@ async fn test_blocks_streaming() {
 
     // ============== Clamping (soft failures) =============
 
-    // case: three blocks from LIB and up (immutable only, slot_to clamps to LIB)
+    // case: three blocks from LIB and up (immutable only, slot_to clamps to
+    // LIB)
     println!("case: three blocks from LIB and up (immutable only, slot_to clamps to LIB)");
 
     chain = refresh_chain(node, &chain).await;
@@ -793,8 +793,8 @@ async fn test_blocks_streaming() {
 
     // ============== Failure modes =============
 
-    // case: single block above LIB (immutable only, explicit slot_from stays above
-    // clamped LIB)
+    // case: single block above LIB (immutable only, explicit slot_from stays
+    // above clamped LIB)
     println!(
         "case: single block above LIB (immutable only, explicit slot_from stays above clamped LIB)"
     );
@@ -820,8 +820,8 @@ async fn test_blocks_streaming() {
         "invalid clamped range should mention 'slot_from', got: {err}"
     );
 
-    // case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw HTTP
-    // query
+    // case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw
+    // HTTP query
     println!("case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw HTTP query");
 
     let (tip_slot, _) = current_tip_lib_slot(node).await;

@@ -121,7 +121,7 @@ where
             .expect("Relay with time service should be available.");
         let (sender, receiver) = oneshot::channel();
         time_relay
-            .send(TimeServiceMessage::Subscribe { sender })
+            .send(TimeServiceMessage::SubscribeToEpochSlots { sender })
             .await
             .expect("Failed to subscribe to slot clock.");
         receiver
@@ -141,7 +141,7 @@ where
         ),
         async move |(mut ticks, mut last_epoch, chain_api, signing_pk, zk_pk, component)| {
             loop {
-                let SlotTick { epoch, slot } = ticks.next().await?;
+                let SlotTick { epoch, slot, .. } = ticks.next().await?;
                 if Some(epoch) == last_epoch {
                     continue;
                 }

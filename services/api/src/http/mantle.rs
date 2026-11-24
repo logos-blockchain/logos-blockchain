@@ -2,6 +2,7 @@ use core::fmt::Debug;
 use std::{collections::HashMap, fmt::Display, num::NonZeroUsize};
 
 use futures::{Stream, StreamExt as _};
+use lb_binary_codec::canonical::BinaryDecode;
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_chain_service::{
     CryptarchiaInfo, ProcessedBlockEvent, Slot,
@@ -18,7 +19,7 @@ use lb_core::{
         traits::{Hashable, StorageSize},
         transactions::{hash::TxHash, states::Preverified},
     },
-    sdp::{Declaration, DeclarationId},
+    sdp::{Declaration, DeclarationId, ServiceType},
 };
 use lb_log_targets::api;
 use lb_storage_service::{StorageService, api::StorageApi};
@@ -54,20 +55,15 @@ pub struct BlockWithChainState<Tx> {
     pub lib_slot: Slot,
 }
 
-pub type MempoolService<StorageAdapter, RuntimeServiceId> = TxMempoolService<
+pub type MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId> = TxMempoolService<
     MempoolNetworkAdapter<
         SignedOps<Preverified, StandardMode>,
         <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
         RuntimeServiceId,
     >,
-    Mempool<
-        HeaderId,
-        SignedOps<Preverified, StandardMode>,
-        <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
-        StorageAdapter,
-        RuntimeServiceId,
-    >,
+    Mempool<HeaderId, SignedOps<Preverified, StandardMode>, StorageAdapter, RuntimeServiceId>,
     StorageAdapter,
+    TimeBackend,
     RuntimeServiceId,
 >;
 
@@ -100,7 +96,7 @@ where
         .ok_or_else(|| "channel not found".into())
 }
 
-pub async fn mantle_mempool_metrics<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_metrics<StorageAdapter, TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<MempoolMetrics, super::DynError>
 where
@@ -108,6 +104,7 @@ where
             RuntimeServiceId,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
             Item = SignedOps<Preverified, StandardMode>,
+            BlockId = HeaderId,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -118,10 +115,10 @@ where
         + Display
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>,
 {
     let relay = handle
-        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .relay::<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>()
         .await?;
     let (sender, receiver) = oneshot::channel();
     relay
@@ -133,7 +130,7 @@ where
     receiver.await.map_err(|e| Box::new(e) as super::DynError)
 }
 
-pub async fn mantle_mempool_status<StorageAdapter, RuntimeServiceId>(
+pub async fn mantle_mempool_status<StorageAdapter, TimeBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
     items: Vec<<SignedOps<Preverified, StandardMode> as Hashable>::Hash>,
 ) -> Result<Vec<Status>, super::DynError>
@@ -142,6 +139,7 @@ where
             RuntimeServiceId,
             Key = <SignedOps<Preverified, StandardMode> as Hashable>::Hash,
             Item = SignedOps<Preverified, StandardMode>,
+            BlockId = HeaderId,
         > + Clone
         + 'static,
     StorageAdapter::Error: Debug,
@@ -152,10 +150,10 @@ where
         + Display
         + 'static
         + AsServiceId<StorageService<RuntimeServiceId>>
-        + AsServiceId<MempoolService<StorageAdapter, RuntimeServiceId>>,
+        + AsServiceId<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>,
 {
     let relay = handle
-        .relay::<MempoolService<StorageAdapter, RuntimeServiceId>>()
+        .relay::<MempoolService<StorageAdapter, TimeBackend, RuntimeServiceId>>()
         .await?;
     let (sender, receiver) = oneshot::channel();
     relay
@@ -230,6 +228,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -296,6 +295,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -366,6 +366,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -393,8 +394,9 @@ where
     let mut retried = false;
 
     loop {
-        // This function only serves the mutable window. Once we hit LIB we are below
-        // the requested mutable range and should stop without loading the body.
+        // This function only serves the mutable window. Once we hit LIB we are
+        // below the requested mutable range and should stop without
+        // loading the body.
         if current_id == chain_info.lib {
             break;
         }
@@ -409,8 +411,9 @@ where
                 .into());
             }
 
-            // Retry once from the latest tip if the original tip is not yet available.
-            // The original LIB remains the anchor for this request.
+            // Retry once from the latest tip if the original tip is not yet
+            // available. The original LIB remains the anchor for
+            // this request.
             let refreshed_info = cryptarchia_info::<RuntimeServiceId>(handle).await?;
             current_id = refreshed_info.cryptarchia_info.tip;
             retried = true;
@@ -474,6 +477,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -510,6 +514,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -533,8 +538,8 @@ where
 
     let immutable_slot_to = slot_to.min(chain_info.lib_slot);
     let has_immutable_range = slot_from <= immutable_slot_to;
-    // Mutable window starts strictly above LIB; LIB itself is served via immutable
-    // index.
+    // Mutable window starts strictly above LIB; LIB itself is served via
+    // immutable index.
     let mutable_slot_from = (chain_info.lib_slot.strict_add(1.into())).max(slot_from);
     let has_mutable_range = !immutable_only && mutable_slot_from <= slot_to;
 
@@ -633,6 +638,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -697,6 +703,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
+        + BinaryDecode<Context = u32>
         + Send
         + Sync
         + 'static
@@ -795,4 +802,46 @@ where
     let chain_api =
         CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
     Ok(chain_api.get_sdp_snapshot().await?)
+}
+
+/// One declaration from finalized (LIB) SDP state.
+pub async fn get_finalized_sdp_declaration<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    declaration_id: DeclarationId,
+) -> Result<Option<Declaration>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api
+        .get_finalized_sdp_declaration(declaration_id)
+        .await?)
+}
+
+/// All declarations of one service from finalized (LIB) SDP state.
+pub async fn get_finalized_sdp_declarations<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+    service_type: ServiceType,
+) -> Result<Option<HashMap<DeclarationId, Declaration>>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>>::from_overwatch_handle(handle).await;
+    Ok(chain_api
+        .get_finalized_sdp_declarations(service_type)
+        .await?)
 }

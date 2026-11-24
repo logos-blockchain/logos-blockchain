@@ -10,6 +10,7 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_blend_membership::{Membership, Node};
+use lb_blend_message::encap::MessageLayout;
 use lb_blend_primitives::time::RoundClock;
 use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
 use lb_libp2p::SwarmEvent;
@@ -20,7 +21,7 @@ use libp2p_swarm_test::SwarmExt as _;
 use crate::core::{
     admission::RoundShare,
     poq_verification::PendingPoQVerifications,
-    tests::utils::{PROTOCOL_NAME, TestProofsVerifier},
+    tests::utils::{PAYLOAD_BODY_SIZE, PROTOCOL_NAME, TestProofsVerifier},
     with_edge::behaviour::{Behaviour, Event as BehaviourEvent},
 };
 
@@ -125,9 +126,12 @@ impl BehaviourBuilder {
             minimum_network_size: self
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
-            num_blend_layers: self
-                .num_blend_layers
-                .unwrap_or_else(|| 3.try_into().unwrap()),
+            message_layout: MessageLayout {
+                num_blend_layers: self
+                    .num_blend_layers
+                    .unwrap_or_else(|| 3.try_into().unwrap()),
+                payload_body_size: PAYLOAD_BODY_SIZE,
+            },
         }
     }
 }
@@ -140,8 +144,9 @@ pub trait StreamBehaviourExt: libp2p_swarm_test::SwarmExt {
 #[async_trait]
 impl StreamBehaviourExt for Swarm<StreamBehaviour> {
     async fn connect_and_upgrade_to_blend(&mut self, other: &mut Swarm<TestBehaviour>) -> Stream {
-        // We connect and return the stream preventing it from being dropped so the
-        // blend node does not close the connection with an EOF error.
+        // We connect and return the stream preventing it from being dropped so
+        // the blend node does not close the connection with an EOF
+        // error.
         self.connect(other).await;
         let stream = self
             .behaviour_mut()

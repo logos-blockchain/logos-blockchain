@@ -8,11 +8,16 @@
 
 use std::marker::PhantomData;
 
-use lb_blend_service::message::{DataPayload, ProxyServiceMessage, ServiceMessage};
+use lb_blend_service::{
+    api::{BlendServiceApi, BlendServiceData},
+    message::{
+        DataPayload, proposal_diagnostic_digest_from_encoded, proposal_diagnostic_timestamp_unix_ms,
+    },
+};
 use lb_core::block::Proposal;
 use lb_log_targets::chain;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
-use tracing::error;
+use tracing::{debug, error};
 
 const LOG_TARGET: &str = chain::leader::BLEND;
 
@@ -42,21 +47,34 @@ where
 
 impl<BlendService> BlendAdapter<BlendService>
 where
-    BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<BlendService::NodeId>>>
-        + lb_blend_service::ServiceComponents,
-    <BlendService as ServiceData>::Message: Send,
+    BlendService: BlendServiceData<NodeId: Send>,
 {
     pub async fn publish_proposal(&self, proposal: Proposal) {
-        let Ok(payload) = DataPayload::try_from_proposal(&proposal) else {
-            error!(
-                target: LOG_TARGET,
-                "Refusing to publish an oversized block proposal"
-            );
-            return;
-        };
+        let payload = DataPayload::from_proposal(&proposal);
+        let payload_clone = payload.clone();
 
-        if let Err(error) = self.relay.send(ServiceMessage::Blend(payload).into()).await {
-            error!(target: LOG_TARGET, "Failed to relay proposal to blend service: {error}");
+        // Blend refuses a proposal larger than a payload body of its current
+        // epoch.
+        if let Err(error) = BlendServiceApi::<BlendService, ()>::new(self.relay.clone())
+            .publish(payload)
+            .await
+        {
+            error!(target: LOG_TARGET, "Failed to publish our block proposal through Blend: {error}");
+            return;
         }
+
+        log_proposal_submitted(&proposal, &payload_clone);
     }
+}
+
+fn log_proposal_submitted(proposal: &Proposal, payload: &DataPayload) {
+    debug!(
+        target: LOG_TARGET,
+        event = "blend_proposal_submitted",
+        timestamp_unix_ms = proposal_diagnostic_timestamp_unix_ms(),
+        block_id = %proposal.header().id(),
+        slot = u64::from(proposal.header().slot()),
+        proposal_digest = %proposal_diagnostic_digest_from_encoded(payload.body()),
+        "Successfully enqueued local block proposal to Blend"
+    );
 }

@@ -29,12 +29,12 @@ pub fn create_epoch_state(
                 service_type,
                 provider_id: *provider_id,
                 service_note_id: note_id,
-                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+                locators: "/ip4/1.1.1.1/udp/3000".parse::<Locator>().unwrap().into(),
                 zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
                 created: 0.into(),
                 active: 2.into(),
                 withdraw_at: None,
-                nonce: 0,
+                nonce: lb_core::sdp::Nonce::new(0.into(), 0),
             };
             (DeclarationId([i as u8; 32]), declaration)
         })
@@ -75,6 +75,5 @@ pub fn create_provider_id(byte: u8) -> ProviderId {
 pub fn create_service_parameters() -> ServiceParameters {
     ServiceParameters {
         inactivity_period: 2.try_into().unwrap(),
-        epoch: 0.into(),
     }
 }

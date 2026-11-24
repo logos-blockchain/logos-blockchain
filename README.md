@@ -67,10 +67,24 @@ cargo build -p logos-blockchain-node --release --features jemalloc
 To start a local standalone instance of a Logos Blockchain network, run:
 
 ```bash
-target/release/logos-blockchain-node --deployment standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml
+target/release/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml
 ```
 
 The node stores state in the `state` directory. If you encounter issues on restart, try removing it before starting the node again.
+
+### Structured logs
+
+Local file, stdout, and stderr sinks use text records by default. Set
+`tracing.logger.format` to `Json` to emit one ANSI-free JSON object per line:
+
+```yaml
+tracing:
+  logger:
+    format: Json
+```
+
+Loki, GELF, and OTLP sinks keep their own structured formats regardless of this
+setting.
 
 ### Docker
 
@@ -133,11 +147,12 @@ logos-blockchain/
 ├── services/             Overwatch services (chain, blend, wallet, API, …)
 ├── nodes/node/           Node binary — wires everything together
 ├── wallet/               Wallet logic (UTXO selection, key management)
-├── zone-sdk/             SDK for building zone sequencers & indexers
 ├── c-bindings/           C-compatible dynamic library + header
 ├── deployment/              Docker Compose testnets, faucet, L2 demo
 └── tests/                Integration & Cucumber BDD tests
 ```
+
+Zone SDK and SQL are maintained in [logos-zone-sdk](https://github.com/logos-blockchain/logos-zone-sdk).
 
 ---
 

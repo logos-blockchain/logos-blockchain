@@ -2,6 +2,10 @@ name: Run cucumber suite
 description: Run a tagged cucumber suite and upload suite artifacts on failure
 
 inputs:
+  package:
+    description: Cargo package containing the Cucumber runner
+    required: false
+    default: logos-blockchain-tests
   suite_tag:
     description: Cucumber tag expression without the broken/undefined filter
     required: true
@@ -9,6 +13,10 @@ inputs:
     description: Absolute path to a built runner executable; defaults to the normal Cargo test runner
     required: false
     default: ""
+  working_directory:
+    description: Directory the supplied executable runs in, relative to the workspace
+    required: false
+    default: tests
   scenario_name:
     description: Optional scenario-name regular expression for the supplied executable, used instead of suite_tag
     required: false
@@ -17,8 +25,12 @@ inputs:
     description: Short suite name used in step output and artifact naming
     required: true
   artifact_subdir:
-    description: Subdirectory under tests/cucumber_tests/temp/cucumber_artefacts
+    description: Feature subdirectory under artifacts_dir/cucumber_artefacts
     required: true
+  artifacts_dir:
+    description: Output directory of the suite
+    required: false
+    default: tests/cucumber_tests/temp
   verbose_console:
     description: Whether to set CUCUMBER_VERBOSE_CONSOLE=true
     required: false
@@ -44,7 +56,7 @@ runs:
       with:
         command: test
         args: >-
-          --locked -p logos-blockchain-tests --features cucumber
+          --locked -p ${{ inputs.package }} --features cucumber
           --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
 
     - name: Run cucumber - ${{ inputs.suite_tag }} (verbose)
@@ -61,7 +73,7 @@ runs:
       with:
         command: test
         args: >-
-          --locked -p logos-blockchain-tests --features cucumber
+          --locked -p ${{ inputs.package }} --features cucumber
           --test cucumber -- --tags "${{ inputs.suite_tag }} and not (@broken or @undefined_behaviour)"
 
     - name: Run cucumber executable - ${{ inputs.suite_name }}
@@ -69,7 +81,7 @@ runs:
       continue-on-error: true
       if: ${{ inputs.executable != '' }}
       shell: bash
-      working-directory: tests
+      working-directory: ${{ inputs.working_directory }}
       env:
         CUCUMBER_LOG_LEVEL: debug
         CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
@@ -95,7 +107,7 @@ runs:
       with:
         name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-${{ inputs.suite_name }}
         include-hidden-files: true
-        path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/${{ inputs.artifact_subdir }}/**
+        path: ${{ github.workspace }}/${{ inputs.artifacts_dir }}/cucumber_artefacts/${{ inputs.artifact_subdir }}/**
 
     - name: Fail suite
       if: ${{ steps.run_suite.outcome == 'failure' || steps.run_suite_verbose.outcome == 'failure' || steps.run_external.outcome == 'failure' }}

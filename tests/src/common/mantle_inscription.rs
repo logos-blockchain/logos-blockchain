@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use lb_config::deployment::GAS_PROFILE;
 use lb_core::mantle::{
     OpProof,
     ops::{
@@ -31,6 +32,7 @@ pub fn build_inscription_tx_builder(
                 execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
                 storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             },
+            GAS_PROFILE,
         ),
         leader_reward_amount: 0,
     };
@@ -67,9 +69,7 @@ pub fn channel_id_for_payload_size(payload_size: usize) -> ChannelId {
 /// Helper function to create an `Inscription` from a UTF-8 string message.
 #[must_use]
 pub fn make_inscription(msg: &str) -> Inscription {
-    Inscription::try_from(msg.as_bytes().to_vec()).unwrap_or_else(|err| {
-        panic!("Failed to create inscription payload from message '{msg}': {err}")
-    })
+    Inscription::new_unchecked(msg.as_bytes().to_vec())
 }
 
 #[cfg(test)]

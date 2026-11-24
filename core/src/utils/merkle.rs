@@ -36,19 +36,23 @@ mod tests {
     use super::*;
     use crate::mantle::{
         Note, Op,
+        fixtures::ops::op_values::FORK_DIGEST,
         ledger::{Inputs, Outputs},
         ops::transfer::TransferOp,
         transactions::tx_list::Ops,
     };
 
     fn create_random_tx(seed: u32) -> Ops {
-        Ops::from([Op::Transfer(TransferOp::new(
-            Inputs::empty(),
-            Outputs::new([Note {
-                value: seed.into(),
-                pk: ZkPublicKey::zero(),
-            }]),
-        ))])
+        Ops::new(
+            FORK_DIGEST,
+            [Op::Transfer(TransferOp::new(
+                Inputs::empty(),
+                Outputs::new([Note {
+                    value: seed.into(),
+                    pk: ZkPublicKey::zero(),
+                }]),
+            ))],
+        )
     }
 
     #[test]

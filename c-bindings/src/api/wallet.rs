@@ -34,7 +34,7 @@ use lb_node::{
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
 use lb_wallet_service::{ClaimableVouchersInfo, LeaderAgedNotesInfo, TipResponse, api::WalletApi};
-use overwatch::services::status::ServiceStatus;
+use overwatch::services::status::{ServiceStatus, WaitPolicy};
 
 use crate::{
     LogosBlockchainNode,
@@ -55,7 +55,8 @@ use crate::{
 
 pub type FfiClaimableVouchersResult = FfiStatusResult<ClaimableVouchers>;
 
-type WalletService = NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
+pub(crate) type WalletService =
+    NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
 /// Resolved tip plus the `(note ID, value)` pairs for a wallet address.
 type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
@@ -290,7 +291,11 @@ pub(crate) fn get_claimable_vouchers_sync(
             })?;
 
         if let Err(status) = status_watcher
-            .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
+            .wait_with_policy(
+                ServiceStatus::Ready,
+                Some(Duration::from_millis(100)),
+                WaitPolicy::RestartFriendly,
+            )
             .await
         {
             return Err(OperationStatus::error(
@@ -1234,12 +1239,14 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     } else {
         unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
     };
-    let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Invalid metadata: {error:?}"),
-        )
-    }));
+    let metadata = unwrap_or_return_error!(Metadata::try_new(metadata_bytes, u32::MAX).map_err(
+        |error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Invalid metadata: {error:?}"),
+            )
+        }
+    ));
 
     let deposit = DepositOp {
         channel_id,
@@ -1416,8 +1423,8 @@ pub(crate) fn channel_deposit_sync(
             })?;
         let change = selected_total - amount;
 
-        // 3. Build a transfer whose output[0] is the exact deposit note, with any
-        //    remainder returned as change to the same key.
+        // 3. Build a transfer whose output[0] is the exact deposit note, with
+        //    any remainder returned as change to the same key.
         let mut outputs = vec![Note::new(amount, funding_public_key)];
         if change > 0 {
             outputs.push(Note::new(change, funding_public_key));
@@ -1454,8 +1461,8 @@ pub(crate) fn channel_deposit_sync(
             metadata,
         };
 
-        // 5. Assemble [transfer, deposit] in order and sign both ops with a single ZK
-        //    signature by the funding key (which owns every input).
+        // 5. Assemble [transfer, deposit] in order and sign both ops with a
+        //    single ZK signature by the funding key (which owns every input).
         //
         //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys)
         // rather    than the usual `WalletApi::sign_tx`. `sign_tx`
@@ -1467,7 +1474,10 @@ pub(crate) fn channel_deposit_sync(
         // `funding_public_key`, so    one signature over the tx hash
         // satisfies both op proofs. Do not "simplify"    this to
         // `sign_tx`.
-        let tx = Ops::from([Op::Transfer(transfer), Op::ChannelDeposit(deposit)]);
+        let tx = Ops::new(
+            node.fork_digest_in_force().await?,
+            [Op::Transfer(transfer), Op::ChannelDeposit(deposit)],
+        );
         let tx_hash = tx.hash();
         let user_sig = api
             .sign_tx_with_zk(tx_hash, vec![funding_public_key])
@@ -1564,12 +1574,14 @@ pub unsafe extern "C" fn channel_deposit(
     } else {
         unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
     };
-    let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::DynError,
-            format!("Invalid metadata: {error:?}"),
-        )
-    }));
+    let metadata = unwrap_or_return_error!(Metadata::try_new(metadata_bytes, u32::MAX).map_err(
+        |error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Invalid metadata: {error:?}"),
+            )
+        }
+    ));
 
     let transaction = unwrap_or_return_error!(channel_deposit_sync(
         node,
@@ -1641,12 +1653,14 @@ pub(crate) fn wallet_fund_tx_sync(
             .map(|utxo| utxo.note.pk)
             .collect();
 
-        let funded_tx = funded_tx_builder.build().map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to build funded tx: {error}"),
-            )
-        })?;
+        let funded_tx = funded_tx_builder
+            .build(node.fork_digest_in_force().await?)
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to build funded tx: {error}"),
+                )
+            })?;
         let transfer_proof = if funding_note_pks.is_empty() {
             None
         } else {

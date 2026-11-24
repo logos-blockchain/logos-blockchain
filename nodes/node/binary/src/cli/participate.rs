@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, num::NonZeroU16};
 
 use color_eyre::eyre::{Result, bail, eyre};
 use lb_core::{
@@ -8,14 +8,15 @@ use lb_core::{
 use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, Protocol};
-use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serde::Serialize;
 
 use super::ParticipateArgs;
 use crate::{
     UserConfig,
-    cli::config::keystore::{KeyTitle, Keystore},
-    config::network::serde::nat,
+    config::{
+        keystore::{KeyTitle, Keystore},
+        network::serde::nat,
+    },
 };
 
 #[derive(Serialize)]
@@ -35,10 +36,8 @@ struct BlendParticipationData {
 }
 
 pub fn run(args: &ParticipateArgs) -> Result<()> {
-    let user_config = deserialize_value_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
-
-    let keystore_yaml = std::fs::read_to_string(&args.keystore)?;
-    let keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
+    let user_config = UserConfig::load(&args.config)?;
+    let keystore = Keystore::load(&user_config.kms.keystore_path(&args.config))?;
 
     let (_, stake_key) = keystore.get_zk(KeyTitle::STAKE)?;
     let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
@@ -50,7 +49,12 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
         sdp_funding_key.to_public_key(),
     ];
 
-    let blend = build_blend_data(&user_config, &keystore, args.external_address)?;
+    let blend = build_blend_data(
+        &user_config,
+        &keystore,
+        args.external_address,
+        args.external_port,
+    )?;
     if let Some(blend) = &blend {
         stakeholder_identities.push(blend.zk_id);
     }
@@ -75,6 +79,7 @@ fn build_blend_data(
     user_config: &UserConfig,
     keystore: &Keystore,
     external_address: Option<Ipv4Addr>,
+    external_port: Option<NonZeroU16>,
 ) -> Result<Option<BlendParticipationData>> {
     let provider_id = match user_config.blend_provider_id() {
         Ok(id) => id.0,
@@ -83,7 +88,8 @@ fn build_blend_data(
 
     let listen_addr = &user_config.blend.core.backend.listening_address;
     let nat_config = &user_config.network.backend.swarm.nat;
-    let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)?;
+    let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)
+        .and_then(|resolved_ip_addr| resolve_locator_port(resolved_ip_addr, external_port))?;
     let locators = Locators::from(Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?);
     let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
 
@@ -134,6 +140,29 @@ fn resolve_locator_addr(
          Set a static external address in the network NAT config or \
          provide --external-address with the node's public IPv4 address."
     );
+}
+
+/// Resolves the blend locator port, replacing port 0 (the OS picks the
+/// listening port when the node starts) with the `--external-port` CLI flag.
+fn resolve_locator_port(addr: Multiaddr, external: Option<NonZeroU16>) -> Result<Multiaddr> {
+    if !addr.iter().any(|p| matches!(p, Protocol::Udp(0))) {
+        return Ok(addr);
+    }
+
+    let Some(port) = external else {
+        bail!(
+            "Blend listening port is 0 (assigned by the OS when the node starts). \
+             Provide --external-port with the node's public blend port."
+        );
+    };
+
+    Ok(addr
+        .iter()
+        .map(|p| match p {
+            Protocol::Udp(0) => Protocol::Udp(port.get()),
+            p => p,
+        })
+        .collect())
 }
 
 /// Returns true if the first protocol in `addr` is an unspecified address

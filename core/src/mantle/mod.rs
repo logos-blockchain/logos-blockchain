@@ -9,9 +9,10 @@ pub mod ops;
 pub mod traits;
 pub mod transactions;
 
-pub use gas::GasProfile;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof, OpProofRef, OpRef};
-pub use transactions::{CryptarchiaParameter, GenesisTime, SignedOps, hash::TxHash};
+pub use transactions::{
+    ConsensusExcludedKeys, GenesisParameters, GenesisTime, SignedOps, hash::TxHash,
+};
 
 pub use crate::mantle::transactions::VerificationError;

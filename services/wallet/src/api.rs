@@ -14,6 +14,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::{
     Ed25519Key, ZkPublicKey, ZkPublicKeys, ZkSignature, secured_key::SecuredKey,
 };
+use lb_ledger::UtxoTree;
 use lb_utils::bounded::BoundedError;
 use lb_wallet::WalletBalance;
 use overwatch::{
@@ -58,8 +59,8 @@ pub trait WalletServiceData:
     type Tx;
 }
 
-impl<Kms, Cryptarchia, Tx, RuntimeServiceId> WalletServiceData
-    for crate::WalletService<Kms, Cryptarchia, Tx, RuntimeServiceId>
+impl<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId> WalletServiceData
+    for crate::WalletService<Kms, Cryptarchia, Tx, TimeBackend, RuntimeServiceId>
 {
     type Kms = Kms;
     type Cryptarchia = Cryptarchia;
@@ -261,14 +262,21 @@ where
         Ok(rx.await??)
     }
 
+    /// Returns the wallet's notes that are unspent at `parent` and in
+    /// `aged_utxos`, the aged UTXO set of the epoch the caller leads in.
     pub async fn get_leader_aged_notes(
         &self,
-        tip: Option<HeaderId>,
+        parent: HeaderId,
+        aged_utxos: UtxoTree,
     ) -> Result<TipResponse<Vec<UtxoWithKeyId>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
         self.relay
-            .send(WalletMsg::GetLeaderAgedNotes { tip, resp_tx })
+            .send(WalletMsg::GetLeaderAgedNotes {
+                parent,
+                aged_utxos,
+                resp_tx,
+            })
             .await?;
 
         Ok(rx.await??)
@@ -371,6 +379,19 @@ mod tests {
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
                             std::collections::HashMap::new(),
                             expected_gas_prices,
+                            lb_core::mantle::gas::GasProfile {
+                                transfer: 590.into(),
+                                channel_config: 56.into(),
+                                channel_inscribe: 56.into(),
+                                channel_deposit: 590.into(),
+                                channel_withdraw: 56.into(),
+                                channel_transfer: 56.into(),
+                                sdp_declare: 646.into(),
+                                sdp_withdraw: 590.into(),
+                                sdp_active: 590.into(),
+                                leader_claim: 580.into(),
+                                claim_pow_reward: 1.into(),
+                            },
                         ),
                         leader_reward_amount: 0,
                     };

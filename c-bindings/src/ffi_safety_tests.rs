@@ -45,13 +45,13 @@ use tempfile::TempDir;
 use crate::{
     LogosBlockchainNode, OperationStatus, OperationStatusCode,
     api::{
-        blend::{blend_info, blend_join_as_core_node},
-        chain::get_chain_id,
-        channel::get_channel_state,
-        config::{
-            GenerateConfigArgs, MergeConfigFlags, generate_user_config, merge_user_config,
-            migrate_user_config, migrate_user_config_0_1_2, participate, update_user_config,
+        blend::{
+            blend_info, blend_join_as_core_node, blend_requirements, blend_rewards, blend_status,
+            blend_withdraw,
         },
+        chain::{get_chain_id, get_fork_digest},
+        channel::get_channel_state,
+        config::{GenerateConfigArgs, generate_user_config, participate, show_config},
         cryptarchia::{free_cryptarchia_info, get_block_events, get_cryptarchia_info},
         deployment::{free_deployment_info, get_deployment_info},
         free_cstring,
@@ -146,7 +146,9 @@ fn node_dir() -> PathBuf {
         .join("nodes/node")
 }
 
-/// An isolated copy of the standalone node and deployment configs.
+/// An isolated copy of the standalone node config, and the standalone
+/// deployment config, read in place: the node only reads it, and the era files
+/// it includes are next to it.
 struct TestConfigPaths {
     temp_dir: TempDir,
     node_config: CString,
@@ -156,11 +158,10 @@ struct TestConfigPaths {
 impl TestConfigPaths {
     fn new() -> Self {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        std::fs::create_dir_all(temp_dir.path().join("state/logs"))
-            .expect("Failed to create log dir");
+        let log_dir = temp_dir.path().join("state/logs");
+        std::fs::create_dir_all(&log_dir).expect("Failed to create log dir");
 
         let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
-        let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
 
         let mut node_config = deserialize_value_at_path::<UserConfig>(
             &node_dir().join("standalone-node-config.yaml"),
@@ -168,6 +169,9 @@ impl TestConfigPaths {
         )
         .expect("Standalone user config should deserialize");
         node_config.state.base_folder = temp_dir.path().join("state");
+        if let Some(file) = node_config.tracing.logger.file.as_mut() {
+            file.directory = log_dir;
+        }
         node_config.api.backend.listen_address = "127.0.0.1:0"
             .parse()
             .expect("Local address should be correct");
@@ -176,15 +180,10 @@ impl TestConfigPaths {
             serde_yaml::to_string(&node_config).expect("Config should serialize"),
         )
         .expect("Failed to write node config");
-        std::fs::copy(
-            node_dir().join("standalone-deployment-config.yaml"),
-            &deployment_config_path,
-        )
-        .expect("Failed to copy deployment config");
 
         Self {
             node_config: cstring(&node_config_path),
-            deployment_config: cstring(&deployment_config_path),
+            deployment_config: cstring(&node_dir().join("standalone-deployment-config.yaml")),
             temp_dir,
         }
     }
@@ -200,11 +199,6 @@ impl TestConfigPaths {
     }
 }
 
-const NO_INSERT: MergeConfigFlags = MergeConfigFlags {
-    source_insert_missing: 0,
-    extra_insert_missing: 0,
-};
-
 mod no_node {
     use super::*;
 
@@ -217,10 +211,12 @@ mod no_node {
         let id = [0u8; 32];
         let s = c"x".as_ptr();
         let null_s: *const c_char = ptr::null();
+        let null_port: *const u16 = ptr::null();
         let np = OperationStatusCode::NullPointer;
 
         unsafe {
             assert_eq!(code(get_chain_id(node)), np);
+            assert_eq!(code(get_fork_digest(node)), np);
             assert_eq!(code(leader_claim(node)), np);
             assert_eq!(code(get_network_info(node)), np);
             assert_eq!(code(get_channel_state(node, id.as_ptr())), np);
@@ -259,37 +255,23 @@ mod no_node {
             assert_eq!(code(pow_status(node)), np);
             assert_eq!(code(blend_join_as_core_node(node, s, id.as_ptr())), np);
             assert_eq!(code(blend_info(node)), np);
+            assert_eq!(code(blend_requirements(node)), np);
+            assert_eq!(code(blend_withdraw(node)), np);
+            assert_eq!(code(blend_rewards(node)), np);
+            assert_eq!(code(blend_status(node)), np);
             assert_eq!(code(shutdown_node(ptr::null_mut())), np);
 
             assert_eq!(code(start_lb_node(null_s, null_s)), np);
             assert_eq!(code(start_lb_node(null_s, s)), np);
             assert_eq!(code(get_peer_id(null_s)), np);
-            assert_eq!(code(update_user_config(null_s, s)), np);
-            assert_eq!(code(update_user_config(s, null_s)), np);
-            assert_eq!(code(migrate_user_config(null_s, s)), np);
-            assert_eq!(code(migrate_user_config(s, null_s)), np);
-            assert_eq!(code(migrate_user_config_0_1_2(null_s, s, s)), np);
-            assert_eq!(code(migrate_user_config_0_1_2(s, null_s, s)), np);
-            assert_eq!(code(migrate_user_config_0_1_2(s, s, null_s)), np);
-            assert_eq!(code(merge_user_config(null_s, s, null_s, NO_INSERT)), np);
-            assert_eq!(code(merge_user_config(s, null_s, null_s, NO_INSERT)), np);
-            assert_eq!(code(participate(null_s, s, s, null_s)), np);
-            assert_eq!(code(participate(s, null_s, s, null_s)), np);
-            assert_eq!(code(participate(s, s, null_s, null_s)), np);
-            assert_eq!(
-                code(generate_key(null_s, s, KeyType::Zk as u32, null_s)),
-                np
-            );
-            assert_eq!(
-                code(generate_key(s, null_s, KeyType::Zk as u32, null_s)),
-                np
-            );
-            assert_eq!(code(add_key(null_s, s, KeyType::Zk as u32, s, null_s)), np);
-            assert_eq!(code(add_key(s, null_s, KeyType::Zk as u32, s, null_s)), np);
-            assert_eq!(code(add_key(s, s, KeyType::Zk as u32, null_s, null_s)), np);
-            assert_eq!(code(remove_key(null_s, s, s)), np);
-            assert_eq!(code(remove_key(s, null_s, s)), np);
-            assert_eq!(code(remove_key(s, s, null_s)), np);
+            assert_eq!(code(show_config(null_s)), np);
+            assert_eq!(code(participate(null_s, s, null_s, null_port)), np);
+            assert_eq!(code(participate(s, null_s, null_s, null_port)), np);
+            assert_eq!(code(generate_key(null_s, KeyType::Zk as u32, null_s)), np);
+            assert_eq!(code(add_key(null_s, KeyType::Zk as u32, s, null_s)), np);
+            assert_eq!(code(add_key(s, KeyType::Zk as u32, null_s, null_s)), np);
+            assert_eq!(code(remove_key(null_s, s)), np);
+            assert_eq!(code(remove_key(s, null_s)), np);
             assert_eq!(code(get_deployment_info(null_s, null_s)), np);
         }
     }
@@ -469,48 +451,14 @@ mod no_node {
         assert_eq!(code(status), OperationStatusCode::Ok);
 
         for key_type in [2, 7, u32::MAX] {
-            let (code, message) = consume(unsafe {
-                generate_key(config.as_ptr(), kms.as_ptr(), key_type, ptr::null())
-            });
+            let (code, message) =
+                consume(unsafe { generate_key(kms.as_ptr(), key_type, ptr::null()) });
             assert_eq!(code, OperationStatusCode::ValidationError, "{message}");
             assert_eq!(
-                self::code(unsafe {
-                    add_key(
-                        config.as_ptr(),
-                        kms.as_ptr(),
-                        key_type,
-                        c"11".as_ptr(),
-                        ptr::null(),
-                    )
-                }),
+                self::code(unsafe { add_key(kms.as_ptr(), key_type, c"11".as_ptr(), ptr::null()) }),
                 OperationStatusCode::ValidationError
             );
         }
-
-        // Any non-zero flag is on: the missing key is inserted, not reported.
-        let source = temp_dir.path().join("source.yaml");
-        let destination = temp_dir.path().join("destination.yaml");
-        std::fs::write(&source, "{ a: 2, b: 2 }").unwrap();
-        std::fs::write(&destination, "{ a: 1 }").unwrap();
-        let result = unsafe {
-            merge_user_config(
-                cstring(&source).as_ptr(),
-                cstring(&destination).as_ptr(),
-                ptr::null(),
-                MergeConfigFlags {
-                    source_insert_missing: 0xAB,
-                    extra_insert_missing: 0,
-                },
-            )
-        };
-        assert!(result.value.is_null(), "Expected no conflict report");
-        assert_eq!(code(result), OperationStatusCode::Ok);
-        let merged: serde_yaml::Value =
-            serde_yaml::from_str(&std::fs::read_to_string(&destination).unwrap()).unwrap();
-        assert_eq!(
-            merged,
-            serde_yaml::from_str::<serde_yaml::Value>("{ a: 2, b: 2 }").unwrap()
-        );
     }
 
     #[test]
@@ -596,14 +544,11 @@ mod no_node {
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
-        let result = unsafe {
-            generate_key(
-                output.as_ptr(),
-                kms.as_ptr(),
-                KeyType::Zk as u32,
-                ptr::null(),
-            )
-        };
+        let result = unsafe { show_config(output.as_ptr()) };
+        assert!(result.is_ok());
+        assert!(unsafe { free_cstring(result.value) }.is_ok());
+
+        let result = unsafe { generate_key(kms.as_ptr(), KeyType::Zk as u32, ptr::null()) };
         assert!(result.is_ok());
         assert!(unsafe { free_cstring(result.value) }.is_ok());
 
@@ -645,26 +590,16 @@ mod no_node {
                     OperationStatusCode::Ok
                 );
                 assert_ne!(code(get_peer_id(p)), OperationStatusCode::Ok);
-                assert_ne!(code(update_user_config(p, p)), OperationStatusCode::Ok);
-                assert_ne!(code(migrate_user_config(p, p)), OperationStatusCode::Ok);
                 assert_ne!(
-                    code(migrate_user_config_0_1_2(p, p, p)),
+                    code(participate(p, p, ptr::null(), ptr::null())),
                     OperationStatusCode::Ok
                 );
                 assert_ne!(
-                    code(merge_user_config(p, p, ptr::null(), NO_INSERT)),
+                    code(generate_key(p, KeyType::Ed25519 as u32, ptr::null())),
                     OperationStatusCode::Ok
                 );
                 assert_ne!(
-                    code(participate(p, p, p, ptr::null())),
-                    OperationStatusCode::Ok
-                );
-                assert_ne!(
-                    code(generate_key(p, p, KeyType::Ed25519 as u32, ptr::null())),
-                    OperationStatusCode::Ok
-                );
-                assert_ne!(
-                    code(remove_key(p, p, c"title".as_ptr())),
+                    code(remove_key(p, c"title".as_ptr())),
                     OperationStatusCode::Ok
                 );
             }
@@ -672,14 +607,22 @@ mod no_node {
                 code(participate(
                     missing.as_ptr(),
                     missing.as_ptr(),
+                    c"not-an-ip".as_ptr(),
+                    &3000,
+                )),
+                OperationStatusCode::ValidationError
+            );
+            assert_eq!(
+                code(participate(
                     missing.as_ptr(),
-                    c"not-an-ip".as_ptr()
+                    missing.as_ptr(),
+                    ptr::null(),
+                    &0
                 )),
                 OperationStatusCode::ValidationError
             );
             assert_eq!(
                 code(add_key(
-                    missing.as_ptr(),
                     missing.as_ptr(),
                     KeyType::Zk as u32,
                     c"zz".as_ptr(),
@@ -689,7 +632,6 @@ mod no_node {
             );
             assert_eq!(
                 code(add_key(
-                    missing.as_ptr(),
                     missing.as_ptr(),
                     KeyType::Ed25519 as u32,
                     c"abcd".as_ptr(),
@@ -837,15 +779,18 @@ mod with_node {
                 string_result("get_chain_id", get_chain_id(node)),
                 OperationStatusCode::Ok
             );
+            assert_eq!(
+                string_result("get_fork_digest", get_fork_digest(node)),
+                OperationStatusCode::Ok
+            );
 
             let result = get_time_info(node);
             assert!(result.is_ok());
-            assert!((*result.value).slot_duration_ms > 0);
             assert!(free_time_info(result.value).is_ok());
 
             assert_eq!(
                 string_result("get_open_metrics", get_open_metrics(node)),
-                OperationStatusCode::NotFound
+                OperationStatusCode::Ok
             );
 
             let result = get_cryptarchia_info(node);
@@ -1093,6 +1038,14 @@ mod with_node {
                     blend_join_as_core_node(node, locator.as_ptr(), zero.as_ptr()),
                 );
             }
+            log(
+                "blend_join_as_core_node(auto note)",
+                blend_join_as_core_node(
+                    node,
+                    c"/ip4/127.0.0.1/udp/3400/quic-v1".as_ptr(),
+                    ptr::null(),
+                ),
+            );
             assert_ne!(
                 log(
                     "blend_join_as_core_node(invalid note)",

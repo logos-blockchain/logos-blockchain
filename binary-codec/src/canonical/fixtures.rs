@@ -7,10 +7,10 @@ use super::{BinaryDecode, BinaryEncode};
 /// Carries the mandatory [`CodecFixtures`] for a codec. The non-empty return
 /// type means a codec cannot exist without at least one fixture.
 ///
-/// Sealed via [`super::sealed::Sealed`], so the only ways to satisfy it are
-/// `#[derive(BinaryCodec)]` and `codec_fixtures!`, both of which demand a
-/// fixture. It is a supertrait of both codec traits, so `impl BinaryEncode for
-/// Foo` without a fixture is a compilation error.
+/// Sealed via [`super::sealed::Sealed`], so the only way to satisfy it is
+/// `codec_fixtures!`, which demands a fixture. It is a supertrait of both codec
+/// traits, so `impl BinaryEncode for Foo` without a fixture is a compilation
+/// error.
 pub trait CodecExamples: super::sealed::Sealed + Sized {
     #[must_use]
     fn fixtures() -> CodecFixtures<Self>;

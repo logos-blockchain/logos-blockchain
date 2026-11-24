@@ -1,17 +1,18 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display},
-    num::NonZero,
+    num::{NonZero, NonZeroU32},
     sync::Arc,
 };
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::{Block, BlockTransactions, SignedHeader, UncleHeaders},
+    block::{Block, BlockTransactions, SignedHeader, TxInBlock, UncleHeaders},
+    era::{AcceptedForkDigests, ForkDigest},
     mantle::{
-        Note, Op, OpProof, SignedOps, TxHash, Utxo,
+        Note, Op, OpProof, SignedOps, Utxo,
         channel::Channels,
-        gas::{MainnetGasProfile, TxGasCalculator as _},
+        gas::TxGasCalculator as _,
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::{
             leader_claim::{VoucherCm, VoucherSecret},
@@ -27,13 +28,16 @@ use lb_core::{
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
     sdp::ServiceParameters,
 };
-use lb_cryptarchia_engine::{EpochConfig, Slot, UncleSlots};
+use lb_cryptarchia_engine::{EpochConfig, EraSchedule, Slot, UncleSlots};
 use lb_cryptarchia_sync::HeaderId;
 use lb_groth16::{AdditiveGroup as _, Fr};
-use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_ledger::{
-    LedgerState,
-    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    ConsensusExcludedKeys, LedgerState,
+    config::{
+        BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig,
+        config_for_slot,
+    },
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_storage_service::{
@@ -42,8 +46,9 @@ use lb_storage_service::{
     backend::StorageBackend as _,
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
+use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraTiming};
 use lb_time_service::backends::SystemTimeBackend;
-use lb_utils::{bounded::BoundedVec, math::NonNegativeRatio};
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::{RngCore as _, thread_rng};
 use tempfile::TempDir;
@@ -53,8 +58,8 @@ use tokio::{
 };
 
 use crate::{
-    BlockOrigin, BootstrapConfig, Cryptarchia, CryptarchiaConsensus, CryptarchiaConsensusState,
-    Error, OfflineGracePeriodConfig,
+    BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
+    CryptarchiaConsensusState, Error, OfflineGracePeriodConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -68,8 +73,8 @@ fn cryptarchia_switch_to_online() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
-        config,
+        LedgerState::from_utxos([utxo], &config, 0, &ConsensusExcludedKeys::empty()),
+        single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
 
@@ -77,8 +82,8 @@ fn cryptarchia_switch_to_online() {
     let mut block_ids = vec![genesis_id];
     let mut slot = Slot::new(1);
     while block_ids.len() < 4 {
-        // TODO: Use a mock proof system instead of expensive real proof generation,
-        // by refactoring `Cryptarchia`.
+        // TODO: Use a mock proof system instead of expensive real proof
+        // generation, by refactoring `Cryptarchia`.
         let (block, _) = try_build_block(
             &cryptarchia,
             *block_ids.last().unwrap(),
@@ -94,7 +99,8 @@ fn cryptarchia_switch_to_online() {
         let (pruned_blocks, reorged_blocks, _) = cryptarchia
             .try_apply_block(block, block_header_slot)
             .unwrap();
-        // No block should be pruned since LIB is not updated during Bootstrapping
+        // No block should be pruned since LIB is not updated during
+        // Bootstrapping
         assert!(pruned_blocks.is_empty());
         assert!(reorged_blocks.is_empty());
 
@@ -146,8 +152,8 @@ async fn get_block_ids_from_memory_and_storage() {
     let (zk_key, utxo) = utxo();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
-        config,
+        LedgerState::from_utxos([utxo], &config, 0, &ConsensusExcludedKeys::empty()),
+        single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
 
@@ -164,11 +170,10 @@ async fn get_block_ids_from_memory_and_storage() {
             UncleHeaders::empty(),
         )
         .unwrap();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -218,11 +223,10 @@ async fn get_block_ids_from_memory_and_storage() {
             UncleHeaders::empty(),
         )
         .unwrap();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -284,7 +288,7 @@ async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
     .await;
 
     assert!(recovery_blocks.fell_back_to_lib);
-    assert!(recovery_blocks.blocks.is_empty());
+    assert_eq!(recovery_blocks.blocks, []);
 }
 
 /// The chain must be recovered successfully from storage by skipping the uncle
@@ -319,7 +323,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
         utxo,
         &zk_key,
         u1.header().slot().strict_add(1.into()),
-        UncleHeaders::new(BoundedVec::from(signed_header(&u1))),
+        UncleHeaders::try_new(vec![signed_header(&u1)], 4).unwrap(),
     )
     .unwrap();
     let (b1_id, b2_id, b2_slot) = (b1.header().id(), b2.header().id(), b2.header().slot());
@@ -327,21 +331,17 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     // Before the restart: `B1` and `B2` are verified and stored.
     let mut stored = genesis_cryptarchia(utxo);
     for block in [b1.clone(), b2] {
-        process_block(
-            &mut stored,
-            block,
-            b2_slot,
-            BlockOrigin::Network,
-            &relays,
-            &new_block_tx,
-            &lib_tx,
-        )
-        .await
-        .expect("the block should be valid before the restart");
+        verify_and_process_block(&mut stored, block, b2_slot, &relays, &new_block_tx, &lib_tx)
+            .await
+            .expect("the block should be valid before the restart");
     }
 
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2_slot,
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
@@ -363,17 +363,130 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        stored.ledger.config().clone(),
+        Arc::clone(stored.ledger.era_schedule()),
         &relays,
         &new_block_tx,
         &lib_tx,
-        b2_slot,
     )
     .await;
     let initialized = initialized.expect("the chain should be recovered");
     assert!(!initialized.fell_back_to_lib);
     assert_eq!(initialized.cryptarchia.lib(), b1_id);
     assert_eq!(initialized.cryptarchia.tip(), b2_id);
+}
+
+/// A block from the network must still be rejected if its slot is ahead of the
+/// current slot, while the same block replayed from storage is accepted.
+#[test]
+fn future_block_is_rejected_only_from_network() {
+    let (cryptarchia, block) = test_chain_with_next_block();
+    let block_slot = block.header().slot();
+    let current_slot = block_slot.checked_sub(1.into()).unwrap();
+
+    let result = cryptarchia.verify_block(block.clone(), current_slot);
+    assert!(matches!(
+        result,
+        Err(Error::FutureBlock { block_slot: s, current_slot: c })
+            if s == block_slot && c == current_slot
+    ));
+
+    let mut cryptarchia = cryptarchia;
+    cryptarchia
+        .try_apply_block_with_state_retention(&BlockWithVerifiedHeader::new_unchecked(
+            block.clone(),
+        ))
+        .expect("a stored block should be replayed regardless of the current slot");
+    assert_eq!(cryptarchia.tip(), block.header().id());
+}
+
+/// A copy of a block whose signature does not verify over its header is
+/// rejected, as is the block ID it carries, which commits to no signature.
+#[test]
+fn tampered_signature_is_rejected() {
+    let (cryptarchia, block) = test_chain_with_next_block();
+    let mut signature = block.signature().to_bytes();
+    signature[0] ^= 1;
+
+    let result = cryptarchia.verify_header(
+        block.header().clone(),
+        block.uncle_headers().clone(),
+        Ed25519Signature::from_bytes(&signature),
+        block.header().slot(),
+    );
+    assert!(matches!(result, Err(Error::InvalidSignature)));
+}
+
+/// A block whose parent this node does not have is reported as missing its
+/// parent, so that it can be handled as an orphan.
+#[test]
+fn unknown_parent_is_reported_missing() {
+    let (fork_chain, b1, _, _, zk_key, utxo) = chain_with_fork();
+    let (b2, _) = try_build_block(
+        &fork_chain,
+        b1.header().id(),
+        utxo,
+        &zk_key,
+        b1.header().slot().strict_add(1.into()),
+        UncleHeaders::empty(),
+    )
+    .unwrap();
+
+    let result = genesis_cryptarchia(utxo).verify_block(b2.clone(), b2.header().slot());
+    assert!(matches!(
+        result,
+        Err(Error::ParentMissing { parent, .. }) if parent == b1.header().id()
+    ));
+}
+
+/// The header of a block that is already applied is reported as such, without
+/// being verified again.
+#[test]
+fn header_of_applied_block_is_reported_already_applied() {
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let slot = block.header().slot();
+    cryptarchia
+        .try_apply_block(block.clone(), slot)
+        .expect("the block should be applied");
+
+    let result = cryptarchia.verify_header(
+        block.header().clone(),
+        block.uncle_headers().clone(),
+        *block.signature(),
+        slot,
+    );
+    assert!(matches!(
+        result,
+        Err(Error::AlreadyApplied(id)) if id == block.header().id()
+    ));
+}
+
+/// A copy of a block carrying other transactions than its header commits to
+/// is rejected, even though its header is valid.
+#[test]
+fn transactions_not_committed_to_are_rejected() {
+    let (cryptarchia, block) = test_chain_with_next_block();
+    let (zk_key, utxo) = utxo();
+    let header = cryptarchia
+        .verify_header(
+            block.header().clone(),
+            block.uncle_headers().clone(),
+            *block.signature(),
+            block.header().slot(),
+        )
+        .expect("the header is valid");
+
+    let result = BlockWithVerifiedHeader::new(
+        header,
+        BlockTransactions::<SignedOps<Preverified, StandardMode>>::try_new(
+            vec![burn_tx(utxo, &zk_key)],
+            u16::MAX,
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        result,
+        Err(lb_core::block::Error::BodyRootMismatch)
+    ));
 }
 
 /// Header traversal must continue from storage past a recovered LIB, instead of
@@ -413,11 +526,10 @@ async fn get_block_ids_past_recovered_lib() {
         )
         .unwrap();
         slot = block.header().slot().strict_add(1.into());
-        process_block(
+        verify_and_process_block(
             &mut stored,
             block.clone(),
             block.header().slot(),
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -431,6 +543,10 @@ async fn get_block_ids_past_recovered_lib() {
 
     let recovery_state = CryptarchiaConsensusState {
         tip: b2_id,
+        tip_era: TipEra {
+            slot: b2.header().slot(),
+            fork_digest: ForkDigest::from([0; 32]),
+        },
         lib: b1_id,
         lib_ledger_state: stored.ledger.state(&b1_id).unwrap().clone(),
         lib_block_length: 1,
@@ -452,11 +568,10 @@ async fn get_block_ids_past_recovered_lib() {
     >::initialize_cryptarchia(
         &recovery_state,
         &bootstrap_config,
-        stored.ledger.config().clone(),
+        Arc::clone(stored.ledger.era_schedule()),
         &relays,
         &new_block_tx,
         &lib_tx,
-        slot,
     )
     .await
     .expect("the chain should be recovered");
@@ -498,11 +613,10 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let initial_info = cryptarchia.info();
     let block_slot = block.header().slot();
 
-    let result = process_block(
+    let result = verify_and_process_block(
         &mut cryptarchia,
         block,
         block_slot,
-        BlockOrigin::Network,
         &relays,
         &new_block_tx,
         &lib_tx,
@@ -517,6 +631,11 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert_eq!(cryptarchia.info(), initial_info);
     assert!(new_block_rx.try_recv().is_err());
     assert!(lib_rx.try_recv().is_err());
+}
+
+/// `tx`, carried by a block at `slot`.
+const fn tx_in_block<Tx>(tx: Tx, slot: Slot) -> TxInBlock<Tx> {
+    TxInBlock { tx, slot }
 }
 
 /// A fork switch reports the transactions of every block that entered the
@@ -550,8 +669,10 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         LedgerState::from_utxos(
             [leader_utxo, funding_utxo_a, funding_utxo_b, funding_utxo_c],
             &config,
+            0,
+            &ConsensusExcludedKeys::empty(),
         ),
-        config,
+        single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
     let tx1 = burn_tx(funding_utxo_a, &zk_key);
@@ -568,7 +689,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
     fork_view
@@ -581,7 +702,7 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         f1.header().slot().strict_add(1.into()),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx2.clone()]),
+        BlockTransactions::try_new(vec![tx2.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
@@ -593,17 +714,16 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([tx1.clone(), tx3.clone()]),
+        BlockTransactions::try_new(vec![tx1.clone(), tx3.clone()], u16::MAX).unwrap(),
     )
     .unwrap();
 
     let mut apply = async |block: Block<SignedOps<Preverified, StandardMode>>| {
         let slot = block.header().slot();
-        process_block(
+        verify_and_process_block(
             &mut cryptarchia,
             block,
             slot,
-            BlockOrigin::Network,
             &relays,
             &new_block_tx,
             &lib_tx,
@@ -612,19 +732,27 @@ async fn fork_switch_reports_newly_canonical_and_reorged_transactions() {
         .unwrap()
     };
 
+    let (b1_slot, f1_slot, f2_slot) = (b1.header().slot(), f1.header().slot(), f2.header().slot());
+
     let outcome = apply(b1).await;
-    assert_eq!(outcome.newly_canonical_txs, vec![tx1.hash(), tx3.hash()]);
+    assert_eq!(
+        outcome.newly_canonical_txs,
+        HashMap::from([(tx1.hash(), b1_slot), (tx3.hash(), b1_slot)])
+    );
     assert_eq!(outcome.reorged_txs, vec![]);
 
     // f1 only ties b1, so the local chain is kept and nothing enters it.
     let outcome = apply(f1).await;
-    assert_eq!(outcome.newly_canonical_txs, Vec::<TxHash>::new());
+    assert_eq!(outcome.newly_canonical_txs, HashMap::new());
     assert_eq!(outcome.reorged_txs, vec![]);
 
     // tx1 is carried by both branches, so only tx3 leaves the canonical chain.
     let outcome = apply(f2.clone()).await;
-    assert_eq!(outcome.newly_canonical_txs, vec![tx1.hash(), tx2.hash()]);
-    assert_eq!(outcome.reorged_txs, vec![tx3]);
+    assert_eq!(
+        outcome.newly_canonical_txs,
+        HashMap::from([(tx1.hash(), f1_slot), (tx2.hash(), f2_slot)])
+    );
+    assert_eq!(outcome.reorged_txs, vec![tx_in_block(tx3, b1_slot)]);
     assert_eq!(cryptarchia.tip(), f2.header().id());
 }
 
@@ -635,8 +763,8 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     let genesis_id: HeaderId = [0; 32].into();
     let mut cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
-        config,
+        LedgerState::from_utxos([utxo], &config, 0, &ConsensusExcludedKeys::empty()),
+        single_era(config),
         lb_cryptarchia_engine::State::Bootstrapping,
     );
 
@@ -649,7 +777,8 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
         &zk_key,
         Slot::new(1),
         UncleHeaders::empty(),
-        BlockTransactions::from([transfer_tx_with_fake_sig(utxo, &fake_key)]),
+        BlockTransactions::try_new(vec![transfer_tx_with_fake_sig(utxo, &fake_key)], u16::MAX)
+            .unwrap(),
     )
     .expect("should find a winning slot");
 
@@ -666,13 +795,31 @@ fn ledger_is_not_committed_if_block_contains_invalid_deferred_proof() {
     assert_eq!(cryptarchia.tip(), genesis_id, "tip should not advance");
 }
 
+/// Verifies `block` at `current_slot`, as a block from the network is, and
+/// processes it.
+async fn verify_and_process_block(
+    cryptarchia: &mut Cryptarchia,
+    block: Block<SignedOps<Preverified, StandardMode>>,
+    current_slot: Slot,
+    relays: &CryptarchiaConsensusRelays<SignedOps<Preverified, StandardMode>>,
+    new_block_tx: &broadcast::Sender<crate::ProcessedBlockEvent>,
+    lib_tx: &broadcast::Sender<crate::LibUpdate>,
+) -> Result<crate::service::ProcessBlockOutcome<SignedOps<Preverified, StandardMode>>, Error> {
+    let block = cryptarchia.verify_block(block, current_slot)?;
+    process_block(cryptarchia, block, relays, new_block_tx, lib_tx).await
+}
+
 /// Creates a transfer tx with a fake sig.
 fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
     let mut output_note = Note::new(1, fake_key.to_public_key());
-    let gas_context = OpsGasContext::from_channels(&Channels::new(), GasPrices::default());
+    let gas_context = OpsGasContext::from_channels(
+        &Channels::new(),
+        GasPrices::default(),
+        ledger_config(NonZero::new(1).unwrap()).gas_profile,
+    );
     let fees = transfer_tx(utxo, output_note, fake_key)
         .op_refs()
-        .total_gas_cost::<MainnetGasProfile>(&gas_context)
+        .total_gas_cost(&gas_context)
         .unwrap();
     output_note.value = utxo.note.value - fees.into_inner();
 
@@ -681,13 +828,19 @@ fn transfer_tx_with_fake_sig(utxo: Utxo, fake_key: &ZkKey) -> SignedOps<Preverif
         .expect("a fake signature is only caught by the stateful checks")
 }
 
+/// The fork digest the transactions of these tests carry.
+const FORK_DIGEST: ForkDigest = ForkDigest::new([0x11; 32]);
+
 /// Creates a tx spending `utxo` with no outputs, so its whole value pays the
 /// fee.
 fn burn_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
-    let ops = Ops::from([Op::Transfer(TransferOp::new(
-        BoundedInputs::from(utxo.id()).into(),
-        Outputs::new([]),
-    ))]);
+    let ops = Ops::new(
+        FORK_DIGEST,
+        [Op::Transfer(TransferOp::new(
+            BoundedInputs::from(utxo.id()).into(),
+            Outputs::new([]),
+        ))],
+    );
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
     )]);
@@ -702,7 +855,7 @@ fn transfer_tx(utxo: Utxo, output_note: Note, key: &ZkKey) -> SignedOps<Unverifi
         BoundedInputs::from(utxo.id()).into(),
         Outputs::new([output_note]),
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(FORK_DIGEST, [Op::Transfer(transfer_op)]);
     let op_proofs = OpProofs::from([OpProof::ZkSig(
         ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap(),
     )]);
@@ -716,8 +869,8 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
     let (zk_key, utxo) = utxo();
     let cryptarchia = Cryptarchia::from_genesis(
         genesis_id,
-        LedgerState::from_utxos([utxo], &config),
-        config,
+        LedgerState::from_utxos([utxo], &config, 0, &ConsensusExcludedKeys::empty()),
+        single_era(config),
         lb_cryptarchia_engine::State::Online,
     );
     let (block, _) = try_build_block(
@@ -737,29 +890,113 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedOps<Preverified, St
 /// config in tests.
 fn disabled_reward_config() -> RewardPoWConfig {
     RewardPoWConfig {
-        reward_pool_genesis: 1_000_000_000,
-        epoch_reward_genesis: 1_000_000,
         minimum_difficulty: ModulusShift::new::<26>(),
         ema_smoothing_factor: 9,
         ema_smoothing_precision: core::num::NonZeroU64::new(10).unwrap(),
-        target_claims_per_block: 100,
+        target_claims_per_block: core::num::NonZeroU64::new(100).unwrap(),
         rate_num: 0,
         rate_den: core::num::NonZeroU64::MIN,
-        target_claim_per_block: core::num::NonZeroU64::MIN,
         pow_share: 0,
         share_den: core::num::NonZeroU64::MIN,
         slot_window: core::num::NonZeroU64::new(100).unwrap(),
     }
 }
 
+/// `genesis` from genesis, then each config of `after_genesis` from the epoch
+/// it is paired with.
+#[must_use]
+pub fn schedule(
+    genesis: lb_ledger::Config,
+    after_genesis: impl IntoIterator<Item = (u32, lb_ledger::Config)>,
+) -> Arc<EraScheduledConfig> {
+    let timing = |config: &lb_ledger::Config| EraTiming {
+        slot_duration: std::time::Duration::from_secs(1),
+        epoch_length: EpochLength::epoch_length(config),
+    };
+    let after_genesis = after_genesis.into_iter().collect::<Vec<_>>();
+    let timings_after_genesis =
+        EraEntriesAfterGenesis::try_from_iter(after_genesis.iter().map(|(first_epoch, config)| {
+            (
+                NonZero::new(*first_epoch).expect("an era after genesis starts after epoch 0"),
+                timing(config),
+            )
+        }))
+        .expect("each epoch starts one era at most");
+    let configs = std::iter::once(genesis)
+        .chain(after_genesis.into_iter().map(|(_, config)| config))
+        .collect::<Vec<_>>();
+    Arc::new(
+        EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            timing(&configs[0]),
+            timings_after_genesis,
+        )
+        .expect("the eras resolve")
+        .map(|era| configs[usize::from(era.era.into_inner())].clone()),
+    )
+}
+
+/// `config` as the only era, from genesis.
+#[must_use]
+pub fn single_era(config: lb_ledger::Config) -> Arc<EraScheduledConfig> {
+    schedule(config, [])
+}
+
+/// `config` as the consensus config of the only era, from genesis.
+#[must_use]
+pub fn single_consensus_era(
+    config: lb_cryptarchia_engine::Config,
+) -> Arc<EraSchedule<lb_cryptarchia_engine::Config>> {
+    let timing = EraTiming {
+        slot_duration: std::time::Duration::from_secs(1),
+        epoch_length: NonZero::<u64>::MIN,
+    };
+    Arc::new(
+        EraSchedule::new(
+            time::OffsetDateTime::UNIX_EPOCH,
+            timing,
+            EraEntriesAfterGenesis::empty(),
+        )
+        .expect("a single era resolves")
+        .map(move |_| config.clone()),
+    )
+}
+
 #[must_use]
 pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
+    ledger_config_with_uncles(security_param, 12, 4)
+}
+
+/// [`ledger_config`] with `W`, the uncle reference window in blocks.
+#[must_use]
+pub fn ledger_config_with_uncle_reference_window(
+    security_param: NonZero<u32>,
+    uncle_reference_window_in_block: u32,
+) -> lb_ledger::Config {
+    ledger_config_with_uncles(security_param, uncle_reference_window_in_block, 4)
+}
+
+/// [`ledger_config`], with blocks carrying at most `max_uncles` uncles.
+#[must_use]
+pub fn ledger_config_with_max_uncles(
+    security_param: NonZero<u32>,
+    max_uncles: u8,
+) -> lb_ledger::Config {
+    ledger_config_with_uncles(security_param, 12, max_uncles)
+}
+
+/// [`ledger_config`] with `W`, the uncle reference window in blocks, and
+/// blocks carrying at most `max_uncles` uncles.
+fn ledger_config_with_uncles(
+    security_param: NonZero<u32>,
+    uncle_reference_window_in_block: u32,
+    max_uncles: u8,
+) -> lb_ledger::Config {
     let mut service_params = HashMap::new();
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            epoch: 0.into(),
         },
     );
     let epoch_config = EpochConfig {
@@ -769,9 +1006,10 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     };
     let consensus_config = lb_cryptarchia_engine::Config::new(
         security_param,
-        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
         1.0.try_into().unwrap(),
-        NonZero::new(12).unwrap(),
+        uncle_reference_window_in_block,
+        max_uncles,
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -783,19 +1021,49 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
-                    message_frequency_per_round: 1.0.try_into().unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
                     data_replication_factor: 0,
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: lb_core::sdp::MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: lb_core::sdp::MinStake { threshold: 1 },
         },
-        faucet_pk: None,
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        execution_market: lb_ledger::config::ExecutionMarketConfig {
+            max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
+            fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+        },
+        storage_market: lb_ledger::config::StorageMarketConfig {
+            max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+        },
+        block_rewards: lb_ledger::config::BlockRewardsConfig::new(
+            3_000_000_000,
+            120_000_000.try_into().unwrap(),
+            10_512,
+            NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+            ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: lb_core::mantle::gas::GasProfile {
+            transfer: 590.into(),
+            channel_config: 56.into(),
+            channel_inscribe: 56.into(),
+            channel_deposit: 590.into(),
+            channel_withdraw: 56.into(),
+            channel_transfer: 56.into(),
+            sdp_declare: 646.into(),
+            sdp_withdraw: 590.into(),
+            sdp_active: 590.into(),
+            leader_claim: 580.into(),
+            claim_pow_reward: 1.into(),
+        },
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<19>(),
@@ -806,6 +1074,7 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
             },
             reward: disabled_reward_config(),
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }
 
@@ -877,6 +1146,7 @@ pub fn try_build_block_with_transactions(
             uncle_headers,
             proof,
             transactions,
+            config_for_slot(cryptarchia.ledger.era_schedule(), slot.into()).max_transactions_size,
             &signing_key,
         )
         .unwrap();
@@ -897,9 +1167,24 @@ pub fn chain_with_fork() -> (
     ZkKey,
     Utxo,
 ) {
+    chain_with_fork_on(single_era(ledger_config(3.try_into().unwrap())))
+}
+
+/// The chain of [`chain_with_fork`], over the eras of `era_schedule`.
+#[expect(clippy::type_complexity, reason = "a test helper")]
+pub fn chain_with_fork_on(
+    era_schedule: Arc<EraScheduledConfig>,
+) -> (
+    Cryptarchia,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Block<SignedOps<Preverified, StandardMode>>,
+    Ed25519Key,
+    ZkKey,
+    Utxo,
+) {
     let genesis_id = GENESIS_ID.into();
     let (zk_key, utxo) = utxo();
-    let mut cryptarchia = genesis_cryptarchia(utxo);
+    let mut cryptarchia = genesis_cryptarchia_on(utxo, era_schedule);
 
     // Both extend the genesis, and the same key wins the same slot, so the
     // two blocks differ only in their (randomly generated) block leaders.
@@ -933,11 +1218,17 @@ pub const GENESIS_ID: [u8; 32] = [0; 32];
 
 /// A chain with only the genesis block, holding `utxo`.
 pub fn genesis_cryptarchia(utxo: Utxo) -> Cryptarchia {
-    let config = ledger_config(3.try_into().unwrap());
+    genesis_cryptarchia_on(utxo, single_era(ledger_config(3.try_into().unwrap())))
+}
+
+/// A chain with only the genesis block, holding `utxo`, over the eras of
+/// `era_schedule`.
+pub fn genesis_cryptarchia_on(utxo: Utxo, era_schedule: Arc<EraScheduledConfig>) -> Cryptarchia {
+    let genesis_config = era_schedule.genesis().parameters.clone();
     Cryptarchia::from_genesis(
         GENESIS_ID.into(),
-        LedgerState::from_utxos([utxo], &config),
-        config,
+        LedgerState::from_utxos([utxo], &genesis_config, 0, &ConsensusExcludedKeys::empty()),
+        era_schedule,
         lb_cryptarchia_engine::State::Bootstrapping,
     )
 }
@@ -960,7 +1251,7 @@ pub fn utxo() -> (ZkKey, Utxo) {
 
 pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
-    let mut backend = RocksBackend::new(RocksBackendSettings {
+    let backend = RocksBackend::new(RocksBackendSettings {
         db_path: db_dir.path().join("db"),
         read_only: false,
         column_family: None,
@@ -969,7 +1260,7 @@ pub fn spawn_storage_service(mut rx: mpsc::Receiver<StorageMsg>) -> (JoinHandle<
 
     let handle = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &mut backend).await;
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &backend);
         }
     });
 

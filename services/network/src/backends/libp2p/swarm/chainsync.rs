@@ -2,11 +2,11 @@ use std::{collections::HashSet, fmt::Debug};
 
 use lb_libp2p::{
     PeerId,
-    cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock},
+    cryptarchia_sync::{BoxedStream, ChainSyncError, HeaderId, SerialisedBlock, TipResponse},
 };
 use lb_log_targets::network_service;
-use rand::RngCore;
-use tokio::sync::oneshot;
+use rand_010::SeedableRng;
+use tokio::sync::{broadcast::error::SendError, oneshot};
 
 use crate::{backends::libp2p::swarm::SwarmHandler, message::ChainSyncEvent};
 
@@ -20,7 +20,7 @@ pub enum ChainSyncCommand {
     },
     RequestTip {
         peer: PeerId,
-        reply_sender: oneshot::Sender<Result<GetTipResponse, ChainSyncError>>,
+        reply_sender: oneshot::Sender<Result<TipResponse, ChainSyncError>>,
     },
     DownloadBlocks {
         peer: PeerId,
@@ -58,7 +58,7 @@ impl Debug for ChainSyncCommand {
     }
 }
 
-impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
+impl<Rng: rand_010::Rng + SeedableRng + Send + 'static> SwarmHandler<Rng> {
     #[expect(
         clippy::cognitive_complexity,
         reason = "The command handler keeps all chainsync command dispatch in one place."
@@ -81,7 +81,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 additional_blocks,
                 reply_sender,
             } => {
-                if let Err(e) = self.swarm.start_blocks_download(
+                if let Err(e) = self.swarm.request_blocks(
                     peer,
                     target_block,
                     local_tip,
@@ -100,8 +100,12 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 
     pub(super) fn handle_chainsync_event(&self, event: lb_cryptarchia_sync::Event) {
         let event = ChainSyncEvent::from(event);
-        if let Err(e) = self.chainsync_events_tx.send(event) {
-            tracing::error!(target: LOG_TARGET, "failed to send chainsync event: {e:?}");
+        if let Err(SendError(event)) = self.chainsync_events_tx.send(event) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                ?event,
+                "no chainsync event subscriber yet; dropping the event"
+            );
         }
     }
 }
@@ -110,21 +114,21 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
 impl From<lb_cryptarchia_sync::Event> for ChainSyncEvent {
     fn from(event: lb_cryptarchia_sync::Event) -> Self {
         match event {
-            lb_cryptarchia_sync::Event::ProvideBlocksRequest {
+            lb_cryptarchia_sync::Event::BlocksRequest {
                 target_block,
-                local_tip,
+                requester_tip,
                 latest_immutable_block,
                 additional_blocks,
                 reply_sender,
-            } => Self::ProvideBlocksRequest {
+            } => Self::BlocksRequest {
                 target_block,
-                local_tip,
+                requester_tip,
                 latest_immutable_block,
                 additional_blocks,
                 reply_sender,
             },
-            lb_cryptarchia_sync::Event::ProvideTipsRequest { reply_sender } => {
-                Self::ProvideTipRequest { reply_sender }
+            lb_cryptarchia_sync::Event::TipRequest { reply_sender } => {
+                Self::TipRequest { reply_sender }
             }
         }
     }

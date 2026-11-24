@@ -10,17 +10,17 @@ use std::{
 };
 
 use lb_chain_service::Epoch;
+use lb_common_http_client::Slot;
 use lb_core::{
     mantle::Value,
     sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
+use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
 use lb_utils::math::NonNegativeRatio;
-use lb_zone_sdk::Slot;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_tip_slot,
@@ -95,8 +95,8 @@ async fn sdp_blend_activity() {
     // value, proving activity messages were submitted and accepted.
     let declarations_after = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
 
-    // Check if at least one declaration is still present because blocks may have
-    // been produced by only one nodes by coincidence
+    // Check if at least one declaration is still present because blocks may
+    // have been produced by only one nodes by coincidence
     assert!(
         !declarations_after.is_empty(),
         "At least one blend declaration should survive past the inactivity window. Activity proofs may not have been submitted/accepted"
@@ -130,32 +130,45 @@ const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
     config
         .deployment
-        .genesis_era_parameters_mut()
-        .time
-        .slot_duration = Duration::from_secs(1);
+        .update_genesis_era_parameters(|parameters| {
+            parameters.time.slot_duration_in_seconds = 1.try_into().unwrap();
 
-    // Set the epoch length not too long to speed up the test,
-    // but also not too short because we want blend nodes to collect blend tokens
-    // every epoch to keep their declarations alive.
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .epoch_config = EpochConfig {
-        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-        epoch_period_nonce_buffer: 1.try_into().unwrap(),
-        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-    };
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .security_param = NonZero::new(4).unwrap();
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .slot_activation_coeff = NonNegativeRatio::new(1, 2.try_into().unwrap());
+            // Set the epoch length not too long to speed up the test,
+            // but also not too short because we want blend nodes to collect
+            // blend tokens every epoch to keep their declarations
+            // alive.
+            parameters.cryptarchia.epoch_config = EpochConfig {
+                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+                epoch_period_nonce_buffer: 1.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+            };
+            parameters.cryptarchia.security_param = NonZero::new(4).unwrap();
+            parameters.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap())
+                    .try_into()
+                    .unwrap();
+            // The widest uncle reference window k allows, ⌊0.6k⌋.
+            parameters.cryptarchia.uncle_reference_window_in_block = 2;
+
+            // Set a small inactivity period so the inactivity window is short
+            // enough for the test to observe `active` being refreshed quickly.
+            let blend_params = &mut parameters.cryptarchia.sdp_config.service_params
+                [ServiceType::BlendNetwork as usize];
+            blend_params.inactivity_period = INACTIVITY_PERIOD.try_into().unwrap();
+
+            // Shorten Blend delay to speed up the test
+            parameters
+                .blend
+                .core
+                .scheduler
+                .delayer
+                .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+            // Set num_blend_layers to NODE_COUNT (instead of 1) to increase
+            // the probability that all nodes can collect a blend token from
+            // a single blend message.
+            parameters.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
+        })
+        .expect("The changed deployment must be valid.");
 
     slots_per_epoch.store(
         config
@@ -165,37 +178,6 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
             .slots_per_epoch(),
         Ordering::Relaxed,
     );
-
-    // Set a small inactivity period so the inactivity window is short enough
-    // for the test to observe `active` being refreshed quickly.
-    let blend_params = config
-        .deployment
-        .genesis_era_parameters_mut()
-        .cryptarchia
-        .sdp_config
-        .service_params
-        .get_mut(&ServiceType::BlendNetwork)
-        .expect("blend network params should exist");
-    blend_params.inactivity_period = INACTIVITY_PERIOD.try_into().unwrap();
-
-    // Shorten Blend delay to speed up the test
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .blend
-        .core
-        .scheduler
-        .delayer
-        .maximum_release_delay_in_rounds = 1.try_into().unwrap();
-    // Set num_blend_layers to NODE_COUNT (instead of 1) to increase
-    // the probability that all nodes can collect a blend token from
-    // a single blend message.
-    config
-        .deployment
-        .genesis_era_parameters_mut()
-        .blend
-        .common
-        .num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
 
     config
 }

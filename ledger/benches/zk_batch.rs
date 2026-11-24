@@ -19,16 +19,17 @@
 
 use std::{
     collections::HashMap,
-    num::NonZero,
+    num::{NonZero, NonZeroU32},
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
 use lb_core::{
+    era::{AcceptedForkDigests, ForkDigest},
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps, Utxo,
         batch::DeferredProofs,
-        gas::MainnetGasProfile,
         ledger::{BoundedInputs, Outputs, verification_mode::StandardMode},
         ops::transfer::TransferOp,
         traits::Hashable as _,
@@ -38,14 +39,16 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::EpochConfig;
 use lb_key_management_system_keys::keys::ZkKey;
-use lb_utils::math::{NonNegativeRatio, PositiveF64};
+use lb_time::era::{EpochLength, EraEntriesAfterGenesis, EraSchedule, EraTiming};
+use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 use lb_zksign::verify;
 use logos_blockchain_ledger::{
-    Config, LedgerState,
-    config::{BlendPoWConfig, ModulusShift, PoWConfig, RewardPoWConfig},
+    Config, ConsensusExcludedKeys, LedgerState,
+    config::{BlendPoWConfig, EraScheduledConfig, ModulusShift, PoWConfig, RewardPoWConfig},
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use num_bigint::BigUint;
+use time::OffsetDateTime;
 
 fn main() {
     divan::main();
@@ -166,7 +169,7 @@ mod multi_block_with_per_block_batching {
 /// The genesis state seeded with one UTXO per transaction. Each transaction
 /// spends one of them.
 struct TxPool {
-    config: Config,
+    eras: EraScheduledConfig,
     genesis: LedgerState,
     txs: Vec<SignedOps<Preverified, StandardMode>>,
 }
@@ -196,8 +199,8 @@ static TX_POOL: LazyLock<TxPool> = LazyLock::new(|| {
         .collect();
 
     TxPool {
-        genesis: LedgerState::from_utxos(utxos, &config),
-        config,
+        genesis: LedgerState::from_utxos(utxos, &config, 0, &ConsensusExcludedKeys::empty()),
+        eras: single_era(config),
         txs,
     }
 });
@@ -230,7 +233,7 @@ fn apply(
 ) -> (LedgerState, DeferredProofs) {
     let (state, _, deferred) = state
         .clone()
-        .try_apply_block_contents::<_, HeaderId, MainnetGasProfile>(&TX_POOL.config, txs)
+        .try_apply_block_contents::<_, HeaderId>(&TX_POOL.eras, txs)
         .expect("block should apply");
     (state, deferred)
 }
@@ -243,7 +246,7 @@ fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
         // Most of the tx's value goes as a tip, to withstand gas cost increases.
         Outputs::new([Note::new(1, key.to_public_key())]),
     );
-    let ops = Ops::from([Op::Transfer(transfer_op)]);
+    let ops = Ops::new(ForkDigest::new([0x11; 32]), [Op::Transfer(transfer_op)]);
     let signature = ZkKey::multi_sign(std::slice::from_ref(key), &ops.hash().to_fr()).unwrap();
     let op_proofs = OpProofs::from([OpProof::ZkSig(signature)]);
 
@@ -251,6 +254,20 @@ fn build_tx(utxo: Utxo, key: &ZkKey) -> SignedOps<Preverified, StandardMode> {
         .expect("transaction should build")
         .preverify()
         .expect("transaction should preverify")
+}
+
+/// `config` as the only era, from genesis.
+fn single_era(config: Config) -> EraScheduledConfig {
+    EraSchedule::new(
+        OffsetDateTime::UNIX_EPOCH,
+        EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: EpochLength::epoch_length(&config),
+        },
+        EraEntriesAfterGenesis::empty(),
+    )
+    .expect("a single era resolves")
+    .map(move |_| config.clone())
 }
 
 fn config() -> Config {
@@ -261,9 +278,10 @@ fn config() -> Config {
     };
     let consensus_config = lb_cryptarchia_engine::Config::new(
         NonZero::new(1).unwrap(),
-        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        ProperFraction::new(1, 10.try_into().unwrap()).unwrap(),
         1f64.try_into().expect("1 > 0"),
-        NonZero::new(12).unwrap(),
+        12,
+        4,
     );
     let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
@@ -275,25 +293,55 @@ fn config() -> Config {
                 ServiceType::BlendNetwork,
                 ServiceParameters {
                     inactivity_period: 2.try_into().unwrap(),
-                    epoch: 0.into(),
                 },
             )])),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
                     rounds_per_epoch: epoch_length.try_into().unwrap(),
-                    message_frequency_per_round: PositiveF64::try_from(1.0).unwrap(),
+                    message_frequency_per_round: PositiveRatio::new(1, NonZeroU32::MIN).unwrap(),
+                    cover_replication_factor: 0,
                     num_blend_layers: NonZero::new(3).unwrap(),
                     minimum_network_size: NonZero::new(1).unwrap(),
                     data_replication_factor: 0,
                     activity_threshold_sensitivity: 1,
                 },
             },
-            min_stake: MinStake {
-                threshold: 1,
-                timestamp: 0,
-            },
+            min_stake: MinStake { threshold: 1 },
         },
-        faucet_pk: None,
+        max_transactions: 1024,
+        max_transactions_size: 2 * 1024 * 1024,
+        max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
+            max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_193_460)
+                .unwrap(),
+            fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(9, 10.try_into().unwrap()).unwrap(),
+        },
+        storage_market: logos_blockchain_ledger::config::StorageMarketConfig {
+            max_adjustment_factor: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
+            ema_smoothing_factor: ProperFraction::new(1, 2.try_into().unwrap()).unwrap(),
+        },
+        block_rewards: logos_blockchain_ledger::config::BlockRewardsConfig::new(
+            3_000_000_000,
+            120_000_000.try_into().unwrap(),
+            10_512,
+            NonNegativeRatio::new(62_500, 657.try_into().unwrap()),
+            ProperFraction::new(6, 10.try_into().unwrap()).unwrap(),
+        )
+        .unwrap(),
+        gas_profile: lb_core::mantle::gas::GasProfile {
+            transfer: 590.into(),
+            channel_config: 56.into(),
+            channel_inscribe: 56.into(),
+            channel_deposit: 590.into(),
+            channel_withdraw: 56.into(),
+            channel_transfer: 56.into(),
+            sdp_declare: 646.into(),
+            sdp_withdraw: 590.into(),
+            sdp_active: 590.into(),
+            leader_claim: 580.into(),
+            claim_pow_reward: 1.into(),
+        },
         pow_config: PoWConfig {
             blend: BlendPoWConfig {
                 base_difficulty: ModulusShift::new::<234>(),
@@ -305,19 +353,17 @@ fn config() -> Config {
             // `rate_num = 0` pays no reward, which keeps the benchmark measuring
             // transaction processing only.
             reward: RewardPoWConfig {
-                reward_pool_genesis: 1_000_000_000,
-                epoch_reward_genesis: 1_000_000,
                 minimum_difficulty: ModulusShift::new::<26>(),
                 ema_smoothing_factor: 9,
                 ema_smoothing_precision: NonZero::new(10).unwrap(),
-                target_claims_per_block: 100,
+                target_claims_per_block: NonZero::<u64>::new(100).unwrap(),
                 rate_num: 0,
                 rate_den: NonZero::<u64>::MIN,
-                target_claim_per_block: NonZero::<u64>::MIN,
                 pow_share: 0,
                 share_den: NonZero::<u64>::MIN,
                 slot_window: NonZero::new(100).unwrap(),
             },
         },
+        accepted_fork_digests: AcceptedForkDigests::new(vec![ForkDigest::new([0x11; 32])]),
     }
 }

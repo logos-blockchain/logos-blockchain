@@ -2,12 +2,14 @@
 
 use std::{cmp::Ordering, collections::HashSet};
 
-use lb_core::mantle::{
-    Note, Op, Utxo,
-    gas::MainnetGasProfile,
-    ledger::{Inputs, Outputs},
-    ops::transfer::TransferOp,
-    transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
+use lb_core::{
+    era::ForkDigest,
+    mantle::{
+        Note, Op, Utxo,
+        ledger::{Inputs, Outputs},
+        ops::transfer::TransferOp,
+        transactions::{MantleTxBuilder, tx_list::ops::OpsContext},
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, MAX_ZK_SIGNING_KEYS, ZkPublicKey};
 use lb_mmr::MerkleMountainRange;
@@ -25,7 +27,7 @@ pub fn fund_builder_from_wallet_source(
     tx_builder: &MantleTxBuilder,
     context: &OpsContext,
 ) -> Result<MantleTxBuilder, WalletError> {
-    wallet_state_from_utxos(source.available_utxos().to_vec()).fund_tx::<MainnetGasProfile>(
+    wallet_state_from_utxos(source.available_utxos().to_vec()).fund_tx(
         tx_builder,
         source.public_key(),
         [source.public_key()],
@@ -112,17 +114,13 @@ pub fn estimate_workload_fee_requirements(
     let (tx_builder, context, _, _) = intent.clone().into_parts();
     let builder_with_inputs = extend_wallet_funding_inputs(&tx_builder, candidate_inputs)?;
     let fee_without_change = required_fee_with_priority(
-        builder_with_inputs
-            .minimum_gas_cost::<MainnetGasProfile>(&context)?
-            .into_inner(),
+        builder_with_inputs.minimum_gas_cost(&context)?.into_inner(),
         priority_fee_percent,
     )?;
     let builder_with_change =
         builder_with_inputs.add_ledger_output(Note::new(0, ZkPublicKey::zero()))?;
     let fee_with_change = required_fee_with_priority(
-        builder_with_change
-            .minimum_gas_cost::<MainnetGasProfile>(&context)?
-            .into_inner(),
+        builder_with_change.minimum_gas_cost(&context)?.into_inner(),
         priority_fee_percent,
     )?;
 
@@ -313,13 +311,13 @@ fn evaluate_standard_funding_inputs(
     let funded_builder = extend_wallet_funding_inputs(tx_builder, selected_inputs)?;
 
     match funded_builder
-        .funding_delta_with_priority_fee::<MainnetGasProfile>(context, priority_fee_percent)?
+        .funding_delta_with_priority_fee(context, priority_fee_percent)?
         .cmp(&0)
     {
         Ordering::Less => Ok(WalletFundingOutcome::NeedsMoreInputs),
         Ordering::Equal => Ok(WalletFundingOutcome::Funded(funded_builder)),
         Ordering::Greater => Ok(funded_builder
-            .return_change::<MainnetGasProfile>(context, change_pk, priority_fee_percent)?
+            .return_change(context, change_pk, priority_fee_percent)?
             .map_or(
                 WalletFundingOutcome::NeedsMoreInputs,
                 WalletFundingOutcome::Funded,
@@ -434,17 +432,21 @@ fn with_transfer_input_chunks(
 }
 
 fn pending_transfer_output_sum(tx_builder: &MantleTxBuilder) -> u128 {
-    tx_builder.clone().build().map_or_else(
-        |_| 0,
-        |tx| match tx.last() {
-            Some(Op::Transfer(transfer)) => transfer
-                .outputs
-                .iter()
-                .map(|note| u128::from(note.value))
-                .sum(),
-            _ => 0,
-        },
-    )
+    // No fork digest changes the outputs, so any builds the transaction here.
+    tx_builder
+        .clone()
+        .build(ForkDigest::new([0; 32]))
+        .map_or_else(
+            |_| 0,
+            |tx| match tx.last() {
+                Some(Op::Transfer(transfer)) => transfer
+                    .outputs
+                    .iter()
+                    .map(|note| u128::from(note.value))
+                    .sum(),
+                _ => 0,
+            },
+        )
 }
 
 fn funding_delta_for_chunked_builder(
@@ -454,11 +456,7 @@ fn funding_delta_for_chunked_builder(
     context: &OpsContext,
     priority_fee_percent: u64,
 ) -> Result<i128, WalletError> {
-    let mandatory_fee = u128::from(
-        tx_builder
-            .minimum_gas_cost::<MainnetGasProfile>(context)?
-            .into_inner(),
-    );
+    let mandatory_fee = u128::from(tx_builder.minimum_gas_cost(context)?.into_inner());
     let required_fee = mandatory_fee
         .checked_mul(u128::from(priority_fee_percent))
         .and_then(|priority_fee| priority_fee.checked_add(99))
@@ -477,6 +475,7 @@ fn funding_delta_for_chunked_builder(
 mod tests {
     use std::collections::HashMap;
 
+    use lb_config::deployment::GAS_PROFILE;
     use lb_core::mantle::{
         ops::channel::{
             ChannelId, MsgId,
@@ -492,7 +491,12 @@ mod tests {
     fn zero_cost_wallet_transaction_still_uses_funding_input() {
         let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
         let context = OpsContext {
-            gas_context: OpsGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0)),
+            gas_context: OpsGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+                GAS_PROFILE,
+            ),
             leader_reward_amount: 0,
         };
         let tx_builder = MantleTxBuilder::new()
@@ -505,7 +509,7 @@ mod tests {
             .expect("inscription test builder should fit op bounds");
         assert_eq!(
             tx_builder
-                .funding_delta::<MainnetGasProfile>(&context)
+                .funding_delta(&context)
                 .expect("zero-gas inscription funding delta should calculate"),
             0
         );
@@ -527,12 +531,14 @@ mod tests {
         assert_eq!(funded_builder.ledger_inputs(), &[funding_utxo]);
         assert_eq!(
             funded_builder
-                .funding_delta::<MainnetGasProfile>(&context)
+                .funding_delta(&context)
                 .expect("funded inscription delta should calculate"),
             0
         );
 
-        let funded_tx = funded_builder.build().expect("funded builder should build");
+        let funded_tx = funded_builder
+            .build(ForkDigest::new([0x11; 32]))
+            .expect("funded builder should build");
         let Some(Op::Transfer(transfer)) = funded_tx.iter().last() else {
             panic!("wallet funding should leave a transfer op at the end");
         };

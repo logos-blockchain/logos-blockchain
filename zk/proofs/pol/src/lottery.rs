@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use astro_float::{BigFloat, Consts, Radix, RoundingMode, Sign};
 use lb_groth16::Fr;
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::math::ProperFraction;
 use num_bigint::BigUint;
 use num_traits::{CheckedSub as _, Num as _};
 
@@ -35,12 +35,13 @@ impl LotteryConstants {
     /// - t₁_constant = floor(p * ln²(1-f) / 2)
     ///
     /// Where `p` is the BN254 scalar field order and `f` is the slot activation
-    /// coefficient.
+    /// coefficient, which lies strictly between 0 and 1, so `ln(1-f)` is
+    /// defined and non-zero.
     ///
     /// The calculations are defined in the [Proof of Leadership spec](https://lip.logos.co/blockchain/raw/cryptarchia-proof-of-leadership.html).
     #[expect(clippy::doc_markdown, reason = "math formulas")]
     #[must_use]
-    pub fn new(f: NonNegativeRatio) -> Self {
+    pub fn new(f: ProperFraction) -> Self {
         let mut cc = Consts::new().expect("memory allocation should succeed");
 
         let p = Self::p_as_bigfloat(&mut cc);
@@ -145,7 +146,8 @@ mod tests {
 
     #[test]
     fn test_compute_lottery_constants() {
-        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 30.try_into().unwrap()));
+        let constants =
+            LotteryConstants::new(ProperFraction::new(1, 30.try_into().unwrap()).unwrap());
         assert_eq!(
             constants.t0_constant,
             BigUint::from_str_radix(
@@ -163,7 +165,8 @@ mod tests {
             .unwrap()
         );
 
-        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()));
+        let constants =
+            LotteryConstants::new(ProperFraction::new(1, 10.try_into().unwrap()).unwrap());
         assert_eq!(
             constants.t0_constant,
             BigUint::from_str_radix(
@@ -184,7 +187,8 @@ mod tests {
 
     #[test]
     fn test_compute_lottery_values() {
-        let constants = LotteryConstants::new(NonNegativeRatio::new(1, 30.try_into().unwrap()));
+        let constants =
+            LotteryConstants::new(ProperFraction::new(1, 30.try_into().unwrap()).unwrap());
         let (lottery_0, lottery_1) = constants.compute_lottery_values(1000);
 
         assert_eq!(

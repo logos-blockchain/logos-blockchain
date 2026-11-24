@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub use consensus_liveness::ConsensusLiveness;
 pub use fork_monitor::ClusterForkMonitor;
 pub use inscription::*;
+use lb_core::era::ForkDigest;
 use testing_framework_app::{AppHostEnv, AppRunContextExt as _};
 use testing_framework_core::scenario::{ClusterHandle, DynError, RunContext};
 use tokio::sync::broadcast;
@@ -15,6 +16,19 @@ use tokio::sync::broadcast;
 use crate::{BlockFeed, BlockRecord, DeploymentPlan, LbcEnv, NodeHttpClient};
 
 pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
+
+/// The fork digest a transaction signed now carries, as a node of the cluster
+/// reports it.
+pub(crate) async fn fork_digest_in_force(
+    ctx: &RunContext<AppHostEnv>,
+) -> Result<ForkDigest, DynError> {
+    let client = ctx
+        .lbc_clients()?
+        .into_iter()
+        .next()
+        .ok_or("logos cluster has no node clients")?;
+    Ok(client.chain_fork().await?)
+}
 
 /// Access to the Logos cluster application from workload run contexts.
 pub trait LbcRunContextExt {
