@@ -6,7 +6,10 @@ use core::{
 use lb_binary_codec::canonical::BinaryEncode;
 use lb_core::{
     block::{Block, BlockLimits, Proposal},
-    mantle::gas::{Gas, GasProfile},
+    mantle::{
+        gas::{Gas, GasProfile},
+        ops::pow::PowReward,
+    },
     sdp::{InactivityPeriod, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{
@@ -54,6 +57,39 @@ pub struct Settings {
     pub storage_market: StorageMarketConfig,
     pub block_rewards: BlockRewardsConfig,
     pub gas_profile: GasProfile,
+    /// The `PoW` reward pool the era starts with, replacing what the era
+    /// before it left. Only an era that follows another may set one: the
+    /// genesis era's pool is inscribed in the genesis block.
+    #[serde(default, skip_serializing_if = "EraStartRewardPool::is_unset")]
+    pub pow_reward_pool: EraStartRewardPool,
+}
+
+/// The `PoW` reward pool an era starts with, if it sets one.
+///
+/// An era that sets none encodes nothing for it, which keeps the digest of
+/// every era declared before the parameter existed. The encodings stay
+/// distinct: one that holds a pool is 8 bytes longer.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct EraStartRewardPool(pub Option<PowReward>);
+
+impl EraStartRewardPool {
+    #[must_use]
+    pub const fn is_unset(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl BinaryEncode for EraStartRewardPool {
+    fn encoded_length(&self) -> usize {
+        self.0.map_or(0, |pool| pool.encoded_length())
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        if let Some(pool) = self.0 {
+            pool.encode_into(out);
+        }
+    }
 }
 
 impl Settings {
@@ -78,6 +114,11 @@ impl Settings {
         ensure!(
             window <= widest,
             "The uncle reference window of {window} blocks is wider than ⌊0.6k⌋, {widest} blocks."
+        );
+        // The genesis block inscribes the pool the genesis era starts with.
+        ensure!(
+            previous.is_some() || self.pow_reward_pool.is_unset(),
+            "The genesis era cannot set `pow_reward_pool`: the genesis block inscribes it."
         );
         // While the latest immutable block still lies in the previous era, an
         // uncle's parent must not lie below it.

@@ -156,6 +156,7 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
         } else {
             TxEra::Master
         },
+        pow_reward_pool_reset: deployment.pow_reward_pool.0,
         epoch_config: EpochConfig {
             epoch_period_nonce_buffer: deployment.epoch_config.epoch_period_nonce_buffer,
             epoch_period_nonce_stabilization: deployment
