@@ -26,6 +26,10 @@ where
 /// through it — but it only adds a counter bump on top of `System`.
 struct CountingAllocator;
 
+#[expect(
+    unsafe_code,
+    reason = "`GlobalAlloc` is an unsafe trait, and `System` is called through it."
+)]
 // SAFETY: every method forwards its arguments unchanged to `System`, which
 // upholds the `GlobalAlloc` contract. The only added work is a thread-local
 // counter bump, which allocates nothing and so cannot re-enter the
