@@ -77,6 +77,12 @@ pub enum SdpError {
         nonce_sequence: u32,
         declaration_sequence: u32,
     },
+    #[error("Invalid SDP nonce: nonce={nonce}, declaration_nonce={declaration_nonce}")]
+    InvalidLegacyNonce { nonce: u64, declaration_nonce: u64 },
+    #[error("Invalid service note {note_id:?}: the declaration's is {expected:?}")]
+    InvalidServiceNote { note_id: NoteId, expected: NoteId },
+    #[error("A locator of the declaration names port 0")]
+    LocatorWithZeroPort,
     #[error("Note is not a service note: {0:?}")]
     NotAServiceNote(NoteId),
     #[error("Note {note_id:?} not used for {service_type:?}")]
@@ -105,6 +111,19 @@ fn validate_declaration_id(
 /// Validates the lifecycle and monotonic sequence carried by an Active or
 /// Withdraw nonce against the declaration it targets.
 fn validate_nonce(candidate: Nonce, declaration: &Declaration) -> Result<(), SdpError> {
+    // A legacy declaration's nonce is a plain counter, as the releases that
+    // made it read it.
+    if declaration.legacy {
+        let (nonce, declaration_nonce) = (candidate.packed_u64(), declaration.nonce.packed_u64());
+        return if nonce > declaration_nonce {
+            Ok(())
+        } else {
+            Err(SdpError::InvalidLegacyNonce {
+                nonce,
+                declaration_nonce,
+            })
+        };
+    }
     let nonce_lifecycle_epoch = candidate.lifecycle_epoch();
     if nonce_lifecycle_epoch != declaration.created {
         return Err(SdpError::InvalidNonceLifecycle {

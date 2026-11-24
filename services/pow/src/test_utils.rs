@@ -57,7 +57,7 @@ pub fn era_schedule(reward_windows: &[u64]) -> ServiceEraSchedule {
                 .unwrap(),
             rewards_enabled: true,
             max_claim_tx_size: PAYLOAD_BODY_SIZE,
-            fork_digest: ForkDigest::new([0x11; 32]),
+            fork_digest: Some(ForkDigest::new([0x11; 32])),
             gas_profile: GAS_PROFILE,
         })
 }

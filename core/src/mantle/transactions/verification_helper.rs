@@ -15,7 +15,7 @@ use crate::{
             sdp::SdpError,
         },
     },
-    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{Declaration, DeclarationId, MinStake, SdpEra, ServiceType, service_notes::ServiceNotes},
 };
 
 pub trait OperationVerificationHelper {
@@ -49,6 +49,9 @@ pub trait OperationVerificationHelper {
     }
 
     fn get_min_stake(&self) -> &MinStake;
+
+    /// The era whose SDP rules declarations are made under in the block.
+    fn sdp_era(&self) -> SdpEra;
 
     fn get_epoch(&self) -> Epoch;
 
@@ -129,7 +132,9 @@ pub mod test_utils {
             },
             transactions::OperationVerificationHelper,
         },
-        sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+        sdp::{
+            Declaration, DeclarationId, MinStake, SdpEra, ServiceType, service_notes::ServiceNotes,
+        },
     };
 
     pub struct TestOperationVerificationHelper {
@@ -293,6 +298,10 @@ pub mod test_utils {
 
         fn get_min_stake(&self) -> &MinStake {
             &self.min_stake
+        }
+
+        fn sdp_era(&self) -> SdpEra {
+            SdpEra::Master
         }
 
         fn get_epoch(&self) -> Epoch {

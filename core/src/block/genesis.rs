@@ -192,6 +192,40 @@ impl GenesisBlock {
     pub fn into_inner(self) -> Block<GenesisTx> {
         self.0
     }
+
+    /// This genesis block, whose legacy genesis transaction is given the
+    /// genesis parameters its inscription leaves out. The block itself, and so
+    /// its ID, is unchanged.
+    ///
+    /// # Errors
+    ///
+    /// If the genesis transaction is not a legacy one, as
+    /// [`GenesisTx::with_0_3_1_uninscribed_params`] is.
+    pub fn with_0_3_1_uninscribed_params(
+        self,
+        pow_reward_pool: crate::mantle::ops::pow::PowReward,
+        consensus_excluded_keys: genesis_tx::ConsensusExcludedKeys,
+    ) -> core::result::Result<Self, genesis_tx::Error> {
+        let Block {
+            header,
+            signature,
+            uncle_headers,
+            transactions,
+        } = self.0;
+        let genesis_tx = transactions
+            .into_iter()
+            .next()
+            .expect("Genesis block should be valid")
+            .with_0_3_1_uninscribed_params(pow_reward_pool, consensus_excluded_keys)?;
+        let transactions = BlockTransactions::try_new(vec![genesis_tx], 1)
+            .expect("One transaction is within a maximum of one.");
+        Ok(Self(Block {
+            header,
+            signature,
+            uncle_headers,
+            transactions,
+        }))
+    }
 }
 
 impl AsRef<Block<GenesisTx>> for GenesisBlock {

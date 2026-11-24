@@ -26,14 +26,15 @@
 
 use lb_binary_codec::canonical::{BinaryEncode, codec_fixtures};
 
-use crate::config::deployment::era::ruleset::{EraRuleset, v1};
+use crate::config::deployment::era::ruleset::{EraRuleset, v2};
 
 /// The ruleset's number, then its parameters in the layout it defines.
 impl BinaryEncode for EraRuleset {
     fn encoded_length(&self) -> usize {
         self.version().encoded_length()
             + match self {
-                Self::V1(v1::Parameters {
+                Self::V1(parameters) => parameters.declared().encoded_length(),
+                Self::V2(v2::Parameters {
                     blend,
                     cryptarchia,
                     time,
@@ -44,7 +45,8 @@ impl BinaryEncode for EraRuleset {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.version().encode_into(out);
         match self {
-            Self::V1(v1::Parameters {
+            Self::V1(parameters) => parameters.declared().encode_into(out),
+            Self::V2(v2::Parameters {
                 blend,
                 cryptarchia,
                 time,
@@ -58,22 +60,22 @@ impl BinaryEncode for EraRuleset {
 }
 
 fn fixture_era_ruleset() -> EraRuleset {
-    EraRuleset::V1(v1::Parameters {
-        blend: v1::blend::codec::fixture_settings(),
-        cryptarchia: v1::cryptarchia::codec::fixture_settings(),
-        time: v1::time::codec::fixture_settings(),
+    EraRuleset::V2(v2::Parameters {
+        blend: v2::blend::codec::fixture_settings(),
+        cryptarchia: v2::cryptarchia::codec::fixture_settings(),
+        time: v2::time::codec::fixture_settings(),
     })
 }
 
-/// The encoding of [`fixture_era_ruleset`]: the same bytes the parameters
-/// encoded to before they had a ruleset number. A function, since `&str`
-/// constants cannot be concatenated at compile time.
+/// The encoding of [`fixture_era_ruleset`]: the ruleset's number, then its
+/// parameters. A function, since `&str` constants cannot be concatenated at
+/// compile time.
 fn era_ruleset_hex() -> String {
     [
-        "0100",
-        v1::blend::codec::SETTINGS_HEX,
-        v1::cryptarchia::codec::SETTINGS_HEX,
-        v1::time::codec::SETTINGS_HEX,
+        "0200",
+        v2::blend::codec::SETTINGS_HEX,
+        v2::cryptarchia::codec::SETTINGS_HEX,
+        v2::time::codec::SETTINGS_HEX,
     ]
     .concat()
 }

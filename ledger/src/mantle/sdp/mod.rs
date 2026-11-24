@@ -4,6 +4,8 @@ pub(crate) mod test_utils;
 
 use std::collections::HashMap;
 
+pub use lb_core::sdp::SdpEra;
+
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
     block::BlockNumber,
@@ -129,6 +131,9 @@ impl Service {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
+    /// The era whose SDP rules declarations are made under.
+    #[serde(default)]
+    pub era: SdpEra,
     pub service_params: std::sync::Arc<HashMap<ServiceType, ServiceParameters>>,
     pub service_rewards_params: ServiceRewardsParameters,
     pub min_stake: MinStake,
@@ -314,6 +319,7 @@ impl SdpLedger {
 
             let verified_declaration = declaration
                 .into_verified(&SDPDeclareGenesisValidationContext {
+                    era: config.era,
                     utxo_tree,
                     channels,
                     service_notes: &sdp.service_notes,
@@ -413,7 +419,7 @@ impl SdpLedger {
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let operation = declaration.operation();
-        let operation_id = operation.id();
+        let operation_id = operation.id_under(config.era);
 
         let Some(service_state) = self.services.get_mut(&operation.service_type) else {
             return Err(Error::ServiceNotFound(operation.service_type));
@@ -422,6 +428,7 @@ impl SdpLedger {
         // Execute SDP Declare
         let (result, events) = declaration
             .execute(SDPDeclareExecutionContext {
+                era: config.era,
                 utxo_tree: utxo_tree.clone(),
                 epoch: self.epoch,
                 declarations: service_state.declarations_clone(),
@@ -473,6 +480,7 @@ impl SdpLedger {
 
         let (result, events) = signed_operation
             .execute(SDPDeclareExecutionContext {
+                era: config.era,
                 utxo_tree: utxo_tree.clone(),
                 epoch: self.epoch,
                 declarations: service_state.declarations_clone(),
@@ -534,7 +542,7 @@ impl SdpLedger {
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let operation = signed_operation.operation();
 
-        let (service, _) = self.get_service(&operation.declaration_id, config)?;
+        let (service, _) = self.get_service(&operation.declaration_id(), config)?;
         let Some(service_state) = self.services.get_mut(&service) else {
             return Err(Error::ServiceNotFound(service));
         };
@@ -713,6 +721,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert(ServiceType::BlendNetwork, service_params);
         Config {
+            era: SdpEra::Master,
             service_params: Arc::new(params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
@@ -817,6 +826,7 @@ mod tests {
         .into_state_trusted::<Preverified>();
         signed_operation
             .verify(&SDPDeclareVerificationContext {
+                era: SdpEra::Master,
                 utxo_tree: utxos,
                 channels: &Channels::new(),
                 service_notes: ledger.service_notes(),
@@ -1143,7 +1153,7 @@ mod tests {
 
         // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY =
         // 3`.
-        let withdraw_op = SDPWithdrawOp {
+        let withdraw_op = SDPWithdrawOp::Master {
             declaration_id,
             nonce: Nonce::new(Epoch::new(0), 1),
         };
@@ -1489,11 +1499,11 @@ mod tests {
         );
 
         // Withdraw A.
-        let withdraw_op = SDPWithdrawOp {
+        let withdraw_op = SDPWithdrawOp::Master {
             declaration_id: declaration_id_a,
             nonce: Nonce::new(Epoch::new(0), 1),
         };
-        let accepted_nonce = withdraw_op.nonce;
+        let accepted_nonce = withdraw_op.nonce();
         let proof_withdraw = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let signed_operation_withdraw =
             SignedOperation::new(withdraw_op, proof_withdraw).into_state_trusted();
@@ -1622,7 +1632,7 @@ mod tests {
         ));
 
         let replayed_withdraw = SignedOperation::<_, Unverified, StandardMode>::new(
-            SDPWithdrawOp {
+            SDPWithdrawOp::Master {
                 declaration_id: declaration_id_a,
                 nonce: accepted_nonce,
             },
@@ -1692,14 +1702,14 @@ mod tests {
 
         // Prepare a real, valid authorization at nonce 2 in lifecycle A, but
         // leave it unexecuted and unmined. Its original tx hash is retained.
-        let stale_operation = SDPWithdrawOp {
+        let stale_operation = SDPWithdrawOp::Master {
             declaration_id,
             nonce: Nonce::new(created_a, 2),
         };
         let stale_tx_hash = withdraw_tx_hash_view(stale_operation);
         let stale_withdraw =
             signed_withdraw(stale_operation, &note_key, &declaration_key, &stale_tx_hash);
-        assert_eq!(stale_withdraw.operation().nonce, Nonce::new(created_a, 2));
+        assert_eq!(stale_withdraw.operation().nonce(), Nonce::new(created_a, 2));
         let mut deferred_proofs = DeferredProofs::new();
         let _valid_but_unmined = stale_withdraw
             .clone()
@@ -1722,7 +1732,7 @@ mod tests {
             .expect("old nonce 2 real ZK authorization verifies in lifecycle A");
 
         // The lower nonce 1 is the only withdrawal accepted in lifecycle A.
-        let accepted_operation = SDPWithdrawOp {
+        let accepted_operation = SDPWithdrawOp::Master {
             declaration_id,
             nonce: Nonce::new(created_a, 1),
         };
@@ -1802,10 +1812,10 @@ mod tests {
         );
         assert_eq!(declaration_b_state.nonce.sequence(), 0);
         assert_ne!(
-            withdraw_tx_hash_view(SDPWithdrawOp {
-                nonce: Nonce::new(declaration_b_state.created, 2),
-                ..stale_operation
-            })
+            withdraw_tx_hash_view(SDPWithdrawOp::new(
+                stale_operation.declaration_id(),
+                Nonce::new(declaration_b_state.created, 2),
+            ))
             .as_bytes(),
             stale_tx_hash.as_bytes(),
             "the nonce lifecycle is part of the hashed operation payload"
@@ -1883,7 +1893,7 @@ mod tests {
         assert!(sdp_ledger.get_declaration(&declaration_id).is_some());
 
         // Withdraw the declaration
-        let withdraw_op = SDPWithdrawOp {
+        let withdraw_op = SDPWithdrawOp::Master {
             declaration_id,
             nonce: Nonce::new(Epoch::new(0), 1),
         };
@@ -2006,7 +2016,7 @@ mod tests {
         (ledger, _) = ledger
             .try_apply_header(&config, &config, &epoch1, &epoch2)
             .unwrap();
-        let withdraw_op = SDPWithdrawOp {
+        let withdraw_op = SDPWithdrawOp::Master {
             declaration_id,
             nonce: Nonce::new(Epoch::new(0), 1),
         };

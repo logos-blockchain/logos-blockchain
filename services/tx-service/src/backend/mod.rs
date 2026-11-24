@@ -6,7 +6,11 @@ use core::hash::Hash;
 use std::{collections::HashMap, pin::Pin};
 
 use futures::Stream;
-use lb_core::{block::TxInBlock, era::ForkDigest, mantle::transactions::hash::PrefixedKey};
+use lb_core::{
+    block::TxInBlock,
+    era::{ForkDigest, display_fork_digest},
+    mantle::transactions::hash::PrefixedKey,
+};
 use lb_cryptarchia_engine::Slot;
 use lb_time::Era;
 pub use policy::{EvictableTx, EvictionPolicy, PowClaimEvictionSettings};
@@ -30,8 +34,8 @@ pub enum MempoolError {
     MetadataTooLarge { size: usize, max: usize },
     #[error("Item can no longer be included in a block")]
     Expired,
-    #[error("The era in force does not accept the fork digest {0}")]
-    UnacceptedForkDigest(ForkDigest),
+    #[error("The era in force does not accept the fork digest {}", display_fork_digest(.0.as_ref()))]
+    UnacceptedForkDigest(Option<ForkDigest>),
     #[error("Storage operation failed: {0}")]
     StorageError(String),
     #[error(transparent)]

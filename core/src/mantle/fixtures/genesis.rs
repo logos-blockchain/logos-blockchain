@@ -4,7 +4,7 @@ use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
 use crate::mantle::transactions::genesis_tx::{
-    ChainId, ConsensusExcludedKeys, GenesisParameters, GenesisTime,
+    ChainId, ConsensusExcludedKeys, GenesisParameters, GenesisTime, LegacyGenesisParameters,
 };
 
 codec_fixtures!(
@@ -21,4 +21,10 @@ codec_fixtures!(
 codec_fixtures!(
     GenesisParameters,
     Self { chain_id: ChainId::try_from("logos-chain-1".to_owned()).unwrap(), start_time: GenesisTime::new(1000), epoch_nonce: Fr::ZERO, pow_reward_pool: 300_000_000_000, consensus_excluded_keys: ConsensusExcludedKeys::from(ZkPublicKey::new(Fr::from(1u64))) } => "0d6c6f676f732d636861696e2d31e8030000000000000000000000000000000000000000000000000000000000000000000000b864d945000000010000000100000000000000000000000000000000000000000000000000000000000000"
+);
+
+// The inscription of the chain started by release 0.3.1.
+codec_fixtures!(
+    LegacyGenesisParameters,
+    Self { chain_id: ChainId::try_from("0.3.1".to_owned()).unwrap(), genesis_time: GenesisTime::new(1_791_556_200), epoch_nonce: lb_groth16::fr_from_bytes(&hex::decode("2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a").unwrap()).unwrap() } => "05302e332e3168fac86a2d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a"
 );

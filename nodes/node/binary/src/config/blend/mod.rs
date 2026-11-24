@@ -21,14 +21,12 @@ use lb_blend_service::{
     },
     settings::{EraOrchestratorSettings, OrchestratorSettings},
 };
+use lb_core::mantle::transactions::TxEra;
 use lb_libp2p::protocol_name::ProtocolScope;
 use lb_services_utils::overwatch::RecoveryData;
 use lb_time::era::EraSchedule;
 
-use crate::config::{
-    blend::serde::Config,
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-};
+use crate::config::{blend::serde::Config, deployment::EraDefinition};
 
 pub mod serde;
 
@@ -79,7 +77,7 @@ impl ServiceConfig {
     ) -> BlendServicesSettings {
         let blend_eras = eras.map(|era| {
             let definition = &era.parameters;
-            let EraRuleset::V1(parameters) = &definition.ruleset;
+            let parameters = definition.ruleset.parameters();
             let fork = ProtocolScope::Fork(definition.fork_digest);
             let protocol_name = fork.to_stream_protocol_with_name("blend");
             let (deployment, cryptarchia_deployment, time_deployment) =
@@ -170,6 +168,11 @@ impl ServiceConfig {
                     topic: fork.to_string_with_name("cryptarchia"),
                     max_proposal_size: cryptarchia_deployment.max_proposal_size(),
                     max_op_data_size: cryptarchia_deployment.max_op_data_size(),
+                    tx_era: if definition.ruleset.is_legacy() {
+                        TxEra::Legacy
+                    } else {
+                        TxEra::Master
+                    },
                 },
             }
         });

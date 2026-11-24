@@ -7,6 +7,7 @@ use lb_core::{
         Value,
         gas::{Gas, GasProfile},
         ops::pow::{PowSlotWindows, PowTarget},
+        transactions::TxEra,
     },
 };
 use lb_cryptarchia_engine::{Epoch, EraSchedule, Slot};
@@ -33,6 +34,10 @@ pub struct Config {
     /// The most bytes of data an Operation may carry: an inscription, or a
     /// deposit's metadata.
     pub max_op_data_size: u32,
+    /// The era whose transaction rules apply: the layout a transaction is
+    /// in, and how much metadata a deposit may carry.
+    #[serde(default)]
+    pub tx_era: TxEra,
     pub sdp_config: crate::mantle::sdp::Config,
     pub pow_config: PoWConfig,
     pub accepted_fork_digests: AcceptedForkDigests,
@@ -1042,6 +1047,7 @@ mod tests {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
+                era: crate::mantle::sdp::SdpEra::Master,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
@@ -1068,6 +1074,7 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            tx_era: lb_core::mantle::transactions::TxEra::Master,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
@@ -1132,6 +1139,7 @@ mod tests {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
+                era: crate::mantle::sdp::SdpEra::Master,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
@@ -1158,6 +1166,7 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            tx_era: lb_core::mantle::transactions::TxEra::Master,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),
@@ -1238,6 +1247,7 @@ mod tests {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
+                era: crate::mantle::sdp::SdpEra::Master,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
@@ -1264,6 +1274,7 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            tx_era: lb_core::mantle::transactions::TxEra::Master,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),

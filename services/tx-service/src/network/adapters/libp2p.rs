@@ -49,7 +49,12 @@ impl<Item, Key, RuntimeServiceId> Libp2pAdapter<Item, Key, RuntimeServiceId> {
 impl<Item, Key, RuntimeServiceId> NetworkAdapter<RuntimeServiceId>
     for Libp2pAdapter<Item, Key, RuntimeServiceId>
 where
-    Item: BinaryEncode + BinaryDecode<Context = u32> + Send + Sync + 'static + Clone,
+    Item: BinaryEncode
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+        + Send
+        + Sync
+        + 'static
+        + Clone,
     Key: Clone + Send + Sync + 'static,
 {
     type Backend = Libp2p;
@@ -152,17 +157,20 @@ where
         // the messages of every era's topic, each decoded under the limit of
         // that era, and follows the adapter from era to era, without requiring
         // any actions from consumers on era changes.
-        let max_op_data_sizes: HashMap<TopicHash, u32> = self
-            .settings
-            .era_schedule
-            .iter()
-            .map(|era| {
-                (
-                    TopicHash::from_raw(era.parameters.topic.clone()),
-                    era.parameters.max_op_data_size,
-                )
-            })
-            .collect();
+        let max_op_data_sizes: HashMap<TopicHash, lb_core::mantle::transactions::TxDecodeContext> =
+            self.settings
+                .era_schedule
+                .iter()
+                .map(|era| {
+                    (
+                        TopicHash::from_raw(era.parameters.topic.clone()),
+                        lb_core::mantle::transactions::TxDecodeContext::at_slot(
+                            era.first_slot,
+                            era.parameters.max_op_data_size,
+                        ),
+                    )
+                })
+                .collect();
         let id = self.settings.id;
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.network_relay

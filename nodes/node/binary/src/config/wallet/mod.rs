@@ -3,10 +3,7 @@ use lb_services_utils::overwatch::RecoveryData;
 use lb_time::era::EpochLength as _;
 use lb_wallet_service::{WalletEraSettings, WalletServiceSettings};
 
-use crate::config::{
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-    wallet::serde::Config,
-};
+use crate::config::{deployment::EraDefinition, wallet::serde::Config};
 
 pub mod serde;
 
@@ -27,11 +24,11 @@ impl ServiceConfig {
             recovery_data,
             pending_note_expiry_blocks: self.user.pending_note_expiry_blocks,
             era_schedule: eras.map(|era| {
-                let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                let parameters = era.parameters.ruleset.parameters();
                 WalletEraSettings {
                     epoch_length: era.parameters.epoch_length(),
                     security_param: parameters.cryptarchia.security_param,
-                    fork_digest: era.parameters.fork_digest,
+                    fork_digest: era.parameters.tx_fork_digest(),
                     gas_profile: parameters.cryptarchia.gas_profile,
                 }
             }),

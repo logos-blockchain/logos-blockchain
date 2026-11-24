@@ -170,6 +170,7 @@ mod tests {
             ),
             // not used in the tests
             sdp_config: crate::mantle::sdp::Config {
+                era: crate::mantle::sdp::SdpEra::Master,
                 service_params: Arc::new(HashMap::new()),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
@@ -188,6 +189,7 @@ mod tests {
             max_transactions: 1024,
             max_transactions_size: 2 * 1024 * 1024,
             max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+            tx_era: lb_core::mantle::transactions::TxEra::Master,
             execution_market: crate::config::ExecutionMarketConfig {
                 max_gas_per_block: crate::config::MaxGasPerBlock::new(3_193_460).unwrap(),
                 fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),

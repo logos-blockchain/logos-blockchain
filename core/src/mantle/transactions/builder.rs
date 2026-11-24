@@ -314,9 +314,13 @@ impl MantleTxBuilder {
 
     // TODO: Change this to a `Result` if genesis tx already contains max number
     // of ops.
-    /// The transaction, to be signed under the fork digest `fork_digest`,
-    /// with the pending transfer as its last operation.
-    pub fn build(mut self, fork_digest: ForkDigest) -> Result<Ops, TxBuilderError> {
+    /// The transaction, to be signed under the fork digest `fork_digest`, or
+    /// without one in an era whose transactions carry none, with the pending
+    /// transfer as its last operation.
+    pub fn build(
+        mut self,
+        fork_digest: impl Into<Option<ForkDigest>>,
+    ) -> Result<Ops, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
             self.ops
                 .try_push(Op::Transfer(self.pending_transfer))
@@ -651,7 +655,7 @@ mod tests {
                 service_note_id: declare_service_note,
             }))
             .unwrap()
-            .push_op(Op::SDPWithdraw(SDPWithdrawOp {
+            .push_op(Op::SDPWithdraw(SDPWithdrawOp::Master {
                 declaration_id: DeclarationId([0; 32]),
                 nonce: Nonce::new(0.into(), 1),
             }))
