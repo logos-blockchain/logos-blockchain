@@ -1,0 +1,8 @@
+# Findings of zizmor (https://docs.zizmor.sh) that are accepted, each with the reason. Code checks fail on
+# any other finding.
+rules:
+  dangerous-triggers:
+    ignore:
+      # `workflow_run` only reads the queued runs: every job checks out master and runs master's collector,
+      # with read-only permissions, and nothing from the triggering run is executed.
+      - merge-queue-telemetry.yml

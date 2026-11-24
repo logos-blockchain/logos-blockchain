@@ -28,7 +28,7 @@ runs:
   using: composite
   steps:
     - name: Wait for any lane to pass
-      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # Version 7
+      uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
       env:
         RESULT_NAME: ${{ inputs.result-name }}
         JOB_NAME_PREFIX: ${{ inputs.job-name-prefix }}

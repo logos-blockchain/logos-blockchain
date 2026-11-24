@@ -41,12 +41,17 @@ jobs:
 
     steps:
       - name: Print run info
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TAG: ${{ inputs.tag }}
+          CUSTOM_VERSION: ${{ inputs.custom_version }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          echo "Building Logos tools image for ${{ matrix.platform }} with tag: ${{ inputs.tag }}"
-          if [ -n "${{ inputs.custom_version }}" ]; then
-            echo "Applying custom version tag: ${{ inputs.custom_version }}"
-          elif [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "Applying git version tag: ${{ env.VERSION_TAG }}"
+          echo "Building Logos tools image for $PLATFORM with tag: $TAG"
+          if [ -n "$CUSTOM_VERSION" ]; then
+            echo "Applying custom version tag: $CUSTOM_VERSION"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            echo "Applying git version tag: $VERSION_TAG"
           fi
 
       - name: Prepare platform pair
@@ -55,19 +60,19 @@ jobs:
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
 
       - name: Check out the repo
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           # The checkout is the Docker build context, `.git` included, so the token must not be stored in it.
           persist-credentials: false
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@afeb29a6e0d7d6258844ecabe6eba67d13443680 # Version 3.10.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
         with:
           driver: docker-container
           install: true
 
       - name: Log in to the Container registry
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # Version 3.4.0
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -75,13 +80,13 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # Version 5.7.0
+        uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # v5.7.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
 
       - name: Build and push by digest
         id: build
-        uses: docker/build-push-action@84ad562665bb303b549fec655d1b64f9945f3f91 # Version 6.15.0
+        uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4 # v6.15.0
         with:
           context: .
           file: ./deployment/Dockerfile
@@ -90,13 +95,14 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          mkdir -p ${{ runner.temp }}/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: digests-${{ env.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
@@ -104,7 +110,7 @@ jobs:
           retention-days: 1
 
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@9d3beef6515cb82652d066f999b94affc15acfac # Version 2.2.3
+        uses: actions/attest-build-provenance@c074443f1aee8d4aeeae555aebba3282517141b2 # v2.2.3
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -121,17 +127,17 @@ jobs:
 
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@afeb29a6e0d7d6258844ecabe6eba67d13443680 # Version 3.10.0
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
 
       - name: Log in to the Container registry
-        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # Version 3.4.0
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772  # v3.4.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -139,17 +145,28 @@ jobs:
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests
+        env:
+          TAG: ${{ inputs.tag }}
+          CUSTOM_VERSION: ${{ inputs.custom_version }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          TAGS="-t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}"
-
-          if [ -n "${{ inputs.custom_version }}" ]; then
-            TAGS="$TAGS -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.custom_version }}"
-          elif [ "${{ github.ref_type }}" = "tag" ]; then
-            TAGS="$TAGS -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}"
+          IMAGE="$REGISTRY/$IMAGE_NAME"
+          TAGS=(-t "$IMAGE:$TAG")
+          if [ -n "$CUSTOM_VERSION" ]; then
+            TAGS+=(-t "$IMAGE:$CUSTOM_VERSION")
+          elif [ "$REF_TYPE" = "tag" ]; then
+            TAGS+=(-t "$IMAGE:$VERSION_TAG")
           fi
 
-          docker buildx imagetools create $TAGS $(printf '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@sha256:%s ' *)
+          # One file per platform image, named after its digest.
+          SOURCES=()
+          for digest in *; do
+            SOURCES+=("$IMAGE@sha256:$digest")
+          done
+
+          docker buildx imagetools create "${TAGS[@]}" "${SOURCES[@]}"
 
       - name: Inspect image
-        run: |
-          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
+        env:
+          TAG: ${{ inputs.tag }}
+        run: docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:$TAG"
