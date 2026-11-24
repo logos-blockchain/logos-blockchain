@@ -174,7 +174,52 @@ pub struct WalletState {
 
 pub type VoucherPaths = rpds::HashTrieMapSync<VoucherCm, MerklePath>;
 
+/// What a [`WalletState`] tracks of the vouchers.
+///
+/// Unlike its notes, a ledger state cannot give it back: the ledger keeps the
+/// peaks of the voucher tree only, so a path is rebuilt by applying every
+/// block since its voucher's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoucherState {
+    pub epoch: Epoch,
+    pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
+    pub voucher_paths: VoucherPaths,
+    pub voucher_paths_snapshot: VoucherPaths,
+}
+
 impl WalletState {
+    /// A state that tracks the vouchers as `vouchers` does, and holds no
+    /// notes: those are to be read from the ledger state of its block.
+    #[must_use]
+    pub fn from_voucher_state(vouchers: VoucherState) -> Self {
+        let VoucherState {
+            epoch,
+            vouchers,
+            voucher_paths,
+            voucher_paths_snapshot,
+        } = vouchers;
+        Self {
+            utxos: rpds::HashTrieMapSync::new_sync(),
+            pk_index: rpds::HashTrieMapSync::new_sync(),
+            service_notes: rpds::HashTrieSetSync::new_sync(),
+            channel_notes: rpds::HashTrieSetSync::new_sync(),
+            epoch,
+            vouchers,
+            voucher_paths,
+            voucher_paths_snapshot,
+        }
+    }
+
+    #[must_use]
+    pub fn voucher_state(&self) -> VoucherState {
+        VoucherState {
+            epoch: self.epoch,
+            vouchers: self.vouchers.clone(),
+            voucher_paths: self.voucher_paths.clone(),
+            voucher_paths_snapshot: self.voucher_paths_snapshot.clone(),
+        }
+    }
+
     pub fn from_ledger<KeyId>(
         known_keys: &HashMap<ZkPublicKey, KeyId>,
         ledger: &LedgerState,
@@ -749,11 +794,11 @@ where
             .ok_or(WalletError::UnknownBlock(block))?;
         let scanned = WalletState::from_ledger(&self.known_keys, ledger);
         *state = WalletState {
-            epoch: state.epoch,
-            vouchers: state.vouchers.clone(),
-            voucher_paths: state.voucher_paths.clone(),
-            voucher_paths_snapshot: state.voucher_paths_snapshot.clone(),
-            ..scanned
+            utxos: scanned.utxos,
+            pk_index: scanned.pk_index,
+            service_notes: scanned.service_notes,
+            channel_notes: scanned.channel_notes,
+            ..WalletState::from_voucher_state(state.voucher_state())
         };
         Ok(())
     }

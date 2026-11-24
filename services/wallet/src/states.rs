@@ -16,7 +16,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
-use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
+use lb_wallet::{Voucher, VoucherState, Vouchers, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -208,9 +208,12 @@ impl PendingNotes {
 pub struct RecoveryState {
     next_new_voucher_index: VoucherIndex,
     vouchers: Vouchers<VoucherId>,
-    /// [`WalletState`] at the last known LIB.
+    /// What the wallet tracks of the vouchers at the last known LIB.
     /// `None` until the first recovery state update.
-    lib_wallet_state: Option<(HeaderId, WalletState)>,
+    ///
+    /// The notes of the wallet are not saved: they are read from the ledger
+    /// state as the wallet starts.
+    lib_voucher_state: Option<(HeaderId, VoucherState)>,
     /// Voucher reservations for claim transactions that were built/submitted
     /// but have not reached LIB yet. Stale reservations are bounded by
     /// LIB-progress expiry after recovery.
@@ -225,7 +228,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
         Ok(Self {
             next_new_voucher_index: 0,
             vouchers: Vouchers::default(),
-            lib_wallet_state: None,
+            lib_voucher_state: None,
             pending_claims: PendingClaims::default(),
         })
     }
@@ -240,8 +243,8 @@ pub struct ServiceState<'u> {
     pending_claims: PendingClaims,
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
-    /// Whether the wallet was restored from a saved state, whose notes are
-    /// those of the keys known when it was saved.
+    /// Whether the wallet was restored from a saved state, which holds no
+    /// notes: they are still to be read from a ledger state.
     restored: bool,
 }
 
@@ -256,7 +259,7 @@ impl<'u> ServiceState<'u> {
         let RecoveryState {
             next_new_voucher_index,
             vouchers,
-            lib_wallet_state,
+            lib_voucher_state,
             pending_claims,
         } = state;
         let known_keys = settings
@@ -264,12 +267,17 @@ impl<'u> ServiceState<'u> {
             .iter()
             .map(|(key_id, pk)| (*pk, key_id.clone()));
 
-        // Initialize [`Wallet`] either from the persisted [`WalletState`]
-        // or from the current chain's LIB ledger state.
-        let restored = lib_wallet_state.is_some();
-        let (wallet, wallet_lib) = match lib_wallet_state {
-            Some((persisted_lib, wallet_state)) => (
-                Wallet::from_lib_wallet_state(known_keys, vouchers, persisted_lib, wallet_state),
+        // Initialize [`Wallet`] either from the persisted [`VoucherState`],
+        // without notes, or from the current chain's LIB ledger state.
+        let restored = lib_voucher_state.is_some();
+        let (wallet, wallet_lib) = match lib_voucher_state {
+            Some((persisted_lib, voucher_state)) => (
+                Wallet::from_lib_wallet_state(
+                    known_keys,
+                    vouchers,
+                    persisted_lib,
+                    WalletState::from_voucher_state(voucher_state),
+                ),
                 persisted_lib,
             ),
             None => (
@@ -291,7 +299,8 @@ impl<'u> ServiceState<'u> {
     }
 
     /// Whether the wallet was restored from a saved state rather than built
-    /// from the ledger state of the LIB.
+    /// from the ledger state of the LIB. Such a wallet holds no notes until
+    /// [`Self::rescan_notes`].
     pub const fn is_restored(&self) -> bool {
         self.restored
     }
@@ -437,15 +446,16 @@ impl<'u> ServiceState<'u> {
     }
 
     fn update_state(&self) {
-        let lib_wallet_state = self
+        let lib_voucher_state = self
             .wallet()
             .wallet_state_at(self.lib)
-            .expect("WalletState at LIB must exist");
+            .expect("WalletState at LIB must exist")
+            .voucher_state();
 
         self.updater.update(Some(RecoveryState {
             next_new_voucher_index: self.next_new_voucher_index,
             vouchers: self.wallet.vouchers().clone(),
-            lib_wallet_state: Some((self.lib, lib_wallet_state)),
+            lib_voucher_state: Some((self.lib, lib_voucher_state)),
             pending_claims: self.pending_claims.clone(),
         }));
     }
@@ -710,7 +720,7 @@ mod tests {
         let recovery = RecoveryState {
             next_new_voucher_index: 0,
             vouchers: Vouchers::default(),
-            lib_wallet_state: None,
+            lib_voucher_state: None,
             pending_claims: PendingClaims::default(),
         };
 
@@ -735,5 +745,83 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
+    }
+
+    /// A saved state holds what the wallet tracks of the vouchers and none of
+    /// its notes, which the wallet restored from it reads from the ledger
+    /// state for the keys it is configured with.
+    #[test]
+    fn a_saved_state_holds_no_notes_which_are_read_from_the_ledger() {
+        use std::sync::Arc;
+
+        use lb_core::{
+            block::BlockTransactions,
+            mantle::{Note, Utxo},
+        };
+        use lb_services_utils::overwatch::RecoveryData;
+        use overwatch::services::state::ServiceState as _;
+
+        let alice = ZkPublicKey::new(Fr::from(1u64));
+        let bob = ZkPublicKey::new(Fr::from(2u64));
+        let settings = |key: ZkPublicKey| WalletServiceSettings {
+            known_keys: HashMap::from([("key".into(), key)]),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            era_schedule: era_schedule(),
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let ledger = LedgerState::from_utxos(
+            [
+                Utxo::new([0; 32], 0, Note::new(100, alice)),
+                Utxo::new([0; 32], 1, Note::new(20, bob)),
+            ],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+
+        // A wallet with Alice's key issues a voucher, which the next block
+        // carries.
+        let fresh = RecoveryState::from_settings(&settings(alice)).unwrap();
+        let mut state = ServiceState::new(fresh, &settings(alice), genesis, &ledger, &updater);
+        assert!(!state.is_restored());
+        let secret = Fr::from(7u64).into();
+        let voucher_cm = VoucherCm::from_secret(secret);
+        state.add_next_known_voucher(
+            voucher_cm,
+            VoucherNullifier::from_secret(secret),
+            "voucher-master".into(),
+        );
+        let lib = HeaderId::from([1; 32]);
+        state
+            .apply_block(&WalletBlock {
+                id: lib,
+                parent: genesis,
+                epoch: 0.into(),
+                voucher_cm,
+                header_ops: vec![],
+                txs: BlockTransactions::empty(),
+            })
+            .unwrap();
+        state.advance_lib(lib, [genesis], 1, Vec::<VoucherNullifier>::new());
+        let saved: RecoveryState = receiver.borrow().clone().unwrap();
+
+        // Restored with Bob's key in place of Alice's.
+        let mut state = ServiceState::new(saved, &settings(bob), genesis, &ledger, &updater);
+        assert!(state.is_restored());
+        assert_eq!(state.lib(), lib);
+        let restored = state.wallet().wallet_state_at(lib).unwrap();
+        assert_eq!(restored.utxos.size(), 0);
+        assert!(restored.voucher_paths.contains_key(&voucher_cm));
+
+        // The block left the notes as they were at genesis.
+        state.rescan_notes(lib, &ledger).unwrap();
+        let rescanned = state.wallet().wallet_state_at(lib).unwrap();
+        assert_eq!(rescanned.utxos_owned_by_pks([alice]).len(), 0);
+        assert_eq!(rescanned.utxos_owned_by_pks([bob]).len(), 1);
+        assert!(rescanned.voucher_paths.contains_key(&voucher_cm));
     }
 }
