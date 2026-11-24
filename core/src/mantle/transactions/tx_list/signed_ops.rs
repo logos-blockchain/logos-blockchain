@@ -1,3 +1,4 @@
+use crate::mantle::transactions::TxDecodeContext;
 use std::ops::Deref;
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
@@ -40,11 +41,11 @@ pub enum Error {
     // TODO: Add SignedOpErrors here, adding the op_index as metadata
 }
 
-/// A signed transaction: the fork digest it is signed under, then each of its
-/// operations with its proof.
+/// A signed transaction: the fork digest it is signed under, if it carries
+/// one, then each of its operations with its proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedOps<State: VerificationState, Mode: VerificationMode> {
-    pub(crate) fork_digest: ForkDigest,
+    pub(crate) fork_digest: Option<ForkDigest>,
     pub(crate) ops: TxList<SignedOp<State, Mode>>,
 }
 
@@ -263,9 +264,9 @@ impl<State: VerificationState, Mode: VerificationMode> BinaryEncode for SignedOp
 }
 
 impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
-    /// The most bytes of data an Operation may carry in the era the transaction
-    /// is decoded under.
-    type Context = u32;
+    /// The layout of the transaction, and the most bytes of data an Operation
+    /// may carry in the era it is decoded under.
+    type Context = TxDecodeContext;
 
     fn decode<'input>(
         input: &'input [u8],
@@ -284,9 +285,9 @@ impl<Mode: VerificationMode> BinaryDecode for SignedOps<Unverified, Mode> {
 
 // Decoded unverified, then preverified, as its serde form is.
 impl BinaryDecode for SignedOps<Preverified, StandardMode> {
-    /// The most bytes of data an Operation may carry in the era the transaction
-    /// is decoded under.
-    type Context = u32;
+    /// The layout of the transaction, and the most bytes of data an Operation
+    /// may carry in the era it is decoded under.
+    type Context = TxDecodeContext;
 
     fn decode<'input>(
         input: &'input [u8],
@@ -320,7 +321,7 @@ impl<State: VerificationState, Mode: VerificationMode> StorageSize for SignedOps
 }
 
 impl<State: VerificationState, Mode: VerificationMode> MantleTx for SignedOps<State, Mode> {
-    fn fork_digest(&self) -> ForkDigest {
+    fn fork_digest(&self) -> Option<ForkDigest> {
         self.fork_digest
     }
 
@@ -414,7 +415,11 @@ mod mantle_spec {
             if serializer.is_human_readable() {
                 SignedOpsSerde::from(self).serialize(serializer)
             } else {
-                self.encode().serialize(serializer)
+                crate::mantle::transactions::tx_list::ops::FormatTaggedTx::of(
+                    self.fork_digest.is_none(),
+                    self.encode().into(),
+                )
+                .serialize(serializer)
             }
         }
     }
@@ -435,8 +440,12 @@ mod mantle_spec {
                 let helper = OwnedSignedOpsSerde::deserialize(deserializer)?;
                 Self::from_parts(helper.ops, helper.ops_proofs).map_err(serde::de::Error::custom)
             } else {
-                let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-                Self::decode_all(bytes.as_slice(), &u32::MAX).map_err(serde::de::Error::custom)
+                let tagged =
+                    crate::mantle::transactions::tx_list::ops::FormatTaggedTx::deserialize(
+                        deserializer,
+                    )?;
+                Self::decode_all(tagged.bytes(), &tagged.decode_context())
+                    .map_err(serde::de::Error::custom)
             }
         }
     }
@@ -980,7 +989,8 @@ mod tests {
 
         assert_eq!(
             signed_ops.to_bytes().expect("the binary arm serializes"),
-            bincode::serialize(&signed_ops.encode_to_vec()).expect("the envelope serializes")
+            bincode::serialize(&(false, signed_ops.encode_to_vec()))
+                .expect("the envelope serializes")
         );
     }
 
@@ -999,8 +1009,8 @@ mod tests {
     #[test]
     fn deserialize_from_binary() {
         let signed_ops = SignedOps::<Unverified, StandardMode>::sample();
-        let envelope =
-            bincode::serialize(&signed_ops.encode_to_vec()).expect("the envelope serializes");
+        let envelope = bincode::serialize(&(false, signed_ops.encode_to_vec()))
+            .expect("the envelope serializes");
 
         assert_eq!(
             SignedOps::<Unverified, StandardMode>::from_bytes(&envelope)

@@ -139,7 +139,9 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
     /// node verified the block before storing it.
     pub(crate) async fn load_stored(storage: &StorageApi<Tx>, id: &HeaderId) -> Option<Self>
     where
-        Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
+        Tx: BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+            + Hashable<Hash = TxHash>
+            + StorageSize,
     {
         storage.get_block(id).await.map(Self)
     }

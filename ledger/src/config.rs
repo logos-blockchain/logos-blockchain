@@ -1042,6 +1042,7 @@ mod tests {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
+                legacy: false,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
@@ -1132,6 +1133,7 @@ mod tests {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
+                legacy: false,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
@@ -1238,6 +1240,7 @@ mod tests {
             epoch_config,
             consensus_config,
             sdp_config: crate::mantle::sdp::Config {
+                legacy: false,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,

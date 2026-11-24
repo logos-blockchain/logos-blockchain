@@ -1,6 +1,7 @@
 mod deser;
 mod fixtures;
 pub mod genesis;
+mod legacy;
 mod uncle;
 
 use core::fmt::Debug;

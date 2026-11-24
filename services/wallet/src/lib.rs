@@ -240,7 +240,7 @@ struct LeaderClaimTx {
 struct LeaderClaimTxRequest {
     tip: HeaderId,
     /// The fork digest the claim is signed under.
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
     /// What the era of that fork digest charges, which the claim is funded for.
     gas_profile: GasProfile,
     rewards_root: RewardsRoot,
@@ -386,7 +386,7 @@ pub struct WalletEraSettings {
     pub security_param: NonZero<u32>,
     /// The fork digest of the era, which the transactions the wallet signs in
     /// it carry.
-    pub fork_digest: ForkDigest,
+    pub fork_digest: Option<ForkDigest>,
     /// What the era's Operations cost, which the wallet funds transactions for.
     pub gas_profile: GasProfile,
 }
@@ -438,7 +438,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx>,
@@ -613,7 +613,7 @@ where
         + Eq
         + Serialize
         + DeserializeOwned
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + StorageSize
         + 'static,
     Cryptarchia: CryptarchiaServiceData<Tx = Tx> + Send + 'static,
@@ -1121,7 +1121,7 @@ where
 
     async fn sign_tx(
         tx_builder: MantleTxBuilder,
-        fork_digest: ForkDigest,
+        fork_digest: Option<ForkDigest>,
         tip: HeaderId,
         tip_leader: LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,

@@ -32,7 +32,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter, FromRepr};
 
 use crate::{
-    mantle::{NoteId, ops::sdp::SdpError, transactions::hash::TxHashView},
+    mantle::{
+        NoteId,
+        ops::sdp::SdpError,
+        transactions::{TxFormat, hash::TxHashView},
+    },
     sdp::blend::ActivityProof,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
@@ -152,6 +156,17 @@ impl Locator {
         self.0.into_inner()
     }
 
+    /// Whether the locator names port 0, which no node listens on. The
+    /// releases 0.3.1 to 0.3.6 accepted such a locator in a declaration, so it
+    /// decodes, and a declaration made under later rules is refused for it.
+    #[must_use]
+    pub fn has_zero_port(&self) -> bool {
+        self.0
+            .as_inner()
+            .iter()
+            .any(|protocol| matches!(protocol, Protocol::Tcp(0) | Protocol::Udp(0)))
+    }
+
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.as_inner().len()
@@ -192,11 +207,6 @@ impl TryFrom<Multiaddr> for Locator {
                 Protocol::Ip6(ip) if ip.is_unspecified() => {
                     return Err(format!(
                         "Locator multiaddr must not contain an unspecified IPv6 address: {value}"
-                    ));
-                }
-                Protocol::Tcp(0) | Protocol::Udp(0) => {
-                    return Err(format!(
-                        "Locator multiaddr must not contain port 0: {value}"
                     ));
                 }
                 Protocol::P2p(_) => {
@@ -402,7 +412,10 @@ impl Nonce {
         }
     }
 
-    const fn packed_u64(self) -> u64 {
+    /// The nonce as the single number it encodes as, which is all a legacy
+    /// declaration reads of it.
+    #[must_use]
+    pub const fn packed_u64(self) -> u64 {
         ((self.lifecycle_epoch.into_inner() as u64) << 32) | self.sequence as u64
     }
 
@@ -503,6 +516,25 @@ impl DeclarationId {
 
         Self(hasher.finalize().into())
     }
+
+    /// The ID releases 0.3.1 to 0.3.6 gave a declaration:
+    /// `Hash(service || provider_id || zk_id || locators)`, the service as its
+    /// name and the locators in their canonical encoding.
+    #[must_use]
+    pub fn derive_legacy(
+        service_type: ServiceType,
+        provider_id: &ProviderId,
+        zk_id: ZkPublicKey,
+        locators: &Locators,
+    ) -> Self {
+        let mut hasher = Blake2b::new();
+        hasher.update(<ServiceType as AsRef<str>>::as_ref(&service_type).as_bytes());
+        hasher.update(provider_id.0.as_bytes());
+        hasher.update(fr_to_bytes(zk_id.as_fr()));
+        hasher.update(locators.encode());
+
+        Self(hasher.finalize().into())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -525,6 +557,11 @@ pub struct Declaration {
     /// The epoch at which the declaration is scheduled to be withdrawn.
     pub withdraw_at: Option<Epoch>,
     pub nonce: Nonce,
+    /// Whether the declaration was made under the rules of releases 0.3.1 to
+    /// 0.3.6. It then keeps the ID those rules gave it, and its nonce is a
+    /// plain counter, with no lifecycle epoch.
+    #[serde(default)]
+    pub legacy: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -539,12 +576,33 @@ pub const WITHDRAWAL_UNLOCK_DELAY: Epoch = SNAPSHOT_FINALIZATION_DELAY.strict_ad
 impl Declaration {
     #[must_use]
     pub fn id(&self) -> DeclarationId {
-        DeclarationId::derive(self.service_type, self.zk_id)
+        if self.legacy {
+            DeclarationId::derive_legacy(
+                self.service_type,
+                &self.provider_id,
+                self.zk_id,
+                &self.locators,
+            )
+        } else {
+            DeclarationId::derive(self.service_type, self.zk_id)
+        }
+    }
+
+    /// The declaration `declaration_msg` makes in `epoch` under the rules of
+    /// releases 0.3.1 to 0.3.6.
+    #[must_use]
+    pub fn new_legacy(epoch: Epoch, declaration_msg: &DeclarationMessage) -> Self {
+        Self {
+            nonce: Nonce::from(0),
+            legacy: true,
+            ..Self::new(epoch, declaration_msg)
+        }
     }
 
     #[must_use]
     pub fn new(epoch: Epoch, declaration_msg: &DeclarationMessage) -> Self {
         Self {
+            legacy: false,
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
             service_note_id: declaration_msg.service_note_id,
@@ -631,6 +689,22 @@ impl DeclarationMessage {
         DeclarationId::derive(self.service_type, self.zk_id)
     }
 
+    /// The ID of the declaration this message makes: the one releases 0.3.1
+    /// to 0.3.6 gave it if `legacy`.
+    #[must_use]
+    pub fn id_under(&self, legacy: bool) -> DeclarationId {
+        if legacy {
+            DeclarationId::derive_legacy(
+                self.service_type,
+                &self.provider_id,
+                self.zk_id,
+                &self.locators,
+            )
+        } else {
+            self.id()
+        }
+    }
+
     pub(crate) fn preverify(
         &self,
         tx_hash_view: &TxHashView,
@@ -661,12 +735,83 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, BinaryEncode, BinaryDecode,
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
+    /// The service note of the declaration, which only a withdrawal in the
+    /// legacy layout names, after its nonce: the layout of releases 0.3.1 to
+    /// 0.3.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_note_id: Option<NoteId>,
+}
+
+impl WithdrawMessage {
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub const fn sample() -> Self {
+        Self {
+            declaration_id: DeclarationId([27u8; 32]),
+            nonce: Nonce::new(Epoch::new(0), 29),
+            service_note_id: None,
+        }
+    }
+
+    /// The layout the withdrawal encodes in.
+    #[must_use]
+    pub const fn format(&self) -> TxFormat {
+        if self.service_note_id.is_some() {
+            TxFormat::Legacy
+        } else {
+            TxFormat::ForkBound
+        }
+    }
+}
+
+impl BinaryEncode for WithdrawMessage {
+    fn encoded_length(&self) -> usize {
+        self.declaration_id.encoded_length()
+            + self.nonce.encoded_length()
+            + self
+                .service_note_id
+                .map_or(0, |service_note_id| service_note_id.encoded_length())
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.declaration_id.encode_into(out);
+        self.nonce.encode_into(out);
+        if let Some(service_note_id) = self.service_note_id {
+            service_note_id.encode_into(out);
+        }
+    }
+}
+
+impl BinaryDecode for WithdrawMessage {
+    /// The layout of the transaction the withdrawal is decoded from.
+    type Context = TxFormat;
+
+    fn decode<'input>(
+        input: &'input [u8],
+        format: &Self::Context,
+    ) -> Result<(&'input [u8], Self), DecodeError> {
+        let (input, declaration_id) = DeclarationId::decode(input, &())?;
+        let (input, nonce) = Nonce::decode(input, &())?;
+        let (input, service_note_id) = match format {
+            TxFormat::Legacy => {
+                let (input, service_note_id) = NoteId::decode(input, &())?;
+                (input, Some(service_note_id))
+            }
+            TxFormat::ForkBound => (input, None),
+        };
+        Ok((
+            input,
+            Self {
+                declaration_id,
+                nonce,
+                service_note_id,
+            },
+        ))
+    }
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
@@ -782,17 +927,21 @@ mod tests {
     }
 
     #[test]
-    fn locator_rejects_multiaddr_with_port_zero() {
+    fn locator_with_port_zero_parses_and_is_flagged() {
+        // Declarations of the legacy era carry such locators, so they decode:
+        // the rules after it refuse a declaration for them instead.
         for addr in [
             "/ip4/159.195.5.169/udp/0/quic-v1",
             "/ip4/159.195.5.169/tcp/0",
         ] {
-            assert!(
-                addr.parse::<Locator>()
-                    .unwrap_err()
-                    .contains("must not contain port 0")
-            );
+            assert!(addr.parse::<Locator>().unwrap().has_zero_port());
         }
+        assert!(
+            !"/ip4/159.195.5.169/udp/3000/quic-v1"
+                .parse::<Locator>()
+                .unwrap()
+                .has_zero_port()
+        );
     }
 
     #[test]
@@ -1073,17 +1222,6 @@ mod nonce_tests {
         let next = Nonce::new(Epoch::new(10), 4).checked_next().unwrap();
         assert_eq!(next.lifecycle_epoch(), Epoch::new(10));
         assert_eq!(next.sequence(), 5);
-    }
-}
-
-#[cfg(any(test, feature = "test-utils"))]
-impl WithdrawMessage {
-    #[must_use]
-    pub const fn sample() -> Self {
-        Self {
-            declaration_id: DeclarationId([27u8; 32]),
-            nonce: Nonce::new(Epoch::new(0), 29),
-        }
     }
 }
 

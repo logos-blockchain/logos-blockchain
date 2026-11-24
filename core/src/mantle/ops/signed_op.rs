@@ -264,6 +264,7 @@ impl SignedOp<Preverified, StandardMode> {
                         Err(error) => return Err(map_verify_failure((op, error))),
                     };
                 let context = SDPDeclareVerificationContext {
+                    legacy: helper.uses_legacy_sdp(),
                     utxo_tree: helper.get_utxos(),
                     channels: helper.get_channels(),
                     service_notes: helper.get_service_notes(),
@@ -490,6 +491,7 @@ mod tests {
         let operation = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(Epoch::from(0), 1),
+            service_note_id: None,
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let signed_operation =

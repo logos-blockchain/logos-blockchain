@@ -801,7 +801,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + Sync
         + Unpin
@@ -982,7 +982,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + Sync
         + Unpin

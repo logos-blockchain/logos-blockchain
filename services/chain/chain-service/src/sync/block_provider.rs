@@ -73,7 +73,7 @@ impl<Tx> BlockProvider<Tx>
 where
     Tx: DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Hashable<Hash = TxHash>
         + StorageSize,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
@@ -987,9 +987,18 @@ mod tests {
             if let Some(ProviderResponse::Available(mut stream)) = rx.recv().await {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
-                        let block: Block<SignedOps<Unverified, StandardMode>> =
-                            Block::decode_all(bytes, &(u8::MAX, u32::MAX, (u16::MAX, u32::MAX)))
-                                .unwrap();
+                        let block: Block<SignedOps<Unverified, StandardMode>> = Block::decode_all(
+                            bytes,
+                            &(
+                                u8::MAX,
+                                u32::MAX,
+                                (
+                                    u16::MAX,
+                                    lb_core::mantle::transactions::TxDecodeContext::UNBOUNDED,
+                                ),
+                            ),
+                        )
+                        .unwrap();
                         blocks.push(block.header().id());
                     } else {
                         break;
@@ -1031,21 +1040,23 @@ mod tests {
                     ProviderResponse::Unavailable { reason } => {
                         (reason == expected_reason, format!("Unavailable({reason})"))
                     }
-                    ProviderResponse::Available(mut stream) => match stream.next().await {
-                        Some(Ok(bytes)) => {
-                            let block = Block::<Ops>::decode_all(
+                    ProviderResponse::Available(mut stream) => {
+                        match stream.next().await {
+                            Some(Ok(bytes)) => {
+                                let block = Block::<Ops>::decode_all(
                                 &bytes,
-                                &(u8::MAX, u32::MAX, (u16::MAX, u32::MAX)),
+                                &(u8::MAX, u32::MAX, (u16::MAX, lb_core::mantle::transactions::TxDecodeContext::UNBOUNDED)),
                             )
                             .unwrap();
-                            (
-                                false,
-                                format!("Available(first_block={:?})", block.header().id()),
-                            )
+                                (
+                                    false,
+                                    format!("Available(first_block={:?})", block.header().id()),
+                                )
+                            }
+                            Some(Err(err)) => (false, format!("Available(first_err={err})")),
+                            None => (false, "Available(empty_stream)".to_owned()),
                         }
-                        Some(Err(err)) => (false, format!("Available(first_err={err})")),
-                        None => (false, "Available(empty_stream)".to_owned()),
-                    },
+                    }
                 }
             } else {
                 (false, "No response received".to_owned())

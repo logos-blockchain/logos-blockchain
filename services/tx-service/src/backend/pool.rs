@@ -290,7 +290,7 @@ where
             .settings
             .accepted_fork_digests
             .get(self.era_in_force)
-            .is_some_and(|era| era.parameters.accepts(&fork_digest));
+            .is_some_and(|era| era.parameters.accepts(fork_digest.as_ref()));
         if !accepted {
             return Err(MempoolError::UnacceptedForkDigest(fork_digest));
         }

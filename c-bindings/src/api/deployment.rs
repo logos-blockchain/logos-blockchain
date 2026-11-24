@@ -36,7 +36,6 @@ pub struct DeploymentInfo {
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
         let deployment_chain_id = deployment.chain_id();
-        let chain = ProtocolScope::Chain(deployment.genesis_id());
         let fork = ProtocolScope::Fork(deployment.fork_digest_in_force());
 
         // Every string is built before any of them is turned into a raw
@@ -45,8 +44,8 @@ impl DeploymentInfo {
         let chain_id = to_c_string(deployment_chain_id.as_ref())?;
         let blend = to_c_string(&fork.to_string_with_name("blend"))?;
         let cryptarchia = to_c_string(&fork.to_string_with_name("cryptarchia"))?;
-        let kademlia = to_c_string(&chain.to_string_with_name("kad"))?;
-        let identify = to_c_string(&chain.to_string_with_name("identify"))?;
+        let kademlia = to_c_string(&deployment.chain_protocol_name("kad"))?;
+        let identify = to_c_string(&deployment.chain_protocol_name("identify"))?;
         let chain_sync = to_c_string(&fork.to_string_with_name("chainsync"))?;
         let mempool = to_c_string(&fork.to_string_with_name("mempool"))?;
         let node_version = to_c_string(&lb_version::build_version_info().version)?;

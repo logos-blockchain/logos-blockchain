@@ -107,6 +107,12 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
             .min_stake
     }
 
+    fn uses_legacy_sdp(&self) -> bool {
+        config_for_slot(self.eras, self.cryptarchia_ledger.slot)
+            .sdp_config
+            .legacy
+    }
+
     fn get_epoch(&self) -> Epoch {
         self.ledger_state.leaders.epoch()
     }

@@ -1,6 +1,7 @@
 pub mod builder;
 pub mod codec;
 pub mod errors;
+pub mod format;
 pub mod gas;
 pub mod genesis_tx;
 pub mod hash;
@@ -14,6 +15,7 @@ use std::sync::LazyLock;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
 pub use errors::VerificationError;
+pub use format::{TxDecodeContext, TxFormat};
 pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices};
 pub use genesis_tx::{
     ConsensusExcludedKeys, GENESIS_REQUIRED_OPS, GenesisDeclarations, GenesisParameters,

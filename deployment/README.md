@@ -152,14 +152,14 @@ value from the era before it. YAML anchors can share a section two eras have
 in common, whole: a section that changes is written out in full.
 
 ```yaml
-0: !V1
+0: !V2
   blend:
     ...
   cryptarchia:
     ...
   time: &time
     slot_duration_in_seconds: 1
-40: !V1
+40: !V2
   blend:
     ...
   cryptarchia:

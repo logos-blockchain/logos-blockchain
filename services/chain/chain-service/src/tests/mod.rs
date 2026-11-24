@@ -1017,6 +1017,7 @@ fn ledger_config_with_uncles(
         epoch_config,
         consensus_config,
         sdp_config: lb_ledger::mantle::sdp::Config {
+            legacy: false,
             service_params: Arc::new(service_params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {

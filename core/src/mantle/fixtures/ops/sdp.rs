@@ -42,9 +42,11 @@ codec_fixtures!(
 );
 codec_fixtures!(
     WithdrawMessage,
+    context = crate::mantle::transactions::TxFormat::ForkBound,
     Self {
         declaration_id: DeclarationId([0u8; _]),
-        nonce: Nonce::new(Epoch::new(0), 2)
+        nonce: Nonce::new(Epoch::new(0), 2),
+        service_note_id: None,
     } => "00000000000000000000000000000000000000000000000000000000000000000200000000000000",
     *SDP_WITHDRAW => SDP_WITHDRAW_PAYLOAD_HEX,
 );

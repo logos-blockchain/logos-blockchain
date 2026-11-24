@@ -308,7 +308,7 @@ pub async fn blend_pending_transactions<BlendService, Transaction, Id, RuntimeSe
 ) -> Result<Vec<Id>, DynError>
 where
     BlendService: ServiceData<Message = ProxyServiceMessage<ServiceMessage<PeerId>>>,
-    Transaction: BinaryDecode<Context = u32>,
+    Transaction: BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>,
     RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
 {
     let relay = handle.relay::<BlendService>().await?;
@@ -328,7 +328,7 @@ where
             // a decoding failure here is this node disagreeing with itself.
             Ok(id(&Transaction::decode_all(
                 encoded_transaction,
-                &u32::MAX,
+                &lb_core::mantle::transactions::TxDecodeContext::UNBOUNDED,
             )?))
         })
         .collect()

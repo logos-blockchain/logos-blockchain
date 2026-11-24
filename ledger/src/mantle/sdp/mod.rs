@@ -129,6 +129,10 @@ impl Service {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
+    /// Whether the era runs the SDP rules of releases 0.3.1 to 0.3.6, under
+    /// which a declaration has another ID and a plain counter for a nonce.
+    #[serde(default)]
+    pub legacy: bool,
     pub service_params: std::sync::Arc<HashMap<ServiceType, ServiceParameters>>,
     pub service_rewards_params: ServiceRewardsParameters,
     pub min_stake: MinStake,
@@ -314,6 +318,7 @@ impl SdpLedger {
 
             let verified_declaration = declaration
                 .into_verified(&SDPDeclareGenesisValidationContext {
+                    legacy: config.legacy,
                     utxo_tree,
                     channels,
                     service_notes: &sdp.service_notes,
@@ -413,7 +418,7 @@ impl SdpLedger {
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let operation = declaration.operation();
-        let operation_id = operation.id();
+        let operation_id = operation.id_under(config.legacy);
 
         let Some(service_state) = self.services.get_mut(&operation.service_type) else {
             return Err(Error::ServiceNotFound(operation.service_type));
@@ -422,6 +427,7 @@ impl SdpLedger {
         // Execute SDP Declare
         let (result, events) = declaration
             .execute(SDPDeclareExecutionContext {
+                legacy: config.legacy,
                 utxo_tree: utxo_tree.clone(),
                 epoch: self.epoch,
                 declarations: service_state.declarations_clone(),
@@ -473,6 +479,7 @@ impl SdpLedger {
 
         let (result, events) = signed_operation
             .execute(SDPDeclareExecutionContext {
+                legacy: config.legacy,
                 utxo_tree: utxo_tree.clone(),
                 epoch: self.epoch,
                 declarations: service_state.declarations_clone(),
@@ -713,6 +720,7 @@ mod tests {
         let mut params = HashMap::new();
         params.insert(ServiceType::BlendNetwork, service_params);
         Config {
+            legacy: false,
             service_params: Arc::new(params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
@@ -817,6 +825,7 @@ mod tests {
         .into_state_trusted::<Preverified>();
         signed_operation
             .verify(&SDPDeclareVerificationContext {
+                legacy: false,
                 utxo_tree: utxos,
                 channels: &Channels::new(),
                 service_notes: ledger.service_notes(),
@@ -1146,6 +1155,7 @@ mod tests {
         let withdraw_op = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(Epoch::new(0), 1),
+            service_note_id: None,
         };
         let proof = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let signed_operation_withdraw =
@@ -1492,6 +1502,7 @@ mod tests {
         let withdraw_op = SDPWithdrawOp {
             declaration_id: declaration_id_a,
             nonce: Nonce::new(Epoch::new(0), 1),
+            service_note_id: None,
         };
         let accepted_nonce = withdraw_op.nonce;
         let proof_withdraw = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
@@ -1625,6 +1636,7 @@ mod tests {
             SDPWithdrawOp {
                 declaration_id: declaration_id_a,
                 nonce: accepted_nonce,
+                service_note_id: None,
             },
             ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
         )
@@ -1695,6 +1707,7 @@ mod tests {
         let stale_operation = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(created_a, 2),
+            service_note_id: None,
         };
         let stale_tx_hash = withdraw_tx_hash_view(stale_operation);
         let stale_withdraw =
@@ -1725,6 +1738,7 @@ mod tests {
         let accepted_operation = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(created_a, 1),
+            service_note_id: None,
         };
         let accepted_tx_hash = withdraw_tx_hash_view(accepted_operation);
         let accepted_withdraw = signed_withdraw(
@@ -1886,6 +1900,7 @@ mod tests {
         let withdraw_op = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(Epoch::new(0), 1),
+            service_note_id: None,
         };
         let proof_withdraw = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let signed_operation_withdraw =
@@ -2009,6 +2024,7 @@ mod tests {
         let withdraw_op = SDPWithdrawOp {
             declaration_id,
             nonce: Nonce::new(Epoch::new(0), 1),
+            service_note_id: None,
         };
         let proof_withdraw = ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
         let signed_operation_withdraw =

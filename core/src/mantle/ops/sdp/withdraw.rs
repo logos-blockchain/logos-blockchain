@@ -84,6 +84,16 @@ impl VerifiableOperation<StandardMode>
 
         let service_note_id = declaration.service_note_id;
 
+        // A withdrawal in the legacy layout names the note itself.
+        if let Some(note_id) = operation.service_note_id
+            && note_id != service_note_id
+        {
+            return Err(SdpError::InvalidServiceNote {
+                note_id,
+                expected: service_note_id,
+            });
+        }
+
         // The note is obtained from the stored declaration and must still be
         // bound to this exact declaration in the service-note index.
         let Some(note) = context.service_notes.get(&service_note_id) else {
@@ -212,6 +222,7 @@ mod tests {
         SDPWithdrawOp {
             declaration_id: declaration.id(),
             nonce,
+            service_note_id: None,
         }
     }
 
@@ -313,6 +324,7 @@ mod tests {
         let operation = SDPWithdrawOp {
             declaration_id: declaration_id_a,
             nonce: Nonce::new(declaration_b.created, 1),
+            service_note_id: None,
         };
         let tx_hash_view = TxHashView::from(TxHash::from([9u8; 32]));
         let signed_operation = preverified_with_keys(

@@ -476,7 +476,7 @@ mod tests {
         .map(|_| WalletEraSettings {
             epoch_length: timing.epoch_length,
             security_param: NonZero::new(5).unwrap(),
-            fork_digest: ForkDigest::new([0x11; 32]),
+            fork_digest: Some(ForkDigest::new([0x11; 32])),
             gas_profile: GAS_PROFILE,
         })
     }
@@ -586,6 +586,7 @@ mod tests {
             epoch_config,
             consensus_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
+                legacy: false,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,

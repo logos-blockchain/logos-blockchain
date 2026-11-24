@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use lb_core::{self, header::HeaderId};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{
     ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
@@ -12,10 +11,7 @@ use lb_network_service::{
 };
 use libp2p::gossipsub::{IdentTopic, TopicHash};
 
-use crate::config::{
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-    network::serde::Config,
-};
+use crate::config::{deployment::EraDefinition, network::serde::Config};
 
 pub mod serde;
 
@@ -32,10 +28,15 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_network_service_settings(
         self,
-        genesis_id: HeaderId,
+        kad_protocol_name: &str,
+        identify_protocol_name: &str,
         eras: &EraSchedule<EraDefinition>,
     ) -> NetworkConfig<Libp2pConfig> {
-        let chain = ProtocolScope::Chain(genesis_id);
+        let stream_protocol = |name: &str| -> lb_libp2p::protocol_name::StreamProtocol {
+            libp2p::StreamProtocol::try_from_owned(name.to_owned())
+                .expect("A protocol name starts with a slash.")
+                .into()
+        };
         let user = self.user;
         NetworkConfig {
             backend: Libp2pConfig {
@@ -44,8 +45,8 @@ impl ServiceConfig {
                     host: user.backend.swarm.host,
                     port: user.backend.swarm.port,
                     node_key: user.backend.swarm.node_key,
-                    kad_protocol_name: chain.to_stream_protocol_with_name("kad"),
-                    identify_protocol_name: chain.to_stream_protocol_with_name("identify"),
+                    kad_protocol_name: stream_protocol(kad_protocol_name),
+                    identify_protocol_name: stream_protocol(identify_protocol_name),
                     gossipsub_config: user.backend.swarm.gossipsub.into(),
                     kademlia_config: KademliaSettings {
                         caching: Some(
@@ -98,7 +99,7 @@ impl ServiceConfig {
                     connection_limits_config: user.backend.swarm.connection_limits.into(),
                 },
                 era_schedule: eras.map(|era| {
-                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    let parameters = era.parameters.ruleset.parameters();
                     let fork = ProtocolScope::Fork(era.parameters.fork_digest);
                     Libp2pEraConfig {
                         fork_digest: era.parameters.fork_digest,

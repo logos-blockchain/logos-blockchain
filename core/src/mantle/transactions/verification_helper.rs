@@ -50,6 +50,10 @@ pub trait OperationVerificationHelper {
 
     fn get_min_stake(&self) -> &MinStake;
 
+    /// Whether declarations are made under the SDP rules of releases 0.3.1 to
+    /// 0.3.6 in the era of the block.
+    fn uses_legacy_sdp(&self) -> bool;
+
     fn get_epoch(&self) -> Epoch;
 
     fn get_block_slot(&self) -> Slot;
@@ -293,6 +297,10 @@ pub mod test_utils {
 
         fn get_min_stake(&self) -> &MinStake {
             &self.min_stake
+        }
+
+        fn uses_legacy_sdp(&self) -> bool {
+            false
         }
 
         fn get_epoch(&self) -> Epoch {

@@ -226,6 +226,7 @@ mod tests {
             epoch_config,
             consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
+                legacy: false,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
@@ -452,6 +453,7 @@ mod tests {
             epoch_config,
             consensus_config: cryptarchia_engine_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
+                legacy: false,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,

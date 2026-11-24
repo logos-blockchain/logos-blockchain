@@ -79,6 +79,8 @@ pub struct Libp2pBroadcastSettings {
     /// The most bytes of data an Operation may carry in the era: what the
     /// transactions leaving Blend in it are decoded under.
     pub max_op_data_size: u32,
+    /// The layout of the era's transactions.
+    pub tx_format: lb_core::mantle::transactions::TxFormat,
 }
 
 fn broadcast_settings_for_era(
@@ -197,17 +199,24 @@ async fn submit_transaction<Item, Key>(
     era_settings: &Libp2pBroadcastSettings,
     transaction: Vec<u8>,
 ) where
-    Item: Hashable<Hash = Key> + BinaryDecode<Context = u32> + Send,
+    Item: Hashable<Hash = Key>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+        + Send,
     Key: PrefixedKey<Prefix: Send> + Send,
 {
-    let Ok(transaction) = Item::decode_all(&transaction, &era_settings.max_op_data_size)
-        .inspect_err(|e| {
-            tracing::error!(
-                target: LOG_TARGET,
-                "Discarding a decapsulated payload that does not decode as a transaction: {e}"
-            );
-        })
-    else {
+    let Ok(transaction) = Item::decode_all(
+        &transaction,
+        &lb_core::mantle::transactions::TxDecodeContext {
+            format: era_settings.tx_format,
+            max_op_data_size: era_settings.max_op_data_size,
+        },
+    )
+    .inspect_err(|e| {
+        tracing::error!(
+            target: LOG_TARGET,
+            "Discarding a decapsulated payload that does not decode as a transaction: {e}"
+        );
+    }) else {
         return;
     };
 
@@ -278,7 +287,7 @@ where
     Mempool::Item: Hashable<Hash = Mempool::Key>
         + Clone
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + 'static,
     Mempool::Key: PrefixedKey<Prefix: Send> + Send + 'static,

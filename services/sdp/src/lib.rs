@@ -1008,6 +1008,7 @@ where
         let withdraw_message = WithdrawMessage {
             declaration_id,
             nonce,
+            service_note_id: None,
         };
 
         let tx_builder = MantleTxBuilder::new();

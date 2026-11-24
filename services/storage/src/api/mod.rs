@@ -215,7 +215,7 @@ where
         events: Events,
         immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), DynError> {
-        let block = Bytes::from(block.encode_to_vec());
+        let block = Bytes::from(block.encode_wire());
         let events = Bytes::try_from(events)?;
         self.request(|response_tx| StorageMsg::StoreBlockData {
             header_id: id,
@@ -232,7 +232,9 @@ where
 
 impl<Tx> StorageApi<Tx>
 where
-    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     pub async fn get_block(&self, id: &HeaderId) -> Option<Block<Tx>> {
         let bytes = self
@@ -279,12 +281,23 @@ where
 /// Decodes a block this node stored. The node checked its blocks against
 /// their era before storing them, so they are read under the most uncles,
 /// transaction bytes, transactions and inscription bytes the maximums' types
-/// allow, as they're assumed to be within the era's limits.
+/// allow, as they're assumed to be within the era's limits. Its transactions
+/// are in the layout of the era of its slot, which its encoding opens with.
 fn decode_stored_block<Tx>(bytes: &[u8]) -> Result<Block<Tx>, DecodeError>
 where
-    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
-    Block::decode_all(bytes, &(u8::MAX, u32::MAX, (u16::MAX, u32::MAX)))
+    Block::decode_wire(
+        bytes,
+        lb_core::block::BlockLimits {
+            max_uncles: u8::MAX,
+            max_transactions: u16::MAX,
+            max_transactions_size: u32::MAX,
+        },
+        u32::MAX,
+    )
 }
 
 impl<Tx: Serialize + Hashable<Hash = TxHash>> StorageApi<Tx> {

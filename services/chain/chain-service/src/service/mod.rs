@@ -250,7 +250,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + Sync
         + Unpin
@@ -982,7 +982,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + Sync
         + Unpin
@@ -1112,7 +1112,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Clone
         + Eq
         + Send
@@ -1149,7 +1149,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Clone
         + Eq
         + Send
@@ -1202,7 +1202,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Clone
         + Eq
         + Send
@@ -1236,7 +1236,7 @@ async fn log_newly_canonical_blocks<Tx>(
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + Sync
         + Unpin
@@ -1293,7 +1293,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + Sync
         + Unpin
@@ -1349,7 +1349,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Send
         + Sync
         + Unpin
@@ -1404,7 +1404,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Hashable<Hash = TxHash>
         + StorageSize,
 {
@@ -1441,7 +1441,7 @@ where
         + Serialize
         + DeserializeOwned
         + BinaryEncode
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Hashable<Hash = TxHash>
         + StorageSize,
 {

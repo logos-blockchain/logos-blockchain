@@ -538,6 +538,7 @@ mod tests {
                 epoch_config,
                 consensus_config,
                 sdp_config: lb_ledger::mantle::sdp::Config {
+                    legacy: false,
                     service_params: Arc::new(
                         [(
                             ServiceType::BlendNetwork,

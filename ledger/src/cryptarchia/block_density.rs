@@ -170,6 +170,7 @@ mod tests {
             ),
             // not used in the tests
             sdp_config: crate::mantle::sdp::Config {
+                legacy: false,
                 service_params: Arc::new(HashMap::new()),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {

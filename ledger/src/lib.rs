@@ -22,7 +22,7 @@ pub use intent::{Intent, IntentStatus};
 use lb_core::{
     block::BlockNumber,
     crypto::Hash as BlockHash,
-    era::ForkDigest,
+    era::{ForkDigest, display_fork_digest},
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         GenesisParameters, NoteId, Utxo, Value, VerificationError,
@@ -117,8 +117,8 @@ pub enum LedgerError<Id> {
     InvalidStoragePrice,
     #[error("Verification error: {0}")]
     VerificationError(#[from] VerificationError),
-    #[error("The era of the block does not accept the fork digest {0} of the transaction")]
-    UnacceptedForkDigest(ForkDigest),
+    #[error("The era of the block does not accept the fork digest {} of the transaction", display_fork_digest(.0.as_ref()))]
+    UnacceptedForkDigest(Option<ForkDigest>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -790,7 +790,11 @@ impl LedgerState {
                 tx_events.extend(events);
             }
             SignedOp::ChannelDeposit(signed_operation) => {
-                check_op_data_size(signed_operation.operation().metadata.len(), config)?;
+                // The legacy rules bound a deposit's metadata only by the size
+                // of a block's transactions.
+                if !config.sdp_config.legacy {
+                    check_op_data_size(signed_operation.operation().metadata.len(), config)?;
+                }
                 let channels = self.mantle_ledger.channels();
                 let utxos = self.cryptarchia_ledger.latest_utxos();
 
@@ -955,7 +959,19 @@ impl LedgerState {
     {
         let config = config_for_slot(eras, self.slot());
         let fork_digest = tx.fork_digest();
-        if !config.accepted_fork_digests.accepts(&fork_digest) {
+        if !config.accepted_fork_digests.accepts(fork_digest.as_ref()) {
+            return Err(LedgerError::UnacceptedForkDigest(fork_digest));
+        }
+        // An Operation in another layout than its transaction's would encode
+        // to bytes no node decodes back.
+        let format = if fork_digest.is_some() {
+            lb_core::mantle::transactions::TxFormat::ForkBound
+        } else {
+            lb_core::mantle::transactions::TxFormat::Legacy
+        };
+        if tx.op_refs_iter().any(|op| {
+            matches!(op, lb_core::mantle::ops::OpRef::SDPWithdraw(withdrawal) if withdrawal.format() != format)
+        }) {
             return Err(LedgerError::UnacceptedForkDigest(fork_digest));
         }
         let mut verified_operations = tx.into_verified_operations();
@@ -2896,7 +2912,7 @@ mod tests {
             .try_apply_block_contents::<_, HeaderId>(&single_era(config), std::iter::once(tx))
             .err()
             .unwrap();
-        assert_eq!(err, LedgerError::UnacceptedForkDigest(other_fork));
+        assert_eq!(err, LedgerError::UnacceptedForkDigest(Some(other_fork)));
     }
 
     #[test]

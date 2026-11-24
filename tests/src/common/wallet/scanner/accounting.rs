@@ -503,6 +503,7 @@ mod tests {
             [Op::SDPWithdraw(WithdrawMessage {
                 declaration_id: declaration.id(),
                 nonce: Nonce::new(0.into(), 0),
+                service_note_id: None,
             })],
         );
         let withdraw_tx = SignedOps::from_ops_with_sample_proofs(withdraw_ops);
@@ -560,6 +561,7 @@ mod tests {
             [Op::SDPWithdraw(WithdrawMessage {
                 declaration_id: declaration.id(),
                 nonce: Nonce::new(0.into(), 1),
+                service_note_id: None,
             })],
         ));
         restored.apply_block(&block(2, vec![withdraw_tx]));
@@ -600,10 +602,12 @@ mod tests {
                 Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: declaration_id_a,
                     nonce: Nonce::new(0.into(), 1),
+                    service_note_id: None,
                 }),
                 Op::SDPWithdraw(WithdrawMessage {
                     declaration_id: declaration_id_b,
                     nonce: Nonce::new(0.into(), 1),
+                    service_note_id: None,
                 }),
             ],
         ));

@@ -489,6 +489,10 @@ pub struct StateArgs {
 pub struct DeploymentArgs {
     #[clap(long = "deployment", env = "DEPLOYMENT")]
     pub custom_deployment_path: Option<PathBuf>,
+    /// Follow the testnet release 0.3.1 started, instead of the default
+    /// deployment.
+    #[clap(long = "testnet", conflicts_with = "custom_deployment_path")]
+    pub testnet: bool,
 }
 
 pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {

@@ -11,10 +11,7 @@ use lb_ledger::mantle::sdp::ServiceRewardsParameters;
 use lb_libp2p::{PeerId, protocol_name::ProtocolScope};
 use lb_services_utils::overwatch::RecoveryData;
 
-use crate::config::{
-    cryptarchia::serde::Config,
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-};
+use crate::config::{cryptarchia::serde::Config, deployment::EraDefinition};
 
 pub mod serde;
 
@@ -50,7 +47,7 @@ impl ServiceConfig {
                     .network
                     .max_discovered_peers_to_try_download,
                 era_schedule: eras.map(|era| {
-                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    let parameters = era.parameters.ruleset.parameters();
                     LibP2pAdapterEraSettings {
                         topic: ProtocolScope::Fork(era.parameters.fork_digest)
                             .to_string_with_name("cryptarchia"),
@@ -75,7 +72,7 @@ impl ServiceConfig {
                 .try_into()
                 .unwrap(),
             era_schedule: eras.map(|era| {
-                let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                let parameters = era.parameters.ruleset.parameters();
                 lb_chain_network_service::ChainNetworkEraSettings {
                     slot_activation_coeff: parameters.cryptarchia.slot_activation_coeff.get(),
                     block_limits: parameters.cryptarchia.block_limits(),
@@ -143,7 +140,7 @@ impl ServiceConfig {
 
 /// The ledger config of an era.
 fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
-    let EraRuleset::V1(parameters) = &era.ruleset;
+    let parameters = era.ruleset.parameters();
     let deployment = &parameters.cryptarchia;
     let blend_rewards_params = parameters.blend_reward_params();
     lb_ledger::Config {
@@ -161,6 +158,7 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
                 .epoch_stake_distribution_stabilization,
         },
         sdp_config: lb_ledger::mantle::sdp::Config {
+            legacy: era.ruleset.is_legacy(),
             min_stake: deployment.sdp_config.min_stake,
             service_params: Arc::new(
                 deployment
@@ -200,5 +198,37 @@ fn ledger_config_for_era(era: &EraDefinition) -> lb_ledger::Config {
         storage_market: deployment.storage_market,
         block_rewards: deployment.block_rewards,
         gas_profile: deployment.gas_profile,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_core::{header::HeaderId, mantle::traits::GenesisTx as _};
+    use lb_ledger::LedgerState;
+
+    use super::ledger_config_for_era;
+    use crate::config::DeploymentSettings;
+
+    #[test]
+    fn the_testnet_genesis_ledger_state_leaves_the_faucet_out_of_the_stake() {
+        let testnet = DeploymentSettings::testnet();
+        let genesis_tx = testnet.genesis_block().genesis_tx().clone();
+        let config = ledger_config_for_era(testnet.era_schedule().genesis().parameters);
+        let (state, _) = LedgerState::from_genesis_tx::<HeaderId>(genesis_tx, &config).unwrap();
+
+        // 16 notes of 1,181,250,000,000 and 33 of 190,909,090,909: every note
+        // but the faucet's, which alone holds `u64::MAX`.
+        assert_eq!(
+            state.epoch_state().total_stake(),
+            16 * 1_181_250_000_000 + 33 * 190_909_090_909
+        );
+        assert_eq!(
+            testnet
+                .genesis_block()
+                .genesis_tx()
+                .genesis_parameters()
+                .pow_reward_pool,
+            12_600_000_000_000
+        );
     }
 }

@@ -153,6 +153,7 @@ mod mantle_test_vectors {
         let withdraw = WithdrawMessage {
             declaration_id: DeclarationId([0x1b; 32]),
             nonce: Nonce::new(0.into(), 0x1d),
+            service_note_id: None,
         };
         let payload = withdraw.encode_to_vec();
         let expected_payload = [vec![0x1b; 32], 0x1du64.to_le_bytes().to_vec()].concat();

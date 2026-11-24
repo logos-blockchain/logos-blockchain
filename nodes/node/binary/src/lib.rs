@@ -6,6 +6,7 @@ pub mod global_allocators;
 pub mod panic;
 
 use color_eyre::eyre::{Result, eyre};
+use lb_core::mantle::transactions::TxFormat;
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
     transactions::states::{Preverified, Unverified},
@@ -152,6 +153,10 @@ pub fn run_node_from_config(
 
     let recovery_data = load_recovery_data(storage_config.clone())?;
 
+    // Before any block is decoded: the slots of the legacy era, whose
+    // transactions are in the legacy layout.
+    TxFormat::set_first_fork_bound_slot(config.deployment.first_fork_bound_slot());
+
     // Before any service starts: a deployment that changed an era the node has
     // already executed must not run on the state the node left.
     if let Some(tip_era) = lb_chain_service::saved_tip_era(&recovery_data)? {
@@ -188,7 +193,11 @@ pub fn run_node_from_config(
     let network_service_config = NetworkConfig {
         user: config.user.network,
     }
-    .into_network_service_settings(config.deployment.genesis_id(), eras);
+    .into_network_service_settings(
+        &config.deployment.chain_protocol_name("kad"),
+        &config.deployment.chain_protocol_name("identify"),
+        eras,
+    );
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,

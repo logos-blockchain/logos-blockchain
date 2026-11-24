@@ -289,6 +289,7 @@ fn config() -> Config {
         epoch_config,
         consensus_config,
         sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
+            legacy: false,
             service_params: Arc::new(HashMap::from([(
                 ServiceType::BlendNetwork,
                 ServiceParameters {

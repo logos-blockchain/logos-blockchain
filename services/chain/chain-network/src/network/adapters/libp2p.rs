@@ -104,7 +104,9 @@ fn decode_block<Tx>(
     era_schedule: &EraSchedule<LibP2pAdapterEraSettings>,
 ) -> Result<Block<Tx>, DecodeError>
 where
-    Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
+    Tx: BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
+        + Hashable<Hash = TxHash>
+        + StorageSize,
 {
     let slot = Slot::peek_decode(bytes, &())?;
     let LibP2pAdapterEraSettings {
@@ -112,14 +114,7 @@ where
         max_op_data_size,
         ..
     } = era_schedule.at_slot(slot).parameters;
-    Block::decode_all(
-        bytes,
-        &(
-            block_limits.max_uncles,
-            block_limits.max_transactions_size,
-            (block_limits.max_transactions, *max_op_data_size),
-        ),
-    )
+    Block::decode_wire(bytes, *block_limits, *max_op_data_size)
 }
 
 impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
@@ -156,7 +151,7 @@ where
     ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
         Tx: SignedMantleTx<Preverified, StandardMode>
-            + BinaryDecode<Context = u32>
+            + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
             + StorageSize
             + Serialize
             + DeserializeOwned
@@ -267,7 +262,7 @@ where
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: SignedMantleTx<Preverified, StandardMode>
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + StorageSize
         + Serialize
         + DeserializeOwned

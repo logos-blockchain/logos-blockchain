@@ -853,6 +853,7 @@ mod pol_tests {
                 4,
             ),
             sdp_config: SdpConfig {
+                legacy: false,
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
