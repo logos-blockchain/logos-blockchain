@@ -460,7 +460,7 @@ impl<'u> ServiceState<'u> {
             .wallet()
             .wallet_state_at(self.lib)
             .expect("WalletState at LIB must exist")
-            .voucher_state();
+            .vouchers;
 
         self.updater.update(Some(RecoveryState {
             next_new_voucher_index: self.next_new_voucher_index,
@@ -835,8 +835,8 @@ mod tests {
         let started = state.wallet().wallet_state_at(saved_at.id).unwrap();
         assert_eq!(started.utxos_owned_by_pks([alice]).len(), 0);
         assert_eq!(started.utxos_owned_by_pks([bob]).len(), 1);
-        assert!(started.voucher_paths.contains_key(&voucher_cm));
-        let path_when_saved = started.voucher_paths.get(&voucher_cm).cloned();
+        assert!(started.vouchers.paths.contains_key(&voucher_cm));
+        let path_when_saved = started.vouchers.paths.get(&voucher_cm).cloned();
 
         // Started while the chain's LIB is a later block: the saved vouchers
         // are not of that block.
@@ -859,9 +859,9 @@ mod tests {
         assert_eq!(state.lib(), lib.id);
         let started = state.wallet().wallet_state_at(lib.id).unwrap();
         assert_eq!(started.utxos_owned_by_pks([bob]).len(), 1);
-        assert!(started.voucher_paths.contains_key(&voucher_cm));
+        assert!(started.vouchers.paths.contains_key(&voucher_cm));
         assert_ne!(
-            started.voucher_paths.get(&voucher_cm).cloned(),
+            started.vouchers.paths.get(&voucher_cm).cloned(),
             path_when_saved
         );
     }
