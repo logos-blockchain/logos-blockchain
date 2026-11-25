@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc, time::SystemTime};
 
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
-use lb_core::{era::ForkDigest, header::HeaderId};
+use lb_core::{block::BlockNumber, era::ForkDigest, header::HeaderId};
 use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_ledger::LedgerState;
 use lb_services_utils::overwatch::RecoveryData;
@@ -189,7 +189,7 @@ pub struct RecoveryProgress {
     pub(crate) tip: HeaderId,
     tip_era: TipEra,
     pub(crate) lib: HeaderId,
-    pub(crate) lib_height: u64,
+    pub(crate) lib_height: BlockNumber,
     pub(crate) storage_blocks_to_remove: HashSet<HeaderId>,
     pub(crate) last_engine_state: Option<LastEngineState>,
 }
@@ -242,7 +242,7 @@ impl RecoveryProgress {
 }
 
 pub struct RecoveryRecorder {
-    checkpoint_lib_height: Option<u64>,
+    checkpoint_lib_height: Option<BlockNumber>,
     fork_digests: Arc<EraSchedule<ForkDigest>>,
 }
 
@@ -264,7 +264,7 @@ impl RecoveryRecorder {
         &self,
         cryptarchia: &Cryptarchia,
         storage_blocks_to_remove: HashSet<HeaderId>,
-    ) -> Result<(Vec<KeyValuePair>, Option<u64>), Error> {
+    ) -> Result<(Vec<KeyValuePair>, Option<BlockNumber>), Error> {
         let mut entries = Vec::new();
         let lib_height = cryptarchia.lib_branch().length();
         let checkpoint_due = self
@@ -304,7 +304,7 @@ impl RecoveryRecorder {
         Ok((entries, checkpoint_lib_height))
     }
 
-    pub(crate) const fn committed(&mut self, checkpoint_lib_height: Option<u64>) {
+    pub(crate) const fn committed(&mut self, checkpoint_lib_height: Option<BlockNumber>) {
         if let Some(height) = checkpoint_lib_height {
             self.checkpoint_lib_height = Some(height);
         }
