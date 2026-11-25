@@ -230,9 +230,7 @@ fn handle_store_block_data(
     immutable_ids: BTreeMap<Slot, HeaderId>,
     response_tx: Sender<Result<(), String>>,
 ) -> Result<(), StorageServiceError> {
-    let result = backend
-        .store_block_data(header_id, parent_id, block, events, immutable_ids)
-        .map_err(|e| StorageServiceError::BackendError(e.into()));
+    let result = backend.store_block_data(header_id, parent_id, block, events, immutable_ids);
 
     let response = result.as_ref().map_err(ToString::to_string).copied();
 
@@ -244,7 +242,7 @@ fn handle_store_block_data(
             ),
         })?;
 
-    result
+    result.map_err(|error| StorageServiceError::BackendError(error.into()))
 }
 
 fn handle_get_block_parent(
