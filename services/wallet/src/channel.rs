@@ -20,7 +20,7 @@ use lb_core::{
 use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet::{
-    NoteSetSpend, WalletError,
+    NoteId, NoteSetSpend, WalletError,
     transaction::{OpWitness, step_witness},
 };
 
@@ -165,11 +165,10 @@ pub fn build_withdrawal(
         .map(|commitment| {
             let owned = spend_state
                 .notes
-                .get(commitment)
-                .filter(|owned| owned.note_set == note_set)
+                .get(&NoteId::new(note_set, *commitment))
                 .ok_or(WalletServiceError::NoChannelNote(*commitment, channel_id))?;
-            if spend_state.is_withdrawing(&owned.nullifier)
-                || state.is_pending_note(&owned.nullifier)
+            if spend_state.is_withdrawing(note_set, &owned.nullifier)
+                || state.is_pending_note(note_set, &owned.nullifier)
             {
                 return Err(WalletServiceError::ChannelNoteInFlight(
                     *commitment,

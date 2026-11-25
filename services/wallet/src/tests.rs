@@ -245,12 +245,10 @@ async fn change_waits_for_storage_and_is_spendable_after_restore() {
     .await;
     assert!(matches!(failed, Err(WalletServiceError::PersistedState(_))));
     assert_eq!(failed_records.len(), 0);
-    assert!(
-        !state
-            .wallet()
-            .known_notes()
-            .contains_key(&expected_change.commitment())
-    );
+    assert!(!state.wallet().known_notes().contains_key(&NoteId::new(
+        NoteSetIndex::Ledger,
+        expected_change.commitment()
+    )));
 
     // Retry the save, then rebuild the wallet and spend the change.
     let (saved, records) = complete_opening_write(
@@ -261,7 +259,9 @@ async fn change_waits_for_storage_and_is_spendable_after_restore() {
     .await;
     saved.unwrap();
     assert_eq!(
-        state.wallet().known_notes()[&expected_change.commitment()].note,
+        state.wallet().known_notes()
+            [&NoteId::new(NoteSetIndex::Ledger, expected_change.commitment())]
+            .note,
         expected_change
     );
     assert!(checkpoint_updates.borrow().is_none());
@@ -328,10 +328,16 @@ async fn leader_reward_waits_for_storage_before_becoming_known() {
         .load_wallet_known_notes()
         .await
         .unwrap();
-    assert_eq!(stored[&reward.commitment()].note, reward);
     assert_eq!(
-        state.wallet().known_notes().get(&reward.commitment()),
-        stored.get(&reward.commitment())
+        stored[&NoteId::new(NoteSetIndex::Ledger, reward.commitment())].note,
+        reward
+    );
+    assert_eq!(
+        state
+            .wallet()
+            .known_notes()
+            .get(&NoteId::new(NoteSetIndex::Ledger, reward.commitment())),
+        stored.get(&NoteId::new(NoteSetIndex::Ledger, reward.commitment()))
     );
 }
 
@@ -361,11 +367,146 @@ async fn imported_note_waits_for_storage_before_becoming_known() {
         .load_wallet_known_notes()
         .await
         .unwrap();
-    assert_eq!(stored.get(&note.commitment()), Some(&imported));
     assert_eq!(
-        state.wallet().known_notes().get(&note.commitment()),
+        stored.get(&NoteId::new(NoteSetIndex::Ledger, note.commitment())),
         Some(&imported)
     );
+    assert_eq!(
+        state
+            .wallet()
+            .known_notes()
+            .get(&NoteId::new(NoteSetIndex::Ledger, note.commitment())),
+        Some(&imported)
+    );
+}
+
+#[tokio::test]
+async fn revealed_note_in_another_set_is_registered_and_adopted() {
+    let key = ZkKey::new(Fr::from(7u64));
+    let ledger = known_note(&key, 100, 1);
+    let settings = wallet_settings(ledger.note.public_key);
+    let updater = updater();
+    let mut state = wallet_state(&settings, &[ledger], &updater);
+    let (storage, mut writes) = storage_api();
+    let kms = kms_api(key);
+    let block = WalletBlock {
+        id: HeaderId::from([1; 32]),
+        parent: HeaderId::from([0; 32]),
+        epoch: Epoch::new(0),
+        revealed: vec![(NoteSetIndex::Sdp, ledger.note)],
+        withdrawals: vec![],
+        updates: vec![NoteSetUpdate {
+            note_set: NoteSetIndex::Sdp,
+            nullifiers: vec![],
+            commitments: vec![ledger.note.commitment()],
+        }],
+    };
+    let (result, records) = complete_opening_write(
+        TestWallet::add_revealed_notes(&block, &mut state, &storage, &kms),
+        &mut writes,
+        Ok(()),
+    )
+    .await;
+    result.unwrap();
+    assert_eq!(
+        storage_with_records(records)
+            .load_wallet_known_notes()
+            .await
+            .unwrap()
+            .size(),
+        1
+    );
+    state.apply_block(&block).unwrap();
+    let at_tip = state.wallet().wallet_state_at(block.id).unwrap();
+    for set in [NoteSetIndex::Ledger, NoteSetIndex::Sdp] {
+        let owned = at_tip
+            .owned_note(set, &ledger.note.commitment())
+            .unwrap()
+            .unwrap();
+        assert_eq!(owned.nullifier, ledger.nullifier);
+    }
+}
+
+#[tokio::test]
+async fn identical_openings_survive_storage_and_lib_checkpoint_restore() {
+    use lb_core::crypto::ZkHasher;
+    let key = ZkKey::new(Fr::from(7u64));
+    let ledger = known_note(&key, 100, 1);
+    let sdp = KnownNote {
+        note_set: NoteSetIndex::Sdp,
+        ..ledger
+    };
+    let settings = wallet_settings(ledger.note.public_key);
+    let (sender, receiver) = watch::channel(None);
+    let updater = StateUpdater::new(Arc::new(sender));
+    let mut registering = wallet_state(&settings, &[], &updater);
+    let (storage, mut writes) = storage_api();
+    let (saved, records) = complete_opening_write(
+        registering.store_known_notes(&storage, &[ledger, sdp]),
+        &mut writes,
+        Ok(()),
+    )
+    .await;
+    saved.unwrap();
+    let restored_openings = storage_with_records(records)
+        .load_wallet_known_notes()
+        .await
+        .unwrap();
+    assert_eq!(restored_openings.size(), 2);
+    let genesis = HeaderId::from([0; 32]);
+    let mut state = ServiceState::from_genesis(
+        restored_openings.clone(),
+        0,
+        &settings,
+        genesis,
+        &[ledger.note],
+        &[sdp.note],
+        &updater,
+    )
+    .unwrap();
+    let block = WalletBlock {
+        id: HeaderId::from([1; 32]),
+        parent: genesis,
+        epoch: Epoch::new(0),
+        revealed: vec![],
+        withdrawals: vec![],
+        updates: vec![NoteSetUpdate {
+            note_set: NoteSetIndex::Ledger,
+            nullifiers: vec![ledger.nullifier],
+            commitments: vec![],
+        }],
+    };
+    state.apply_block(&block).unwrap();
+    state.advance_lib(block.id, 1);
+    let bytes = receiver.borrow().clone().unwrap().to_bytes().unwrap();
+    let mut recovered = RecoveryState::from_bytes(&bytes).unwrap();
+    let (lib, lib_state) = recovered.take_lib_wallet_state().unwrap();
+    let restored = ServiceState::from_lib_wallet_state(
+        restored_openings,
+        0,
+        lib,
+        lib_state,
+        &settings,
+        &updater,
+    );
+    let at_lib = restored.wallet().wallet_state_at(lib).unwrap();
+    assert!(
+        at_lib
+            .owned_note(NoteSetIndex::Ledger, &ledger.note.commitment())
+            .unwrap()
+            .is_none()
+    );
+    let surviving = at_lib
+        .owned_note(NoteSetIndex::Sdp, &sdp.note.commitment())
+        .unwrap()
+        .unwrap();
+    assert_eq!(surviving.nullifier, sdp.nullifier);
+    assert!(
+        surviving
+            .path
+            .verify::<ZkHasher>(sdp.note.commitment().0, at_lib.root_of(NoteSetIndex::Sdp))
+    );
+    assert_eq!(at_lib.aged_notes().unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -549,6 +690,10 @@ async fn split_with_storage_result(
     (response.await.unwrap().map(|reply| reply.response), saved)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exercises the full restored wallet flow"
+)]
 async fn assert_restored_notes_are_spendable(
     settings: &WalletServiceSettings,
     input: KnownNote,
@@ -636,11 +781,16 @@ async fn assert_restored_notes_are_spendable(
             .collect::<Vec<_>>();
         assert_eq!(state.notes.size(), owned_outputs.len());
         for note in owned_outputs {
-            let owned = state.notes.get(&note.commitment()).unwrap();
+            let owned = state
+                .notes
+                .get(&NoteId::new(NoteSetIndex::Ledger, note.commitment()))
+                .unwrap();
             assert_eq!(owned.note, *note);
             assert_eq!(
                 owned.nullifier,
-                restored.wallet().known_notes()[&note.commitment()].nullifier
+                restored.wallet().known_notes()
+                    [&NoteId::new(NoteSetIndex::Ledger, note.commitment())]
+                    .nullifier
             );
         }
         let funded = state
@@ -808,10 +958,7 @@ fn wallet_state<'u>(
     notes: &[KnownNote],
     updater: &'u StateUpdater<Option<RecoveryState>>,
 ) -> ServiceState<'u> {
-    let known_notes = notes
-        .iter()
-        .map(|note| (note.note.commitment(), *note))
-        .collect();
+    let known_notes = notes.iter().map(|note| (note.id(), *note)).collect();
     let genesis_notes = notes.iter().map(|note| note.note).collect::<Vec<_>>();
     ServiceState::from_genesis(
         known_notes,
@@ -884,7 +1031,7 @@ fn wallet_for_backfill<'u>(
     updater: &'u StateUpdater<Option<RecoveryState>>,
 ) -> ServiceState<'u> {
     ServiceState::from_genesis(
-        KnownNotes::from_iter([(known_note.note.commitment(), known_note)]),
+        KnownNotes::from_iter([(known_note.id(), known_note)]),
         0,
         settings,
         genesis,
@@ -898,7 +1045,7 @@ fn wallet_for_backfill<'u>(
 fn assert_single_note_state(state: &WalletState, known_note: KnownNote) {
     let commitment = known_note.note.commitment();
     assert_eq!(state.notes.size(), 1);
-    let owned_note = state.notes.get(&commitment).unwrap();
+    let owned_note = state.notes.get(&known_note.id()).unwrap();
     assert_eq!(owned_note.note, known_note.note);
     assert_eq!(owned_note.nullifier, known_note.nullifier);
     assert_eq!(
@@ -1065,6 +1212,265 @@ async fn a_failed_signing_gives_its_reservations_back() {
 
     assert!(response.await.unwrap().is_err());
     assert_eq!(unused, funded_notes());
+}
+
+// An independently prepared step and a Ledger input can have the same
+// nullifier. Only the Ledger input belongs to the transaction's reservations.
+fn inscription_with_reserved_input() -> (MantleTxBuilder, NoteSetIndex, NoteNullifier) {
+    let inscription = InscriptionOp::sample_with_step();
+    let channel_set = NoteSetIndex::Channel(inscription.channel_id);
+    let nullifier = inscription.steps().next().unwrap().inputs()[0];
+    let builder = MantleTxBuilder::new()
+        .push_op(Op::ChannelInscribe(inscription))
+        .unwrap()
+        .push_op(Op::Transfer(TransferOp::new(
+            [nullifier].into(),
+            [Note::new(1, Fr::ONE, ZkPublicKey::new(Fr::ONE)).commitment()].into(),
+            Fr::ONE,
+            0,
+        )))
+        .unwrap();
+    (builder, channel_set, nullifier)
+}
+
+#[tokio::test]
+async fn failed_funding_does_not_release_an_inscription_step_reservation() {
+    let (builder, channel_set, nullifier) = inscription_with_reserved_input();
+    let updater = updater();
+    let owner = ZkPublicKey::new(Fr::ONE);
+    let mut state = wallet_state(&wallet_settings(owner), &[], &updater);
+    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    let (signer, _kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+    handle(
+        WalletMsg::FundTx {
+            tip: Some(tip()),
+            tx_builder: builder,
+            change_pk: owner,
+            funding_pks: vec![owner],
+            priority_fee_percent: None,
+            max_tx_fee: None,
+            resp_tx,
+        },
+        &mut state,
+        &chain(),
+        &signer,
+        &FuturesUnordered::new(),
+    )
+    .await;
+    assert!(response.await.unwrap().is_err());
+    assert!(state.is_pending_note(channel_set, &nullifier));
+    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+}
+
+#[tokio::test]
+async fn failed_signing_does_not_release_an_inscription_step_reservation() {
+    let (builder, channel_set, nullifier) = inscription_with_reserved_input();
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
+    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    let (signer, _kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+    handle(
+        WalletMsg::SignTx {
+            tip: Some(tip()),
+            tx_builder: builder,
+            resp_tx,
+        },
+        &mut state,
+        &chain(),
+        &signer,
+        &FuturesUnordered::new(),
+    )
+    .await;
+    assert!(response.await.unwrap().is_err());
+    assert!(state.is_pending_note(channel_set, &nullifier));
+    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+}
+
+#[tokio::test]
+async fn failed_funding_proof_does_not_release_an_inscription_step_reservation() {
+    use lb_core::mantle::transactions::builder::FundingNote;
+
+    let (builder, channel_set, nullifier) = inscription_with_reserved_input();
+    let owner = ZkPublicKey::new(Fr::ONE);
+    let builder = builder
+        .extend_funding_inputs(
+            Fr::ONE,
+            [FundingNote {
+                note: Note::new(100, Fr::ONE, owner),
+                nullifier,
+            }],
+        )
+        .unwrap();
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(owner), &[], &updater);
+    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    let (signer, _kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+    handle(
+        WalletMsg::ProveFunding {
+            tip: Some(tip()),
+            tx_builder: builder,
+            resp_tx,
+        },
+        &mut state,
+        &chain(),
+        &signer,
+        &FuturesUnordered::new(),
+    )
+    .await;
+    assert!(response.await.unwrap().is_err());
+    assert!(state.is_pending_note(channel_set, &nullifier));
+    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+}
+
+#[tokio::test]
+async fn asynchronous_signing_and_proving_failures_preserve_step_reservations() {
+    use lb_wallet::transaction::step_witness;
+
+    let (builder, channel_set, nullifier) = inscription_with_reserved_input();
+    let key = ZkKey::new(Fr::from(7u64));
+    let note = KnownNote {
+        nullifier,
+        ..known_note(&key, 100, 1)
+    };
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(key.to_public_key()), &[note], &updater);
+    let (signer, kms) = signer();
+    drop(kms);
+
+    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    let (resp_tx, response) = oneshot::channel();
+    let unused = TestWallet::signing(
+        signing_job(builder.clone()),
+        tip(),
+        builder.note_set_nullifiers_consumed().collect(),
+        &signer,
+        resp_tx,
+    )
+    .await;
+    assert!(response.await.unwrap().is_err());
+    state.release_pending_notes(unused);
+    assert!(state.is_pending_note(channel_set, &nullifier));
+    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+
+    state.reserve_pending_notes([(NoteSetIndex::Ledger, nullifier)]);
+    let witness = step_witness(
+        &state.wallet().spend_state(tip()).unwrap(),
+        state.wallet().known_notes(),
+        NoteSetIndex::Ledger,
+        &[],
+        &[nullifier],
+        &ZkTransferOpening {
+            inputs: vec![note.note],
+            outputs: vec![Note::new(100, Fr::from(2u64), key.to_public_key())],
+        },
+        Fr::ONE,
+    )
+    .unwrap();
+    let (resp_tx, response) = oneshot::channel();
+    let unused = TestWallet::funding_proof(
+        (builder.clone().build(fork_digest()).unwrap(), Some(witness)),
+        tip(),
+        builder.note_set_nullifiers_consumed().collect(),
+        &signer,
+        resp_tx,
+    )
+    .await;
+    assert!(response.await.unwrap().is_err());
+    state.release_pending_notes(unused);
+    assert!(state.is_pending_note(channel_set, &nullifier));
+    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+}
+
+#[tokio::test]
+async fn failed_channel_step_proof_releases_its_set_aware_reservation() {
+    let key = ZkKey::new(Fr::from(7u64));
+    let ledger_note = known_note(&key, 100, 1);
+    let channel_id = ChannelId::from([1; 32]);
+    let channel_set = NoteSetIndex::Channel(channel_id);
+    let channel_note = KnownNote {
+        note_set: channel_set,
+        ..ledger_note
+    };
+    let owner = key.to_public_key();
+    let settings = wallet_settings(owner);
+    let updater = updater();
+    let mut state = ServiceState::from_genesis(
+        [
+            (ledger_note.id(), ledger_note),
+            (channel_note.id(), channel_note),
+        ]
+        .into_iter()
+        .collect(),
+        0,
+        &settings,
+        tip(),
+        &[ledger_note.note],
+        &[],
+        &updater,
+    )
+    .unwrap();
+    let mut parent = tip();
+    for n in 1..=5 {
+        let id = HeaderId::from([n; 32]);
+        let updates = if n == 1 {
+            vec![NoteSetUpdate {
+                note_set: channel_set,
+                nullifiers: vec![],
+                commitments: vec![channel_note.note.commitment()],
+            }]
+        } else {
+            vec![]
+        };
+        state
+            .apply_block(&WalletBlock {
+                id,
+                parent,
+                epoch: Epoch::new(0),
+                updates,
+                revealed: vec![],
+                withdrawals: vec![],
+            })
+            .unwrap();
+        parent = id;
+    }
+    state.reserve_pending_notes([(NoteSetIndex::Ledger, channel_note.nullifier)]);
+    let (signer, kms) = signer();
+    drop(kms);
+    let (resp_tx, mut response) = oneshot::channel();
+    let mut signings = FuturesUnordered::new();
+    handle(
+        WalletMsg::ProveChannelStep {
+            tip: Some(parent),
+            request: ChannelStepRequest {
+                channel_id,
+                appended: vec![],
+                payments: vec![(ZkPublicKey::new(Fr::from(99u64)), channel_note.note.value)],
+                program_deposit: None,
+                inscription: Inscription::new_unchecked(Vec::new()),
+                change_pk: owner,
+                holder_pks: vec![owner],
+            },
+            resp_tx,
+        },
+        &mut state,
+        &chain(),
+        &signer,
+        &signings,
+    )
+    .await;
+    assert!(
+        state.is_pending_note(channel_set, &channel_note.nullifier),
+        "channel step did not reach proving: {:?}",
+        response.try_recv()
+    );
+    let unused = signings.next().await.unwrap();
+    assert!(response.await.unwrap().is_err());
+    state.release_pending_notes(unused);
+    assert!(!state.is_pending_note(channel_set, &channel_note.nullifier));
+    assert!(state.is_pending_note(NoteSetIndex::Ledger, &channel_note.nullifier));
 }
 
 #[tokio::test]
@@ -1338,6 +1744,6 @@ fn unsignable_job() -> TxSigningRequest {
 }
 
 /// The note funding a signing's transaction.
-fn funded_notes() -> Vec<NoteNullifier> {
-    vec![NoteNullifier(Fr::ONE)]
+fn funded_notes() -> Vec<(NoteSetIndex, NoteNullifier)> {
+    vec![(NoteSetIndex::Ledger, NoteNullifier(Fr::ONE))]
 }

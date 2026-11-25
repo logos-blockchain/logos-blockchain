@@ -70,7 +70,7 @@ use lb_time_service::{EraEvent, TimeService, api::TimeServiceApi};
 use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 pub use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, SPEND_ROOT_DEPTH};
 use lb_wallet::{
-    KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
+    KnownNote, KnownNotes, NoteId, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
 };
 use overwatch::{
@@ -228,6 +228,7 @@ pub enum WalletMsg {
     },
     OwnedNote {
         tip: Option<HeaderId>,
+        note_set: NoteSetIndex,
         commitment: NoteCommitment,
         resp_tx: Sender<Result<TipResponse<Option<OwnedNote>>, WalletServiceError>>,
     },
@@ -286,7 +287,7 @@ pub enum WalletMsg {
     // Releases the notes reserved for a funded or split transaction that will
     // not be submitted, so that they fund the next request.
     ReleasePendingNotes {
-        nullifiers: Vec<NoteNullifier>,
+        nullifiers: Vec<(NoteSetIndex, NoteNullifier)>,
     },
 }
 
@@ -354,7 +355,8 @@ where
 /// A signing under way, which the service loop polls along with its other
 /// inputs. It comes to the notes funding the transaction, for the loop to
 /// release, if the requester doesn't end up with the transaction.
-type PendingSigning = Pin<Box<dyn Future<Output = Vec<NoteNullifier>> + Send + Sync>>;
+type PendingSigning =
+    Pin<Box<dyn Future<Output = Vec<(NoteSetIndex, NoteNullifier)>> + Send + Sync>>;
 
 async fn signing_permit(permits: &Semaphore) -> SemaphorePermit<'_> {
     permits
@@ -810,7 +812,7 @@ where
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
-                        state.release_pending_notes(tx_builder.nullifiers_consumed());
+                        state.release_pending_notes(tx_builder.note_set_nullifiers_consumed());
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -823,7 +825,7 @@ where
                 let context = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger.tx_context(era_settings.gas_profile),
                     Err(err) => {
-                        state.release_pending_notes(tx_builder.nullifiers_consumed());
+                        state.release_pending_notes(tx_builder.note_set_nullifiers_consumed());
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -853,12 +855,13 @@ where
                     Self::add_change_note(&funded, change_pk, change_nonce, state, storage, kms)
                         .await
                 {
-                    state.release_pending_notes(funded.nullifiers_consumed());
+                    state.release_pending_notes(funded.note_set_nullifiers_consumed());
                     Self::send_err(resp_tx, err);
                     return;
                 }
 
-                let funded_notes: Vec<NoteNullifier> = funded.nullifiers_consumed().collect();
+                let funded_notes: Vec<(NoteSetIndex, NoteNullifier)> =
+                    funded.note_set_nullifiers_consumed().collect();
                 state.reserve_pending_notes(funded_notes.iter().copied());
 
                 if resp_tx
@@ -877,7 +880,8 @@ where
                 tx_builder,
                 resp_tx,
             } => {
-                let funded_notes: Vec<NoteNullifier> = tx_builder.nullifiers_consumed().collect();
+                let funded_notes: Vec<(NoteSetIndex, NoteNullifier)> =
+                    tx_builder.note_set_nullifiers_consumed().collect();
 
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
@@ -918,7 +922,8 @@ where
                 tx_builder,
                 resp_tx,
             } => {
-                let funded_notes: Vec<NoteNullifier> = tx_builder.nullifiers_consumed().collect();
+                let funded_notes: Vec<(NoteSetIndex, NoteNullifier)> =
+                    tx_builder.note_set_nullifiers_consumed().collect();
 
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
@@ -988,7 +993,12 @@ where
                         return;
                     }
                 };
-                state.reserve_pending_notes(split_notes.iter().copied());
+                state.reserve_pending_notes(
+                    split_notes
+                        .iter()
+                        .copied()
+                        .map(|n| (NoteSetIndex::Ledger, n)),
+                );
 
                 if resp_tx
                     .send(Ok(TipResponse {
@@ -997,17 +1007,21 @@ where
                     }))
                     .is_err()
                 {
-                    state.release_pending_notes(split_notes);
+                    state.release_pending_notes(
+                        split_notes.into_iter().map(|n| (NoteSetIndex::Ledger, n)),
+                    );
                     debug!(target: LOG_TARGET, "Failed to respond to PrepareExactNote");
                 }
             }
             WalletMsg::OwnedNote {
                 tip,
+                note_set,
                 commitment,
                 resp_tx,
             } => {
                 let response =
-                    Self::owned_note_at(tip, &commitment, state.wallet(), cryptarchia).await;
+                    Self::owned_note_at(tip, note_set, &commitment, state.wallet(), cryptarchia)
+                        .await;
                 if resp_tx.send(response).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to OwnedNote");
                 }
@@ -1104,10 +1118,15 @@ where
                     }
                 };
                 match Self::channel_step_job(tip, request, state, storage, kms).await {
-                    Ok((step, outputs, witness)) => {
+                    Ok((step, outputs, witness, note_set)) => {
                         // The proof runs off the loop: the notes are held from
                         // now, so that no other request spends them meanwhile.
-                        let spent: Vec<NoteNullifier> = step.inputs().iter().copied().collect();
+                        let spent: Vec<_> = step
+                            .inputs()
+                            .iter()
+                            .copied()
+                            .map(|n| (note_set, n))
+                            .collect();
                         state.reserve_pending_notes(spent.iter().copied());
                         signings.push(Self::channel_step_proof(
                             (step, outputs, witness),
@@ -1225,7 +1244,7 @@ where
     fn signing(
         job: TxSigningRequest,
         tip: HeaderId,
-        funded_notes: Vec<NoteNullifier>,
+        funded_notes: Vec<(NoteSetIndex, NoteNullifier)>,
         signer: &TxSigner<Kms, RuntimeServiceId>,
         resp_tx: Sender<
             Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>,
@@ -1333,7 +1352,7 @@ where
     fn funding_proof(
         (ops, witness): (Ops, Option<OpWitness>),
         tip: HeaderId,
-        funded_notes: Vec<NoteNullifier>,
+        funded_notes: Vec<(NoteSetIndex, NoteNullifier)>,
         signer: &TxSigner<Kms, RuntimeServiceId>,
         resp_tx: Sender<Result<TipResponse<ProvenFunding>, WalletServiceError>>,
     ) -> PendingSigning {
@@ -1509,12 +1528,15 @@ where
 
     async fn owned_note_at(
         tip: Option<HeaderId>,
+        note_set: NoteSetIndex,
         commitment: &NoteCommitment,
         wallet: &Wallet,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
     ) -> Result<TipResponse<Option<OwnedNote>>, WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
-        let owned_note = wallet.wallet_state_at(tip)?.owned_note(commitment)?;
+        let owned_note = wallet
+            .wallet_state_at(tip)?
+            .owned_note(note_set, commitment)?;
         Ok(TipResponse {
             tip,
             response: owned_note,
@@ -1663,7 +1685,7 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<(Step, Vec<Note>, OpWitness), WalletServiceError> {
+    ) -> Result<(Step, Vec<Note>, OpWitness, NoteSetIndex), WalletServiceError> {
         let (step, opening, witness, note_set) = channel::build_step(tip, request, state)?;
 
         let mut known_notes = Vec::new();
@@ -1674,7 +1696,7 @@ where
         }
         state.store_known_notes(storage, &known_notes).await?;
 
-        Ok((step, opening.outputs, witness))
+        Ok((step, opening.outputs, witness, note_set))
     }
 
     /// Proves `step` from its `witness` and answers the request, as
@@ -1683,7 +1705,7 @@ where
     fn channel_step_proof(
         (step, outputs, witness): (Step, Vec<Note>, OpWitness),
         tip: HeaderId,
-        spent: Vec<NoteNullifier>,
+        spent: Vec<(NoteSetIndex, NoteNullifier)>,
         signer: &TxSigner<Kms, RuntimeServiceId>,
         resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
     ) -> PendingSigning {
@@ -1849,7 +1871,7 @@ where
             if state
                 .wallet()
                 .known_notes()
-                .contains_key(&note.commitment())
+                .contains_key(&NoteId::new(*note_set, note.commitment()))
             {
                 continue;
             }
@@ -1954,7 +1976,7 @@ where
             .await
             .map_err(WalletServiceError::PersistedState)?;
         for note in genesis_known_notes {
-            known_notes.insert_mut(note.note.commitment(), note);
+            known_notes.insert_mut(note.id(), note);
         }
         Ok(ServiceState::from_genesis(
             known_notes,

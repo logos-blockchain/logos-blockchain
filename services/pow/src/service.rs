@@ -2348,7 +2348,10 @@ mod tests {
         let known: KnownNotes = openings
             .values()
             .flat_map(|opening| opening.inputs.iter())
-            .map(|note| (note.commitment(), known_note(*note)))
+            .map(|note| {
+                let known = known_note(*note);
+                (known.id(), known)
+            })
             .collect();
         let state = WalletState::from_genesis(&known, genesis, &[], Epoch::new(0))?;
         let context = WitnessContext {
@@ -2884,7 +2887,10 @@ mod tests {
         let known: KnownNotes = openings
             .values()
             .flat_map(|opening| opening.inputs.iter())
-            .map(|note| (note.commitment(), known_note(*note)))
+            .map(|note| {
+                let known = known_note(*note);
+                (known.id(), known)
+            })
             .collect();
         let witnesses = op_witnesses(
             &wallet.spend_state(tip).unwrap(),

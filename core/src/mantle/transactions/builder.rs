@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
+    slice,
 };
 
 use lb_groth16::{AdditiveGroup as _, Fr, serde::serde_fr};
@@ -14,7 +15,9 @@ use crate::{
     era::ForkDigest,
     mantle::{
         Note, Op, Value,
+        channel::channel_note_set,
         gas::{GasCost, GasOverflow, TxGasCalculator as _},
+        note_set::NoteSetIndex,
         notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::transfer::TransferOp,
         transactions::{
@@ -339,6 +342,49 @@ impl MantleTxBuilder {
             .chain(self.funding_inputs.iter().map(|funding| funding.nullifier))
     }
 
+    /// The same inputs as `nullifiers_consumed`, with their note sets.
+    /// Channel inscription steps are prepared and reserved separately. The
+    /// null channel has no note set and cannot consume a channel note.
+    pub fn note_set_nullifiers_consumed(
+        &self,
+    ) -> impl Iterator<Item = (NoteSetIndex, NoteNullifier)> {
+        self.ops
+            .iter()
+            .flat_map(|op| {
+                let (set, inputs): (Option<NoteSetIndex>, &[NoteNullifier]) = match op {
+                    Op::Transfer(transfer) => (Some(NoteSetIndex::Ledger), &transfer.inputs),
+                    Op::ChannelDeposit(deposit) => (Some(NoteSetIndex::Ledger), &deposit.inputs),
+                    Op::ChannelWithdraw(withdraw) => {
+                        (channel_note_set(withdraw.channel_id), &withdraw.inputs)
+                    }
+                    Op::SDPDeclare(declare) => (Some(NoteSetIndex::Ledger), &declare.inputs),
+                    Op::SDPWithdraw(withdraw) => (
+                        Some(NoteSetIndex::Sdp),
+                        slice::from_ref(&withdraw.service_note_nullifier),
+                    ),
+                    _ => (None, &[]),
+                };
+                inputs
+                    .iter()
+                    .copied()
+                    .filter_map(move |nullifier| set.map(|set| (set, nullifier)))
+            })
+            .chain(
+                self.funding_inputs
+                    .iter()
+                    .map(|funding| (NoteSetIndex::Ledger, funding.nullifier)),
+            )
+    }
+
+    /// Nullifiers consumed from a particular note set, including funding.
+    pub fn nullifiers_consumed_in(
+        &self,
+        note_set: NoteSetIndex,
+    ) -> impl Iterator<Item = NoteNullifier> {
+        self.note_set_nullifiers_consumed()
+            .filter_map(move |(set, nullifier)| (set == note_set).then_some(nullifier))
+    }
+
     #[must_use]
     pub fn funding_inputs(&self) -> &[FundingNote] {
         &self.funding_inputs
@@ -459,6 +505,74 @@ mod tests {
             note: Note::new(value, Fr::from(nonce), ZkPublicKey::new(Fr::from(9u64))),
             nullifier: NoteNullifier(Fr::from(nullifier)),
         }
+    }
+
+    #[test]
+    fn consumed_nullifiers_keep_the_operation_note_set() {
+        use crate::mantle::ops::sdp::{SDPDeclareOp, SDPWithdrawOp};
+
+        let channel = ChannelId::from([2; 32]);
+        let nf = NoteNullifier(Fr::from(42u64));
+        let builder = MantleTxBuilder::new()
+            .push_op(Op::SDPWithdraw(SDPWithdrawOp {
+                service_note_nullifier: nf,
+                ..SDPWithdrawOp::sample()
+            }))
+            .unwrap()
+            .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
+                channel_id: channel,
+                inputs: [nf].into(),
+                ..ChannelWithdrawOp::sample()
+            }))
+            .unwrap()
+            .push_op(Op::SDPDeclare(SDPDeclareOp {
+                inputs: [nf].into(),
+                ..SDPDeclareOp::sample()
+            }))
+            .unwrap()
+            .extend_funding_inputs(Fr::ZERO, [funding_note(50, 1, 42)])
+            .unwrap();
+        assert_eq!(
+            builder
+                .nullifiers_consumed_in(NoteSetIndex::Sdp)
+                .collect::<Vec<_>>(),
+            [nf]
+        );
+        assert_eq!(
+            builder
+                .nullifiers_consumed_in(NoteSetIndex::Channel(channel))
+                .collect::<Vec<_>>(),
+            [nf]
+        );
+        assert_eq!(
+            builder
+                .nullifiers_consumed_in(NoteSetIndex::Ledger)
+                .collect::<Vec<_>>(),
+            [nf, nf]
+        );
+    }
+
+    #[test]
+    fn inscription_steps_are_not_transaction_reservations() {
+        let channel = ChannelId::from([5; 32]);
+        let mut inscription = InscriptionOp::sample_with_step();
+        inscription.channel_id = channel;
+        let step_inputs = inscription
+            .steps()
+            .flat_map(|step| step.inputs().iter().copied())
+            .collect::<Vec<_>>();
+        assert_ne!(step_inputs, []);
+        let builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(inscription))
+            .unwrap();
+        assert!(builder.note_set_nullifiers_consumed().next().is_none());
+        assert!(builder.nullifiers_consumed().next().is_none());
+        assert!(
+            builder
+                .nullifiers_consumed_in(NoteSetIndex::Ledger)
+                .next()
+                .is_none()
+        );
     }
 
     #[test]
