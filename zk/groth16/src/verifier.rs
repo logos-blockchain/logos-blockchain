@@ -10,7 +10,7 @@ use ark_groth16::{Groth16, r1cs_to_qap::LibsnarkReduction};
 use ark_relations::r1cs::SynthesisError;
 use rand::thread_rng;
 use rayon::{
-    iter::{IndexedParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _},
+    iter::{IndexedParallelIterator as _, ParallelIterator as _},
     slice::ParallelSlice as _,
 };
 
@@ -42,23 +42,6 @@ pub fn groth16_verify<E: Pairing>(
     let proof: ark_groth16::Proof<E> = proof.into();
     Groth16::<E, LibsnarkReduction>::verify_proof(vk.as_ref(), &proof, public_inputs)
         .map_err(VerificationError)
-}
-
-/// Maps `items` in order on the threads of the global `rayon` pool.
-///
-/// For the work that precedes a batch verification and grows with its proofs,
-/// such as expanding them. Fails with the error of one of the items that
-/// failed.
-pub fn par_try_map<T, U, Err>(
-    items: &[T],
-    map: impl Fn(&T) -> Result<U, Err> + Sync + Send,
-) -> Result<Vec<U>, Err>
-where
-    T: Sync,
-    U: Send,
-    Err: Send,
-{
-    items.par_iter().map(map).collect()
 }
 
 /// The proofs a thread takes at a time: fewer are not worth handing over.
