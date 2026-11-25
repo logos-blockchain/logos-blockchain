@@ -8,7 +8,8 @@ use testing_framework_core::scenario::{DynError, NodeStateSource, SnapshotStore}
 pub const NODE_DB_FOLDER: &str = "db";
 
 /// The subdirectory of a node runtime directory its DB is in.
-fn node_db_subdir() -> String {
+#[must_use]
+pub fn node_db_subdir() -> String {
     RocksDbSettings {
         folder_name: NODE_DB_FOLDER.to_owned(),
         ..RocksDbSettings::default()
