@@ -159,25 +159,125 @@ pub struct WalletState {
     /// wallet-driven spending.
     #[serde(default)]
     pub channel_notes: rpds::HashTrieSetSync<NoteId>,
-    pub epoch: Epoch,
-    /// MMR of all voucher commitments included in the chain
-    pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
-    /// All **tracked** voucher merkle paths up to the current block.
-    ///
-    /// The sibling covering the latest vouchers may be stale; see
-    /// [`MerkleMountainRange::push_with_lazy_paths`].
-    pub voucher_paths: VoucherPaths,
-    /// A snapshot of **tracked** voucher merkle paths,
-    /// updated at the first block of each epoch.
-    pub voucher_paths_snapshot: VoucherPaths,
+    /// What the wallet tracks of the vouchers as of this block.
+    pub vouchers: VoucherState,
 }
 
 pub type VoucherPaths = rpds::HashTrieMapSync<VoucherCm, MerklePath>;
 
+/// What a [`WalletState`] tracks of the vouchers.
+///
+/// Unlike its notes, a ledger state cannot give it back: the ledger keeps the
+/// peaks of the voucher tree only, so a path is rebuilt by applying every
+/// block since its voucher's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoucherState {
+    /// The epoch of the block the vouchers are tracked at.
+    pub epoch: Epoch,
+    /// MMR of all voucher commitments included in the chain
+    pub tree: MerkleMountainRange<VoucherCm, ZkHasher>,
+    /// All **tracked** voucher merkle paths up to the current block.
+    ///
+    /// The sibling covering the latest vouchers may be stale; see
+    /// [`MerkleMountainRange::push_with_lazy_paths`].
+    pub paths: VoucherPaths,
+    /// A snapshot of **tracked** voucher merkle paths,
+    /// updated at the first block of each epoch.
+    pub paths_snapshot: VoucherPaths,
+}
+
+impl VoucherState {
+    /// The vouchers as a ledger state gives them: the tree, and the path of
+    /// none.
+    #[must_use]
+    pub fn from_ledger(ledger: &LedgerState) -> Self {
+        Self {
+            epoch: ledger.epoch_state().epoch,
+            tree: ledger.mantle_ledger().vouchers().clone(),
+            paths: rpds::HashTrieMapSync::new_sync(),
+            paths_snapshot: rpds::HashTrieMapSync::new_sync(),
+        }
+    }
+
+    /// The vouchers as tracked after a block of `epoch` that carries
+    /// `voucher_cm`.
+    ///
+    /// The tree takes the block's voucher, and the tracked paths follow it.
+    /// The voucher's own path is tracked from here on if it is one of
+    /// `known_vouchers`, and the paths of vouchers no longer among them are
+    /// dropped. The first block of an epoch takes the snapshot of the paths.
+    pub fn apply_block<VoucherId>(
+        &self,
+        known_vouchers: &Vouchers<VoucherId>,
+        epoch: Epoch,
+        voucher_cm: VoucherCm,
+    ) -> Result<Self, WalletError> {
+        // Snapshot voucher paths if epoch is advancing
+        let paths_snapshot = if epoch > self.epoch {
+            self.paths
+                .iter()
+                .map(|(cm, path)| {
+                    let mut path = path.clone();
+                    self.tree.refresh_path(&mut path)?;
+                    Ok((*cm, path))
+                })
+                .collect::<Result<_, WalletError>>()?
+        } else {
+            self.paths_snapshot.clone()
+        };
+
+        // Filter out vouchers that have been claimed/finalized.
+        // `known_vouchers` always reflects the latest set of vouchers to be
+        // tracked.
+        let mut paths = self.paths.clone();
+        for cm in self.paths.keys() {
+            if known_vouchers.get(cm).is_none() {
+                paths.remove_mut(cm);
+            }
+        }
+
+        // Push the new voucher to the MMR and update the tracked paths it
+        // settles
+        let (tree, new_path) = self
+            .tree
+            .push_with_lazy_paths(voucher_cm, &mut paths)
+            .map_err(|error| match error {
+                lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
+                lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
+            })?;
+
+        // Track the new voucher's path if it is owned by us
+        if known_vouchers.get(&voucher_cm).is_some() {
+            paths.insert_mut(voucher_cm, new_path);
+        }
+
+        Ok(Self {
+            epoch,
+            tree,
+            paths,
+            paths_snapshot,
+        })
+    }
+}
+
 impl WalletState {
+    /// The state of a block: the notes its ledger state holds for the known
+    /// keys, and the tree of vouchers it holds, with the path of none.
+    #[must_use]
     pub fn from_ledger<KeyId>(
         known_keys: &HashMap<ZkPublicKey, KeyId>,
         ledger: &LedgerState,
+    ) -> Self {
+        Self::from_ledger_and_vouchers(known_keys, ledger, VoucherState::from_ledger(ledger))
+    }
+
+    /// The state of a block: the notes its ledger state holds for the known
+    /// keys, and the vouchers as `vouchers` tracks them at that block.
+    #[must_use]
+    pub fn from_ledger_and_vouchers<KeyId>(
+        known_keys: &HashMap<ZkPublicKey, KeyId>,
+        ledger: &LedgerState,
+        vouchers: VoucherState,
     ) -> Self {
         let mut utxos = rpds::HashTrieMapSync::new_sync();
         let mut pk_index = rpds::HashTrieMapSync::new_sync();
@@ -218,10 +318,7 @@ impl WalletState {
             pk_index,
             service_notes,
             channel_notes,
-            epoch: ledger.epoch_state().epoch,
-            vouchers: ledger.mantle_ledger().vouchers().clone(),
-            voucher_paths: rpds::HashTrieMapSync::new_sync(),
-            voucher_paths_snapshot: rpds::HashTrieMapSync::new_sync(),
+            vouchers,
         }
     }
 
@@ -443,80 +540,17 @@ impl WalletState {
             }
         }
 
-        let (vouchers, voucher_paths, voucher_paths_snapshot) =
-            self.apply_voucher(known_vouchers, block)?;
+        let vouchers = self
+            .vouchers
+            .apply_block(known_vouchers, block.epoch, block.voucher_cm)?;
 
         Ok(Self {
             utxos,
             pk_index,
             service_notes,
             channel_notes,
-            epoch: block.epoch,
             vouchers,
-            voucher_paths,
-            voucher_paths_snapshot,
         })
-    }
-
-    /// Apply the voucher commitment from the block to the wallet state.
-    ///
-    /// Returns:
-    /// - Updated MMR including the new voucher commitment
-    /// - Updated tracked voucher paths, including the new voucher if it is
-    ///   owned by us
-    /// - Snapshot of trakced voucher paths (updated only if epoch is advancing)
-    fn apply_voucher<VoucherId>(
-        &self,
-        known_vouchers: &Vouchers<VoucherId>,
-        block: &WalletBlock,
-    ) -> Result<
-        (
-            MerkleMountainRange<VoucherCm, ZkHasher>,
-            VoucherPaths,
-            VoucherPaths,
-        ),
-        WalletError,
-    > {
-        // Snapshot voucher paths if epoch is advancing
-        let snapshot = if block.epoch > self.epoch {
-            self.voucher_paths
-                .iter()
-                .map(|(cm, path)| {
-                    let mut path = path.clone();
-                    self.vouchers.refresh_path(&mut path)?;
-                    Ok((*cm, path))
-                })
-                .collect::<Result<_, WalletError>>()?
-        } else {
-            self.voucher_paths_snapshot.clone()
-        };
-
-        // Filter out vouchers that have been claimed/finalized.
-        // `known_vouchers` always reflects the latest set of vouchers to be
-        // tracked.
-        let mut voucher_paths = self.voucher_paths.clone();
-        for cm in self.voucher_paths.keys() {
-            if known_vouchers.get(cm).is_none() {
-                voucher_paths.remove_mut(cm);
-            }
-        }
-
-        // Push the new voucher to the MMR and update the tracked paths it
-        // settles
-        let (vouchers, new_path) = self
-            .vouchers
-            .push_with_lazy_paths(block.voucher_cm, &mut voucher_paths)
-            .map_err(|error| match error {
-                lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
-                lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
-            })?;
-
-        // Track the new voucher's path if it is owned by us
-        if known_vouchers.get(&block.voucher_cm).is_some() {
-            voucher_paths.insert_mut(block.voucher_cm, new_path);
-        }
-
-        Ok((vouchers, voucher_paths, snapshot))
     }
 }
 
@@ -679,13 +713,41 @@ where
     ) -> Self {
         let known_keys = known_keys.into_iter().collect();
         let wallet_state = WalletState::from_ledger(&known_keys, ledger);
+        Self::at_lib(known_keys, known_vouchers, lib, wallet_state)
+    }
 
+    /// Initialize [`Wallet`] from a given [`LedgerState`] at LIB, for a
+    /// wallet that already tracks vouchers.
+    ///
+    /// The notes are those the ledger state holds for the known keys. The
+    /// vouchers are tracked from `voucher_state`: a ledger state does not
+    /// hold their Merkle paths.
+    pub fn from_lib_ledger_and_voucher_state(
+        known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
+        known_vouchers: Vouchers<VoucherId>,
+        lib: HeaderId,
+        ledger: &LedgerState,
+        voucher_state: VoucherState,
+    ) -> Self {
+        let known_keys = known_keys.into_iter().collect();
+        let wallet_state =
+            WalletState::from_ledger_and_vouchers(&known_keys, ledger, voucher_state);
+        Self::at_lib(known_keys, known_vouchers, lib, wallet_state)
+    }
+
+    fn at_lib(
+        known_keys: HashMap<ZkPublicKey, KeyId>,
+        known_vouchers: Vouchers<VoucherId>,
+        lib: HeaderId,
+        wallet_state: WalletState,
+    ) -> Self {
         info!(
             target: LOG_TARGET,
             ?lib,
             n_known_keys = known_keys.len(),
             n_known_vouchers = known_vouchers.count(),
-            n_all_vouchers = wallet_state.vouchers.len(),
+            n_all_vouchers = wallet_state.vouchers.tree.len(),
+            n_voucher_paths = wallet_state.vouchers.paths.size(),
             "initializing wallet with LIB ledger state"
         );
 
@@ -717,9 +779,9 @@ where
             ?lib,
             n_known_keys = known_keys.len(),
             n_known_vouchers = known_vouchers.count(),
-            n_all_vouchers = wallet_state.vouchers.len(),
-            n_voucher_paths = wallet_state.voucher_paths.size(),
-            n_snapshotted_voucher_paths = wallet_state.voucher_paths_snapshot.size(),
+            n_all_vouchers = wallet_state.vouchers.tree.len(),
+            n_voucher_paths = wallet_state.vouchers.paths.size(),
+            n_snapshotted_voucher_paths = wallet_state.vouchers.paths_snapshot.size(),
             "initializing wallet with LIB wallet state"
         );
 
@@ -781,7 +843,8 @@ where
     ) -> Result<Option<MerklePath>, WalletError> {
         Ok(self
             .wallet_state_at(tip)?
-            .voucher_paths_snapshot
+            .vouchers
+            .paths_snapshot
             .get(cm)
             .cloned())
     }
@@ -795,10 +858,10 @@ where
         cm: &VoucherCm,
     ) -> Result<Option<MerklePath>, WalletError> {
         let state = self.wallet_state_at(tip)?;
-        let Some(mut path) = state.voucher_paths.get(cm).cloned() else {
+        let Some(mut path) = state.vouchers.paths.get(cm).cloned() else {
             return Ok(None);
         };
-        state.vouchers.refresh_path(&mut path)?;
+        state.vouchers.tree.refresh_path(&mut path)?;
         Ok(Some(path))
     }
 
@@ -962,6 +1025,65 @@ mod tests {
 
     type TestVoucherId = (u64, u64);
 
+    /// A wallet built from a ledger state and the vouchers another wallet
+    /// tracks holds the notes of its own keys, and that wallet's voucher
+    /// paths.
+    #[test]
+    fn a_wallet_built_from_a_ledger_and_a_voucher_state_keeps_the_voucher_paths() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let (voucher_cm, voucher_nf) = voucher(100, 0);
+        let genesis = HeaderId::from([0; 32]);
+        let ledger = LedgerState::from_utxos(
+            [
+                Utxo::new(tx_hash(0), 0, Note::new(100, alice)),
+                Utxo::new(tx_hash(0), 1, Note::new(20, bob)),
+            ],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
+
+        // A wallet with Alice's key, at a block that carries one of its
+        // vouchers and leaves the notes as they were.
+        let mut tracking = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1u64)],
+            Vouchers::new([(voucher_cm, voucher_nf, (100, 0))]),
+            genesis,
+            &ledger,
+        );
+        let lib = HeaderId::from([1; 32]);
+        tracking
+            .apply_block(&WalletBlock {
+                id: lib,
+                parent: genesis,
+                epoch: 0.into(),
+                voucher_cm,
+                header_ops: vec![],
+                txs: BlockTransactions::empty(),
+            })
+            .unwrap();
+        let tracked = tracking.wallet_state_at(lib).unwrap();
+        assert!(tracked.vouchers.paths.contains_key(&voucher_cm));
+
+        // Built with Bob's key in place of Alice's.
+        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_and_voucher_state(
+            [(bob, 2u64)],
+            Vouchers::new([(voucher_cm, voucher_nf, (100, 0))]),
+            lib,
+            &ledger,
+            tracked.vouchers.clone(),
+        );
+        let built = wallet.wallet_state_at(lib).unwrap();
+        assert_eq!(built.utxos_owned_by_pks([alice]).len(), 0);
+        assert_eq!(built.utxos_owned_by_pks([bob]).len(), 1);
+        assert_eq!(built.utxos.size(), 1);
+        assert_eq!(built.vouchers.tree.len(), tracked.vouchers.tree.len());
+        assert!(built.vouchers.paths.contains_key(&voucher_cm));
+        // It holds the state of that block alone.
+        assert!(!wallet.has_processed_block(genesis));
+    }
+
     #[test]
     fn test_initialization() {
         let alice = pk(1);
@@ -1038,10 +1160,10 @@ mod tests {
             &HashMap::<ZkPublicKey, u64>::new(),
             &LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty()),
         );
-        state.vouchers = MerkleMountainRange::new().push(voucher_cm).unwrap();
-        state.voucher_paths = rpds::HashTrieMapSync::new_sync()
+        state.vouchers.tree = MerkleMountainRange::new().push(voucher_cm).unwrap();
+        state.vouchers.paths = rpds::HashTrieMapSync::new_sync()
             .insert(voucher_cm, MerklePath::try_new(0, vec![]).unwrap());
-        state.voucher_paths_snapshot = state.voucher_paths.clone();
+        state.vouchers.paths_snapshot = state.vouchers.paths.clone();
         let state: WalletState =
             bincode::deserialize(&bincode::serialize(&state).unwrap()).unwrap();
 
