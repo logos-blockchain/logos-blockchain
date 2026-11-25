@@ -1,0 +1,181 @@
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch: # Allow manual triggering
+
+name: Post-merge checks
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  features:
+    name: Check packages feature combinations (${{ matrix.platform.label }}, ${{ matrix.shard.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
+          - os: bladerunner-linux
+            label: self-hosted-linux
+          - os: bladerunner-macos
+            label: self-hosted-macos
+        # The node's feature combinations take about as long as every other crate's together, so they are split
+        # across two jobs.
+        shard:
+          - name: node-1-of-2
+            selection: --package logos-blockchain-node --partition 1/2
+          - name: node-2-of-2
+            selection: --package logos-blockchain-node --partition 2/2
+          - name: other-crates
+            selection: --workspace --exclude logos-blockchain-node
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      CARGO_BUILD_WARNINGS: deny
+      # mbx never shares incremental compilations.
+      CARGO_INCREMENTAL: 0
+      # The runners are disposable, so mbx can keep everything it restores until the job ends.
+      MBX_GC_AUTO: 0
+    steps:
+      # Disable rustup override before checkout, so the toolchain state is clean before any workspace files or
+      # .rust-toolchain.toml are present. Prevents a stale override from affecting the toolchain resolution during
+      # checkout or subsequent steps.
+      - name: Disable rustup override
+        run: rustup override unset || true
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
+        with:
+          tool: cargo-hack
+
+      # Prune before the build cache is restored, so a reused runner has room for it.
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
+
+      # Restores the compiler outputs of this shard's last run, keyed by their inputs rather than by file times, so a
+      # fresh checkout recompiles only the changed crates and their dependents.
+      - name: Set up mbx build cache
+        uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd  # Version 1.7.4
+        with:
+          version: 1.30.0
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          # Each shard builds different feature combinations, so each keeps its own entries.
+          cache-generation: cargo-hack-${{ matrix.shard.name }}
+          # A manual run warms the cache for the next one on the same branch, so changes can be tried before merging.
+          save-on-workflow-dispatch: true
+
+      # mbx doesn't cache while another rustc wrapper is set, so this clears the one the runner image may set for
+      # sccache.
+      - name: Run Clippy on every feature combination
+        run: |
+          unset RUSTC_WRAPPER
+          mbx hack clippy --feature-powerset --all-targets --keep-going ${{ matrix.shard.selection }}
+
+      - name: Show mbx statistics
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: mbx stats
+
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
+
+  # The end-to-end tests only build the node, so this is where the other binaries get a release build (fat LTO, one
+  # codegen unit), after each merge.
+  release-binaries:
+    name: Build release binaries (${{ matrix.platform.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
+          - os: bladerunner-linux
+            label: self-hosted-linux
+          - os: bladerunner-macos
+            label: self-hosted-macos
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+      # mbx never shares incremental compilations.
+      CARGO_INCREMENTAL: 0
+      # The runners are disposable, so mbx can keep everything it restores until the job ends.
+      MBX_GC_AUTO: 0
+    steps:
+      - name: Disable rustup override
+        run: rustup override unset || true
+
+      - name: Expose gmp to cargo (macOS runners)
+        if: runner.os == 'macOS'
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
+
+      - name: Set up mbx build cache
+        uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd  # Version 1.7.4
+        with:
+          version: 1.30.0
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          cache-generation: release-binaries-v1
+          save-on-workflow-dispatch: true
+
+      - name: Build every binary with the release profile
+        run: |
+          unset RUSTC_WRAPPER
+          mbx build --locked --release --workspace --bins
+
+      - name: Show mbx statistics
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: mbx stats
+
+  report:
+    name: Report failures
+    needs: [ features, release-binaries ]
+    if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: bladerunner-linux
+    steps:
+      - name: Create or update failure issue
+        run: |
+          FAILED_JOBS=$(nix run 'nixpkgs#gh' -- api \
+            /repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs \
+            --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")')
+
+          TITLE="[CI GENERATED] Post-merge checks failed"
+          EXISTING_ISSUE=$(nix run 'nixpkgs#gh' -- issue list --search "$TITLE" --state open --json number --jq '.[0].number')
+
+          COMMIT_AUTHOR=$(nix run 'nixpkgs#gh' -- api \
+            /repos/${{ github.repository }}/commits/${{ github.sha }} \
+            --jq '.author.login // empty' 2>/dev/null || true)
+
+          BODY="Post-merge checks failed in the following jobs: $FAILED_JOBS
+          See details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ -z "$EXISTING_ISSUE" ]; then
+            nix run 'nixpkgs#gh' -- issue create --title "$TITLE" --body "$BODY" --label "bug" --assignee "$COMMIT_AUTHOR"
+          else
+            nix run 'nixpkgs#gh' -- issue comment "$EXISTING_ISSUE" --body "Another failure occurred: $BODY"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
