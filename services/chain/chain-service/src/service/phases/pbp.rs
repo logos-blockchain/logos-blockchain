@@ -142,7 +142,7 @@ mod tests {
 
     use super::{Preverified, ProlongedBootstrapPeriod, Service, StandardMode};
     use crate::{
-        LibCheckpoint,
+        DEFAULT_CHECKPOINT_INTERVAL_BLOCKS, LibCheckpoint,
         notifier::ChainOnlineNotifier,
         relays::CryptarchiaConsensusRelays,
         service::EpochStateQuerySourceTracker,
@@ -206,7 +206,11 @@ mod tests {
             phase: ProlongedBootstrapPeriod,
             cryptarchia: chain,
             inbound_relay: consensus.inbound_relay,
-            recovery_recorder: RecoveryRecorder::new(&checkpoint, fork_digests),
+            recovery_recorder: RecoveryRecorder::new(
+                &checkpoint,
+                fork_digests,
+                DEFAULT_CHECKPOINT_INTERVAL_BLOCKS,
+            ),
             new_block_subscription_sender: broadcast::channel(1).0,
             lib_subscription_sender: broadcast::channel(1).0,
             chain_online_notifier: notifier,

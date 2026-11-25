@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc, time::SystemTime};
+use std::{collections::HashSet, num::NonZeroU64, sync::Arc, time::SystemTime};
 
 use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
 use lb_core::{block::BlockNumber, era::ForkDigest, header::HeaderId};
@@ -15,8 +15,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Cryptarchia, CryptarchiaSettings, Error, StartingState};
 
-// About an hour at the testnet template's one-second slots and 1/30 activation.
-const CHECKPOINT_INTERVAL_BLOCKS: u64 = 120;
 pub const RECOVERY_PROGRESS_KEY_SUFFIX: &[u8] = b"cryptarchia-progress-v1";
 
 /// The slot of the chain's tip, and the fork digest its era has under the
@@ -243,6 +241,7 @@ impl RecoveryProgress {
 
 pub struct RecoveryRecorder {
     checkpoint_lib_height: Option<BlockNumber>,
+    checkpoint_interval_blocks: NonZeroU64,
     fork_digests: Arc<EraSchedule<ForkDigest>>,
 }
 
@@ -250,12 +249,14 @@ impl RecoveryRecorder {
     pub(crate) fn new(
         checkpoint: &LibCheckpoint,
         fork_digests: Arc<EraSchedule<ForkDigest>>,
+        checkpoint_interval_blocks: NonZeroU64,
     ) -> Self {
         Self {
             checkpoint_lib_height: checkpoint
                 .last_engine_state
                 .is_some()
                 .then_some(checkpoint.lib_block_length),
+            checkpoint_interval_blocks,
             fork_digests,
         }
     }
@@ -267,9 +268,9 @@ impl RecoveryRecorder {
     ) -> Result<(Vec<KeyValuePair>, Option<BlockNumber>), Error> {
         let mut entries = Vec::new();
         let lib_height = cryptarchia.lib_branch().length();
-        let checkpoint_due = self
-            .checkpoint_lib_height
-            .is_none_or(|height| lib_height.saturating_sub(height) >= CHECKPOINT_INTERVAL_BLOCKS);
+        let checkpoint_due = self.checkpoint_lib_height.is_none_or(|height| {
+            lib_height.saturating_sub(height) >= self.checkpoint_interval_blocks.get()
+        });
 
         let checkpoint_lib_height = if checkpoint_due {
             let state = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
@@ -313,7 +314,7 @@ impl RecoveryRecorder {
 
 #[cfg(test)]
 mod tests {
-    use std::num::{NonZero, NonZeroU32, NonZeroU64};
+    use std::num::{NonZero, NonZeroU32};
 
     use lb_core::{
         era::AcceptedForkDigests,
@@ -328,7 +329,7 @@ mod tests {
     use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
 
     use super::*;
-    use crate::tests::single_era;
+    use crate::{DEFAULT_CHECKPOINT_INTERVAL_BLOCKS, tests::single_era};
 
     const FORK_DIGEST: [u8; 32] = [0x22; 32];
 
@@ -351,6 +352,8 @@ mod tests {
 
     #[tokio::test]
     async fn checkpoints_roll_over_by_finalized_block_count() {
+        let interval = DEFAULT_CHECKPOINT_INTERVAL_BLOCKS.get();
+
         let chain = recovery_test_chain();
         let fork_digests = Arc::new(fork_digests(chain.ledger.era_schedule()));
         let mut saved = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
@@ -360,7 +363,11 @@ mod tests {
         )
         .unwrap();
         saved.last_engine_state = None;
-        let mut fresh = RecoveryRecorder::new(&saved, Arc::clone(&fork_digests));
+        let mut fresh = RecoveryRecorder::new(
+            &saved,
+            Arc::clone(&fork_digests),
+            DEFAULT_CHECKPOINT_INTERVAL_BLOCKS,
+        );
 
         let (entries, checkpoint_height) = fresh.prepare(&chain, HashSet::new()).await.unwrap();
         assert_eq!(entries.len(), 2);
@@ -375,7 +382,8 @@ mod tests {
             timestamp: SystemTime::UNIX_EPOCH,
             state: Bootstrapping,
         });
-        let mut restarted = RecoveryRecorder::new(&saved, fork_digests);
+        let mut restarted =
+            RecoveryRecorder::new(&saved, fork_digests, DEFAULT_CHECKPOINT_INTERVAL_BLOCKS);
 
         let at_height = |id, height| {
             Cryptarchia::from_lib(
@@ -390,7 +398,7 @@ mod tests {
                 UncleSlots::default(),
             )
         };
-        let below_interval = at_height(1, CHECKPOINT_INTERVAL_BLOCKS - 1);
+        let below_interval = at_height(1, interval - 1);
 
         let (entries, checkpoint_height) = restarted
             .prepare(&below_interval, HashSet::new())
@@ -399,8 +407,8 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(checkpoint_height, None);
 
-        let at_interval = at_height(2, CHECKPOINT_INTERVAL_BLOCKS);
-        let past_interval = at_height(3, CHECKPOINT_INTERVAL_BLOCKS + 1);
+        let at_interval = at_height(2, interval);
+        let past_interval = at_height(3, interval + 1);
 
         // Preparing a checkpoint can be retried until the write is confirmed.
         for candidate in [&at_interval, &at_interval, &past_interval] {
@@ -410,7 +418,7 @@ mod tests {
             assert_eq!(checkpoint_height, Some(candidate.lib_branch().length()));
         }
 
-        restarted.mark_committed(Some(CHECKPOINT_INTERVAL_BLOCKS));
+        restarted.mark_committed(Some(interval));
         let (entries, checkpoint_height) = restarted
             .prepare(&past_interval, HashSet::new())
             .await

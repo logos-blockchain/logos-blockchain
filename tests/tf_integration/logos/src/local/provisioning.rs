@@ -851,6 +851,7 @@ fn build_cryptarchia_user_config(
                         .expect("block_provider batch_size must be non-zero"),
                 },
             },
+            ..ServiceConfig::default()
         },
         leader: LeaderConfig {
             wallet: leader::WalletConfig {

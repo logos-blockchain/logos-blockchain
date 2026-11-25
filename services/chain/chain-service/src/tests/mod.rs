@@ -76,8 +76,8 @@ use tokio::{
 
 use crate::{
     BlockProviderConfig, BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia,
-    CryptarchiaConsensus, CryptarchiaSettings, Error, LibCheckpoint, OfflineGracePeriodConfig,
-    StartingState, SyncConfig, TipEra,
+    CryptarchiaConsensus, CryptarchiaSettings, DEFAULT_CHECKPOINT_INTERVAL_BLOCKS, Error,
+    LibCheckpoint, OfflineGracePeriodConfig, StartingState, SyncConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     saved_tip_era,
     service::{get_block_ids, process_block},
@@ -439,6 +439,7 @@ async fn recover_latest_lib_and_tip_from_an_older_checkpoint() {
             recorder = Some(RecoveryRecorder::new(
                 &checkpoint,
                 Arc::clone(&fork_digests),
+                DEFAULT_CHECKPOINT_INTERVAL_BLOCKS,
             ));
         }
     }
@@ -1050,7 +1051,11 @@ async fn fork_switch_persists_tip_lib_and_pruning_progress() {
             .unwrap();
     checkpoint.last_engine_state = None;
 
-    let mut recorder = RecoveryRecorder::new(&checkpoint, fork_digests);
+    let mut recorder = RecoveryRecorder::new(
+        &checkpoint,
+        fork_digests,
+        DEFAULT_CHECKPOINT_INTERVAL_BLOCKS,
+    );
     let mut apply = async |block: Block<RecoveryTestTx>, pending: &HashSet<HeaderId>| {
         let slot = block.header().slot();
         let block = chain.verify_block(block, slot).unwrap();
@@ -1107,7 +1112,7 @@ async fn fork_switch_persists_tip_lib_and_pruning_progress() {
     reason = "shares one chain across checkpoint rollover and restart"
 )]
 async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
-    const ROLLOVER_HEIGHT: u64 = 120;
+    const ROLLOVER_HEIGHT: u64 = DEFAULT_CHECKPOINT_INTERVAL_BLOCKS.get();
 
     let era_schedule = single_era(ledger_config(NonZeroU32::MIN));
     let leader_key = ZkKey::from(Fr::ZERO);
@@ -1126,6 +1131,7 @@ async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
     let mut recorder = RecoveryRecorder::new(
         &initial,
         Arc::new(settings.era_schedule.map(|era| era.parameters.1)),
+        settings.checkpoint_interval_blocks,
     );
     let mut chain = Cryptarchia::from_genesis(
         initial.genesis_id,
@@ -1307,6 +1313,7 @@ fn recovery_test_settings(
                 batch_size: NonZeroUsize::MIN,
             },
         },
+        checkpoint_interval_blocks: DEFAULT_CHECKPOINT_INTERVAL_BLOCKS,
         recovery_data: RecoveryData::default(),
     }
 }

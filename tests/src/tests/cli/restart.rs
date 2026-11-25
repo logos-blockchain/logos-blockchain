@@ -1,13 +1,15 @@
 use std::{
     future::ready,
-    num::NonZero,
+    num::{NonZero, NonZeroU64},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use futures::StreamExt as _;
 use lb_binary_codec::bincode::DeserializeOp as _;
-use lb_chain_service::{CryptarchiaInfo, LibCheckpoint, saved_tip_era};
+use lb_chain_service::{
+    CryptarchiaInfo, DEFAULT_CHECKPOINT_INTERVAL_BLOCKS, LibCheckpoint, saved_tip_era,
+};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::header::HeaderId;
 use lb_http_api_common::queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery};
@@ -121,12 +123,13 @@ async fn node_restart_with_initial_peer_override() {
 #[tokio::test]
 #[serial]
 async fn peerless_crash_recovers_canonical_history_after_the_checkpoint() {
-    const CHECKPOINT_INTERVAL_BLOCKS: u64 = 120;
+    const CHECKPOINT_INTERVAL_BLOCKS: NonZeroU64 = NonZeroU64::new(24).unwrap();
     const BLOCKS_AFTER_ROLLOVER: u64 = 8;
 
     let (base, node) = start_recovery_fixture(
         "canonical-history-after-checkpoint",
         "peerless_crash_recovers_canonical_history_after_the_checkpoint",
+        CHECKPOINT_INTERVAL_BLOCKS,
     )
     .await;
     let cluster = base.cluster();
@@ -138,11 +141,11 @@ async fn peerless_crash_recovers_canonical_history_after_the_checkpoint() {
 
     wait_for_manual_cluster_height(
         &node.client,
-        CHECKPOINT_INTERVAL_BLOCKS + u64::from(RECOVERY_SECURITY_PARAM),
+        CHECKPOINT_INTERVAL_BLOCKS.get() + u64::from(RECOVERY_SECURITY_PARAM),
         Duration::from_mins(6),
     )
     .await
-    .expect("the first 120 LIB advances should refresh the full checkpoint");
+    .expect("the configured number of LIB advances should refresh the full checkpoint");
 
     let progress_key = recovery_key(RECOVERY_PROGRESS_KEY);
     let (refreshed_checkpoint, checkpoint_progress) = {
@@ -277,6 +280,7 @@ async fn corrupt_full_checkpoint_aborts_node_startup() {
     let (base, node) = start_recovery_fixture(
         "corrupt-full-checkpoint",
         "corrupt_full_checkpoint_aborts_node_startup",
+        DEFAULT_CHECKPOINT_INTERVAL_BLOCKS,
     )
     .await;
     let cluster = base.cluster();
@@ -350,6 +354,7 @@ async fn corrupt_full_checkpoint_aborts_node_startup() {
 async fn start_recovery_fixture(
     scenario: &str,
     test_context: &str,
+    checkpoint_interval_blocks: NonZeroU64,
 ) -> (LocalManualClusterHarnessBase, StartedNode<LbcEnv>) {
     const NODE_NAME: &str = "node";
 
@@ -368,7 +373,7 @@ async fn start_recovery_fixture(
             StartNodeOptions::default()
                 .with_peers(PeerSelection::None)
                 .with_persist_dir(base.scenario_base_dir().join(NODE_NAME))
-                .create_patch(|mut config: LbcNodeConfig| {
+                .create_patch(move |mut config: LbcNodeConfig| {
                     config
                         .deployment
                         .update_genesis_era_parameters(|parameters| {
@@ -386,7 +391,10 @@ async fn start_recovery_fixture(
                                 .min(cryptarchia.widest_uncle_reference_window());
                         })?;
 
-                    let bootstrap = &mut config.user.cryptarchia.service.bootstrap;
+                    let service = &mut config.user.cryptarchia.service;
+                    service.checkpoint_interval_blocks = checkpoint_interval_blocks;
+
+                    let bootstrap = &mut service.bootstrap;
                     bootstrap.prolonged_bootstrap_period = Duration::ZERO;
                     bootstrap.offline_grace_period.grace_period = Duration::ZERO;
 

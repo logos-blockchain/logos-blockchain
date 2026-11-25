@@ -15,6 +15,7 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::Display,
+    num::NonZeroU64,
     pin::Pin,
     sync::Arc,
 };
@@ -731,12 +732,16 @@ impl Cryptarchia {
     }
 }
 
+/// Default number of finalized blocks between full ledger checkpoints.
+pub const DEFAULT_CHECKPOINT_INTERVAL_BLOCKS: NonZeroU64 = NonZeroU64::new(120).unwrap();
+
 #[derive(Debug, Clone)]
 pub struct CryptarchiaSettings {
     pub era_schedule: Arc<EraSchedule<(lb_ledger::Config, ForkDigest)>>,
     pub starting_state: StartingState,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
+    pub checkpoint_interval_blocks: NonZeroU64,
     pub recovery_data: RecoveryData,
 }
 
@@ -851,6 +856,7 @@ where
             bootstrap: bootstrap_config,
             starting_state,
             sync: sync_config,
+            checkpoint_interval_blocks,
             ..
         } = settings;
 
@@ -903,7 +909,8 @@ where
 
         let chain_online_notifier = ChainOnlineNotifier::new(*cryptarchia.state());
 
-        let recovery_recorder = RecoveryRecorder::new(&checkpoint, fork_digests);
+        let recovery_recorder =
+            RecoveryRecorder::new(&checkpoint, fork_digests, checkpoint_interval_blocks);
         drop(checkpoint);
 
         let Self {
