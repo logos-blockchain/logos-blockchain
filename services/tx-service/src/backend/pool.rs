@@ -39,8 +39,10 @@ use crate::{
 
 const LOG_TARGET: &str = mempool::POOL;
 
-/// Default time a pending transaction may stay in the pool before eviction.
-pub const DEFAULT_TX_TTL: Duration = Duration::from_hours(1);
+/// Default time a pending transaction may stay in the pool before eviction:
+/// that of releases 0.3.1 to 0.3.6, so a node keeps a transaction as long as
+/// the nodes of those releases it shares a network with.
+pub const DEFAULT_TX_TTL: Duration = Duration::from_hours(9);
 
 /// Settings for the [`Mempool`].
 #[derive(Clone, Debug, PartialEq, Eq)]
