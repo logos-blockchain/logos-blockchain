@@ -1113,7 +1113,7 @@ where
         lib_subscription_sender: &broadcast::Sender<LibUpdate>,
     ) -> Result<InitializedCryptarchia, Error> {
         info!(
-            target: LOG_TARGET, tip = ?progress.tip, lib = ?progress.lib, lib_height = progress.lib_block_length, checkpoint_lib = ?checkpoint.lib, genesis = ?checkpoint.genesis_id,
+            target: LOG_TARGET, tip = ?progress.tip, lib = ?progress.lib, lib_height = progress.lib_height, checkpoint_lib = ?checkpoint.lib, genesis = ?checkpoint.genesis_id,
             "recovering Cryptarchia",
         );
 
@@ -1212,7 +1212,7 @@ where
         let checkpoint_lib = cryptarchia.lib();
         let checkpoint_branch = cryptarchia.lib_branch();
         let expected_blocks = progress
-            .lib_block_length
+            .lib_height
             .checked_sub(checkpoint_branch.length())
             .and_then(|count| usize::try_from(count).ok())
             .ok_or_else(|| Error::Storage("Recovered LIB height precedes the checkpoint".into()))?;
@@ -1276,7 +1276,7 @@ where
                     Arc::new(cryptarchia.consensus.era_schedule().clone()),
                     state,
                     slot,
-                    progress.lib_block_length,
+                    progress.lib_height,
                     uncle_slots,
                 );
             }

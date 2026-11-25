@@ -189,7 +189,7 @@ pub struct RecoveryProgress {
     pub(crate) tip: HeaderId,
     tip_era: TipEra,
     pub(crate) lib: HeaderId,
-    pub(crate) lib_block_length: u64,
+    pub(crate) lib_height: u64,
     pub(crate) storage_blocks_to_remove: HashSet<HeaderId>,
     pub(crate) last_engine_state: Option<LastEngineState>,
 }
@@ -200,7 +200,7 @@ impl RecoveryProgress {
             tip: checkpoint.tip,
             tip_era: checkpoint.tip_era,
             lib: checkpoint.lib,
-            lib_block_length: checkpoint.lib_block_length,
+            lib_height: checkpoint.lib_block_length,
             storage_blocks_to_remove: checkpoint.storage_blocks_to_remove.clone(),
             last_engine_state: checkpoint.last_engine_state.clone(),
         }
@@ -231,7 +231,7 @@ impl RecoveryProgress {
             tip: tip.id(),
             tip_era: TipEra::at(tip.slot(), fork_digests),
             lib: cryptarchia.lib(),
-            lib_block_length: cryptarchia.lib_branch().length(),
+            lib_height: cryptarchia.lib_branch().length(),
             storage_blocks_to_remove,
             last_engine_state: Some(LastEngineState {
                 timestamp: SystemTime::now(),

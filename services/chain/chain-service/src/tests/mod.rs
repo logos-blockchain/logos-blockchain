@@ -1233,7 +1233,7 @@ async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
 
     let progress = RecoveryProgress::load(&checkpoint, &settings.recovery_data).unwrap();
     assert_eq!(progress.lib, chain.lib());
-    assert_eq!(progress.lib_block_length, ROLLOVER_HEIGHT + 1);
+    assert_eq!(progress.lib_height, ROLLOVER_HEIGHT + 1);
     assert_eq!(progress.tip, chain.tip());
 
     let (storage_tx, storage_rx) = mpsc::channel(10);
