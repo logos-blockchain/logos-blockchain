@@ -1,4 +1,4 @@
-use core::num::NonZeroU64;
+use core::{num::NonZeroU64, ops::Range};
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
@@ -19,13 +19,61 @@ use lb_log_targets::wallet;
 use lb_wallet::{Voucher, VoucherState, Vouchers, WalletBlock, WalletError};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
 type VoucherIndex = u64;
 type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
+
+/// How many vouchers past the last one the wallet knows it issued are looked
+/// for in the blocks it applies: see [`VoucherLookahead`].
+///
+/// It bounds the run of consecutive vouchers that are not in the chain the
+/// wallet applies, those of proposals that did not make it, past which the
+/// following ones are no longer recognized.
+pub const VOUCHER_LOOKAHEAD: u64 = 1024;
+
+/// The vouchers this wallet would issue next, derived ahead of their use.
+///
+/// A voucher is the leader's claim on the reward of a block it proposed, and
+/// derives from a key and an index, the next of which is all a wallet keeps
+/// of the ones it issued. A wallet that lost its state, or never had it, as
+/// when the node syncs the chain again, starts over at index 0 while the chain
+/// holds vouchers of later indices: it would not know them as its own, could
+/// not claim them, and would issue them again, for rewards it cannot claim
+/// either, a voucher being claimable once.
+///
+/// So the wallet recognizes the vouchers it is about to issue in the blocks it
+/// applies. One found there was issued before: the wallet takes it as known,
+/// tracks its path from that block on, and issues from the index after it.
+#[derive(Debug, Default)]
+struct VoucherLookahead {
+    vouchers: HashMap<VoucherCm, (VoucherNullifier, VoucherId)>,
+    /// The index after the last voucher derived.
+    end: VoucherIndex,
+}
+
+impl VoucherLookahead {
+    /// The indices to derive for the lookahead to reach [`VOUCHER_LOOKAHEAD`]
+    /// vouchers from `next_new_voucher_index` on.
+    fn missing(&self, next_new_voucher_index: VoucherIndex) -> Range<VoucherIndex> {
+        self.end.max(next_new_voucher_index)
+            ..next_new_voucher_index.saturating_add(VOUCHER_LOOKAHEAD)
+    }
+
+    fn insert(&mut self, cm: VoucherCm, nf: VoucherNullifier, id: VoucherId) {
+        self.end = self.end.max(id.1.saturating_add(1));
+        self.vouchers.insert(cm, (nf, id));
+    }
+
+    /// Drops the vouchers before `next_new_voucher_index`, which are issued.
+    fn advance(&mut self, next_new_voucher_index: VoucherIndex) {
+        self.vouchers
+            .retain(|_, (_, (_, index))| *index >= next_new_voucher_index);
+    }
+}
 
 pub struct ClaimableVouchers {
     pub available: Vec<Voucher>,
@@ -274,6 +322,8 @@ pub struct ServiceState<'u> {
     pending_claims: PendingClaims,
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
+    /// Derived again on each start: not part of [`RecoveryState`].
+    voucher_lookahead: VoucherLookahead,
 }
 
 impl<'u> ServiceState<'u> {
@@ -324,6 +374,7 @@ impl<'u> ServiceState<'u> {
             pending_claims,
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
+            voucher_lookahead: VoucherLookahead::default(),
         })
     }
 
@@ -338,11 +389,46 @@ impl<'u> ServiceState<'u> {
     pub fn add_next_known_voucher(&mut self, cm: VoucherCm, nf: VoucherNullifier, key_id: KeyId) {
         let id = (key_id, self.next_new_voucher_index);
         self.next_new_voucher_index += 1;
+        self.voucher_lookahead.advance(self.next_new_voucher_index);
         self.wallet.add_known_voucher(cm, nf, id);
         self.update_state();
     }
 
+    /// The indices of the vouchers to hand to
+    /// [`Self::add_voucher_to_lookahead`], in order, for the wallet to
+    /// recognize the vouchers it issued before in the blocks it applies.
+    pub fn missing_voucher_lookahead(&self) -> Range<VoucherIndex> {
+        self.voucher_lookahead.missing(self.next_new_voucher_index)
+    }
+
+    /// Adds the voucher of `key_id` at `index`, which the wallet has not
+    /// issued, to those it looks for in the blocks it applies.
+    pub fn add_voucher_to_lookahead(
+        &mut self,
+        cm: VoucherCm,
+        nf: VoucherNullifier,
+        key_id: KeyId,
+        index: VoucherIndex,
+    ) {
+        if index >= self.next_new_voucher_index {
+            self.voucher_lookahead.insert(cm, nf, (key_id, index));
+        }
+    }
+
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
+        // Before the block is applied, which is when the wallet starts
+        // tracking the path of a voucher it knows.
+        if let Some((nf, id)) = self.voucher_lookahead.vouchers.remove(&block.voucher_cm) {
+            info!(
+                target: wallet::SERVICE,
+                block_id = ?block.id,
+                voucher_index = id.1,
+                "Recovered a voucher issued before from the block that carries it"
+            );
+            self.next_new_voucher_index = self.next_new_voucher_index.max(id.1.saturating_add(1));
+            self.voucher_lookahead.advance(self.next_new_voucher_index);
+            self.wallet.add_known_voucher(block.voucher_cm, nf, id);
+        }
         self.wallet.apply_block(block)?;
         // Note reservations are released after `pending_note_expiry_blocks`
         // (see `evict_expired`), not on spent.
@@ -755,6 +841,96 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
+    }
+    fn fresh_settings() -> WalletServiceSettings {
+        WalletServiceSettings {
+            known_keys: HashMap::new(),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: lb_services_utils::overwatch::RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            era_schedule: era_schedule(),
+        }
+    }
+
+    /// The voucher of `index`, as the service derives it from the KMS.
+    fn voucher(index: VoucherIndex) -> (VoucherCm, VoucherNullifier) {
+        let secret = lb_core::mantle::ops::leader_claim::VoucherSecret::from(Fr::from(index + 1));
+        (
+            VoucherCm::from_secret(secret),
+            VoucherNullifier::from_secret(secret),
+        )
+    }
+
+    fn fill_voucher_lookahead(state: &mut ServiceState<'_>) {
+        for index in state.missing_voucher_lookahead() {
+            let (cm, nf) = voucher(index);
+            state.add_voucher_to_lookahead(cm, nf, "voucher-master".into(), index);
+        }
+    }
+
+    fn block(id: u8, parent: HeaderId, voucher_cm: VoucherCm) -> WalletBlock {
+        WalletBlock {
+            id: HeaderId::from([id; 32]),
+            parent,
+            epoch: 0.into(),
+            voucher_cm,
+            header_ops: vec![],
+            txs: lb_core::block::BlockTransactions::empty(),
+        }
+    }
+
+    /// A wallet that lost its state issues from index 0 again, while the chain
+    /// it syncs holds the vouchers it issued before.
+    #[test]
+    fn a_wallet_without_state_recovers_the_vouchers_it_issued_from_the_blocks() {
+        use std::sync::Arc;
+
+        let settings = fresh_settings();
+        let genesis = HeaderId::from([0; 32]);
+        let ledger =
+            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
+        let (sender, _receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let recovery =
+            <RecoveryState as overwatch::services::state::ServiceState>::from_settings(&settings)
+                .unwrap();
+        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater).unwrap();
+
+        assert_eq!(state.missing_voucher_lookahead(), 0..VOUCHER_LOOKAHEAD);
+        fill_voucher_lookahead(&mut state);
+        assert!(state.missing_voucher_lookahead().is_empty());
+        assert_eq!(state.wallet().vouchers().count(), 0);
+
+        // A block of another leader changes nothing.
+        let foreign = block(1, genesis, voucher(VOUCHER_LOOKAHEAD + 7).0);
+        state.apply_block(&foreign).unwrap();
+        assert_eq!(state.next_new_voucher_index(), 0);
+        assert_eq!(state.wallet().vouchers().count(), 0);
+
+        // The wallet proposed with vouchers 0 to 4 before; only that of 4 made
+        // it into the chain.
+        let (cm, nf) = voucher(4);
+        let own = block(2, foreign.id, cm);
+        state.apply_block(&own).unwrap();
+        assert_eq!(state.next_new_voucher_index(), 5);
+        assert_eq!(
+            state.wallet().get_voucher_by_nullifier(&nf),
+            Some(&("voucher-master".into(), 4))
+        );
+        // Its path is tracked from the block that carries it.
+        let wallet_state = state.wallet().wallet_state_at(own.id).unwrap();
+        assert!(wallet_state.vouchers.paths.contains_key(&cm));
+        // The lookahead is to be extended past the recovered voucher.
+        assert_eq!(
+            state.missing_voucher_lookahead(),
+            VOUCHER_LOOKAHEAD..5 + VOUCHER_LOOKAHEAD
+        );
+
+        // The next voucher the wallet issues is a new one.
+        let (cm, nf) = voucher(5);
+        state.add_next_known_voucher(cm, nf, "voucher-master".into());
+        assert_eq!(state.next_new_voucher_index(), 6);
+        assert_eq!(state.wallet().vouchers().count(), 2);
     }
 
     /// A saved state holds what the wallet tracks of the vouchers and none of
