@@ -94,6 +94,9 @@ pub enum WalletServiceError {
     #[error(transparent)]
     WalletError(#[from] WalletError),
 
+    #[error("The wallet's saved state is of block {saved}, not of the chain's LIB, {lib}")]
+    SavedStateNotAtLib { saved: HeaderId, lib: HeaderId },
+
     #[error("KMS API error: {0}")]
     KmsApi(DynError),
 
@@ -536,14 +539,23 @@ where
             .await?
             .ok_or(WalletServiceError::LedgerStateNotFound(lib))?;
 
-        let mut state = ServiceState::new(
+        let mut state = Self::state_at_lib(
             self.initial_state,
             &settings,
-            lib,
-            &lib_ledger,
+            (lib, &lib_ledger),
+            (&storage, &cryptarchia_api),
             &service_resources_handle.state_updater,
-        );
+        )
+        .await?;
         let voucher_master_key_id = settings.voucher_master_key_id;
+        let voucher_source = VoucherSource {
+            kms: &kms,
+            master_key_id: &voucher_master_key_id,
+        };
+
+        // Before any block is applied: a voucher is recovered from the block
+        // that carries it.
+        Self::start_voucher_lookahead(&mut state, &voucher_source).await;
 
         Self::backfill_missing_blocks(
             cryptarchia_info.tip,
@@ -551,6 +563,7 @@ where
             &storage,
             &cryptarchia_api,
             &settings.era_schedule,
+            &voucher_source,
         )
         .await?;
 
@@ -583,16 +596,25 @@ where
                 // one and is backfilled from there; the log line is what tells
                 // an operator why the wallet fell behind.
                 Some(event) = new_blocks.next() => match event {
-                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &settings.era_schedule).await,
+                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &settings.era_schedule, &voucher_source).await,
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("new-block", skipped),
                 },
                 Some(lib_update) = lib_updates.next() => match lib_update {
-                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &settings.era_schedule).await,
+                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &settings.era_schedule, &voucher_source).await,
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("LIB", skipped),
                 },
             }
         }
     }
+}
+
+/// What deriving a voucher takes: the KMS, and the key vouchers derive from.
+struct VoucherSource<'a, Kms, RuntimeServiceId>
+where
+    Kms: KmsServiceData,
+{
+    kms: &'a KmsServiceApi<Kms, RuntimeServiceId>,
+    master_key_id: &'a KeyId,
 }
 
 /// The wallet fell `skipped` items behind one of its chain subscriptions. Only
@@ -663,9 +685,19 @@ where
         era_schedule: &ServiceEraSchedule,
         era_settings: &WalletEraSettings,
     ) {
-        if let Err(err) =
-            Self::backfill_if_not_in_sync(msg.tip(), state, storage, cryptarchia, era_schedule)
-                .await
+        let voucher_source = VoucherSource {
+            kms,
+            master_key_id: voucher_master_key_id,
+        };
+        if let Err(err) = Self::backfill_if_not_in_sync(
+            msg.tip(),
+            state,
+            storage,
+            cryptarchia,
+            era_schedule,
+            &voucher_source,
+        )
+        .await
         {
             warn!(
                 target: LOG_TARGET,
@@ -904,6 +936,7 @@ where
                     resp_tx,
                 )
                 .await;
+                Self::keep_voucher_lookahead(state, &voucher_source).await;
             }
             WalletMsg::GetClaimableVouchers { tip, resp_tx } => {
                 Self::get_claimable_vouchers(tip, resp_tx, state, cryptarchia).await;
@@ -1327,6 +1360,58 @@ where
         }
     }
 
+    /// Derives the vouchers the wallet is to look for in the blocks it
+    /// applies: those it would issue next. See
+    /// [`ServiceState::missing_voucher_lookahead`].
+    async fn extend_voucher_lookahead(
+        state: &mut ServiceState<'_>,
+        source: &VoucherSource<'_, Kms, RuntimeServiceId>,
+    ) -> Result<(), WalletServiceError> {
+        for index in state.missing_voucher_lookahead() {
+            let secret =
+                Self::derive_voucher_from_kms(source.kms, source.master_key_id.clone(), index)
+                    .await?;
+            state.add_voucher_to_lookahead(
+                VoucherCm::from_secret(secret),
+                VoucherNullifier::from_secret(secret),
+                source.master_key_id.clone(),
+                index,
+            );
+        }
+        Ok(())
+    }
+
+    /// [`Self::extend_voucher_lookahead`], as the wallet starts. A failure is
+    /// retried once the vouchers looked for change.
+    async fn start_voucher_lookahead(
+        state: &mut ServiceState<'_>,
+        source: &VoucherSource<'_, Kms, RuntimeServiceId>,
+    ) {
+        if let Err(err) = Self::extend_voucher_lookahead(state, source).await {
+            warn!(
+                target: LOG_TARGET,
+                err = ?err,
+                "Failed to derive the vouchers to look for in blocks: those issued before this \
+                 wallet's state may not be recovered"
+            );
+        }
+    }
+
+    /// [`Self::extend_voucher_lookahead`], after the vouchers looked for
+    /// changed: one was issued, or recovered from a block. A failure is retried
+    /// on the next change.
+    async fn keep_voucher_lookahead(
+        state: &mut ServiceState<'_>,
+        source: &VoucherSource<'_, Kms, RuntimeServiceId>,
+    ) {
+        if state.missing_voucher_lookahead().is_empty() {
+            return;
+        }
+        if let Err(err) = Self::extend_voucher_lookahead(state, source).await {
+            debug!(target: LOG_TARGET, err = ?err, "Failed to derive the vouchers to look for in blocks");
+        }
+    }
+
     /// Derive voucher secret from KMS given master key and index.
     // TODO: Use secure KMS operator that returns `VoucherCm` and
     // `VoucherNullifier`
@@ -1540,12 +1625,68 @@ where
         .await
     }
 
+    /// The wallet as it starts, at `lib`, the chain's LIB: built from the
+    /// LIB's ledger state and what its saved state holds.
+    async fn state_at_lib<'updater>(
+        saved: RecoveryState,
+        settings: &WalletServiceSettings,
+        (lib, lib_ledger): (HeaderId, &LedgerState),
+        (storage, cryptarchia_api): (&StorageApi<Tx>, &CryptarchiaServiceApi<Cryptarchia>),
+        updater: &'updater overwatch::services::state::StateUpdater<Option<RecoveryState>>,
+    ) -> Result<ServiceState<'updater>, WalletServiceError> {
+        let saved =
+            Self::saved_state_at_lib(saved, lib, storage, cryptarchia_api, &settings.era_schedule)
+                .await?;
+        ServiceState::new(saved, settings, lib, lib_ledger, updater)
+    }
+
+    /// The wallet's saved state, with its vouchers brought forward from the
+    /// block they were saved at to `lib`, the chain's LIB.
+    ///
+    /// The wallet is built at the LIB, from the LIB's ledger state. That holds
+    /// its notes, but not the Merkle paths of its vouchers, which the saved
+    /// state has as of the block it was saved at. The paths are brought to the
+    /// LIB over the blocks in between, of which only the vouchers matter here.
+    /// That is no block when the wallet was saved at the LIB.
+    ///
+    /// Fails if the LIB is not a descendant of the block the state was saved
+    /// at.
+    async fn saved_state_at_lib(
+        saved: RecoveryState,
+        lib: HeaderId,
+        storage: &StorageApi<Tx>,
+        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
+        era_schedule: &ServiceEraSchedule,
+    ) -> Result<RecoveryState, WalletServiceError> {
+        let Some(saved_at) = saved.saved_at() else {
+            return Ok(saved);
+        };
+        // From the LIB back to the block the state was saved at, included.
+        let headers = cryptarchia_api
+            .get_headers(Some(lib), Some(saved_at))
+            .await
+            .map_err(WalletServiceError::CryptarchiaApi)?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut blocks_since = Vec::with_capacity(headers.len());
+        for header_id in headers.into_iter().rev().filter(|id| *id != saved_at) {
+            let block = Self::load_block(header_id, storage).await?;
+            blocks_since.push(WalletBlock::from_block(
+                &block,
+                era_schedule.epoch_for_slot(block.header().slot()),
+                &Events::new(),
+            ));
+        }
+        Ok(saved.with_vouchers_at(lib, &blocks_since)?)
+    }
+
     async fn backfill_if_not_in_sync(
         tip: Option<HeaderId>,
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
         era_schedule: &ServiceEraSchedule,
+        voucher_source: &VoucherSource<'_, Kms, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
         let tip = Self::msg_tip_or_latest(tip, cryptarchia).await?;
 
@@ -1558,7 +1699,15 @@ where
         // To resolve this, we do a JIT backfill to try to sync the wallet with
         // cryptarchia. If we still have not caught up after the backfill, we
         // return an error to the caller
-        Self::backfill_missing_blocks(tip, state, storage, cryptarchia, era_schedule).await?;
+        Self::backfill_missing_blocks(
+            tip,
+            state,
+            storage,
+            cryptarchia,
+            era_schedule,
+            voucher_source,
+        )
+        .await?;
 
         if state.wallet().has_processed_block(tip) {
             Ok(())
@@ -1578,6 +1727,7 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         era_schedule: &ServiceEraSchedule,
+        voucher_source: &VoucherSource<'_, Kms, RuntimeServiceId>,
     ) {
         let Ok(block) = Self::load_block(header_id, storage).await.inspect_err(|e| {
             error!(
@@ -1599,6 +1749,7 @@ where
         match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(target: LOG_TARGET, block_id = ?wallet_block.id, "Applied block to wallet");
+                Self::keep_voucher_lookahead(state, voucher_source).await;
             }
             Err(WalletError::UnknownBlock(block_id)) => {
                 debug!(
@@ -1612,6 +1763,7 @@ where
                     storage,
                     cryptarchia_api,
                     era_schedule,
+                    voucher_source,
                 )
                 .await
                 {
@@ -1663,6 +1815,7 @@ where
         state: &mut ServiceState<'_>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         era_schedule: &ServiceEraSchedule,
+        voucher_source: &VoucherSource<'_, Kms, RuntimeServiceId>,
     ) {
         log_lib_update(lib_update);
 
@@ -1684,6 +1837,7 @@ where
                 storage,
                 cryptarchia_api,
                 era_schedule,
+                voucher_source,
             )
             .await
             {
@@ -1751,6 +1905,7 @@ where
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         era_schedule: &ServiceEraSchedule,
+        voucher_source: &VoucherSource<'_, Kms, RuntimeServiceId>,
     ) -> Result<(), WalletServiceError> {
         debug!(
             target: LOG_TARGET,
@@ -1810,6 +1965,9 @@ where
                 );
                 return Err(WalletServiceError::FailedToApplyBlock(header_id));
             }
+            // Before the next block, which may carry the voucher after the
+            // ones looked for so far.
+            Self::keep_voucher_lookahead(state, voucher_source).await;
         }
 
         Ok(())

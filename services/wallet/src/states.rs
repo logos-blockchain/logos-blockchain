@@ -1,4 +1,4 @@
-use core::num::NonZeroU64;
+use core::{num::NonZeroU64, ops::Range};
 use std::{
     borrow::Borrow,
     collections::{HashMap, HashSet},
@@ -16,16 +16,64 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
-use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
+use lb_wallet::{Voucher, VoucherState, Vouchers, WalletBlock, WalletError};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
 type VoucherIndex = u64;
 type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
+
+/// How many vouchers past the last one the wallet knows it issued are looked
+/// for in the blocks it applies: see [`VoucherLookahead`].
+///
+/// It bounds the run of consecutive vouchers that are not in the chain the
+/// wallet applies, those of proposals that did not make it, past which the
+/// following ones are no longer recognized.
+pub const VOUCHER_LOOKAHEAD: u64 = 1024;
+
+/// The vouchers this wallet would issue next, derived ahead of their use.
+///
+/// A voucher is the leader's claim on the reward of a block it proposed, and
+/// derives from a key and an index, the next of which is all a wallet keeps
+/// of the ones it issued. A wallet that lost its state, or never had it, as
+/// when the node syncs the chain again, starts over at index 0 while the chain
+/// holds vouchers of later indices: it would not know them as its own, could
+/// not claim them, and would issue them again, for rewards it cannot claim
+/// either, a voucher being claimable once.
+///
+/// So the wallet recognizes the vouchers it is about to issue in the blocks it
+/// applies. One found there was issued before: the wallet takes it as known,
+/// tracks its path from that block on, and issues from the index after it.
+#[derive(Debug, Default)]
+struct VoucherLookahead {
+    vouchers: HashMap<VoucherCm, (VoucherNullifier, VoucherId)>,
+    /// The index after the last voucher derived.
+    end: VoucherIndex,
+}
+
+impl VoucherLookahead {
+    /// The indices to derive for the lookahead to reach [`VOUCHER_LOOKAHEAD`]
+    /// vouchers from `next_new_voucher_index` on.
+    fn missing(&self, next_new_voucher_index: VoucherIndex) -> Range<VoucherIndex> {
+        self.end.max(next_new_voucher_index)
+            ..next_new_voucher_index.saturating_add(VOUCHER_LOOKAHEAD)
+    }
+
+    fn insert(&mut self, cm: VoucherCm, nf: VoucherNullifier, id: VoucherId) {
+        self.end = self.end.max(id.1.saturating_add(1));
+        self.vouchers.insert(cm, (nf, id));
+    }
+
+    /// Drops the vouchers before `next_new_voucher_index`, which are issued.
+    fn advance(&mut self, next_new_voucher_index: VoucherIndex) {
+        self.vouchers
+            .retain(|_, (_, (_, index))| *index >= next_new_voucher_index);
+    }
+}
 
 pub struct ClaimableVouchers {
     pub available: Vec<Voucher>,
@@ -208,9 +256,13 @@ impl PendingNotes {
 pub struct RecoveryState {
     next_new_voucher_index: VoucherIndex,
     vouchers: Vouchers<VoucherId>,
-    /// [`WalletState`] at the last known LIB.
-    /// `None` until the first recovery state update.
-    lib_wallet_state: Option<(HeaderId, WalletState)>,
+    /// What the wallet tracks of the vouchers, and the block it tracks them
+    /// at: its LIB when the state was saved. `None` until the first recovery
+    /// state update.
+    ///
+    /// The notes of the wallet are not saved: they are read from the ledger
+    /// state as the wallet starts.
+    lib_voucher_state: Option<(HeaderId, VoucherState)>,
     /// Voucher reservations for claim transactions that were built/submitted
     /// but have not reached LIB yet. Stale reservations are bounded by
     /// LIB-progress expiry after recovery.
@@ -225,9 +277,39 @@ impl overwatch::services::state::ServiceState for RecoveryState {
         Ok(Self {
             next_new_voucher_index: 0,
             vouchers: Vouchers::default(),
-            lib_wallet_state: None,
+            lib_voucher_state: None,
             pending_claims: PendingClaims::default(),
         })
+    }
+}
+
+impl RecoveryState {
+    /// The block the vouchers were saved at, if any were.
+    #[must_use]
+    pub fn saved_at(&self) -> Option<HeaderId> {
+        self.lib_voucher_state.as_ref().map(|(block, _)| *block)
+    }
+
+    /// This state with its vouchers brought forward from the block they were
+    /// saved at to `block`, over `blocks_since`: the blocks after the saved
+    /// one up to `block`, oldest first.
+    ///
+    /// A ledger state does not hold the paths of vouchers, so they can only
+    /// follow the chain block by block. A state without saved vouchers is
+    /// returned as it is.
+    pub fn with_vouchers_at<'b>(
+        mut self,
+        block: HeaderId,
+        blocks_since: impl IntoIterator<Item = &'b WalletBlock>,
+    ) -> Result<Self, WalletError> {
+        if let Some((saved_at, voucher_state)) = &mut self.lib_voucher_state {
+            for applied in blocks_since {
+                *voucher_state =
+                    voucher_state.apply_block(&self.vouchers, applied.epoch, applied.voucher_cm)?;
+            }
+            *saved_at = block;
+        }
+        Ok(self)
     }
 }
 
@@ -240,20 +322,26 @@ pub struct ServiceState<'u> {
     pending_claims: PendingClaims,
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
+    /// Derived again on each start: not part of [`RecoveryState`].
+    voucher_lookahead: VoucherLookahead,
 }
 
 impl<'u> ServiceState<'u> {
+    /// The wallet at `lib`, the chain's LIB, whose ledger state `lib_ledger`
+    /// is: its notes are those the ledger state holds for the configured
+    /// keys, and its vouchers those of `state`, which has to hold them as of
+    /// `lib` if it holds any (see [`RecoveryState::with_vouchers_at`]).
     pub fn new(
         state: RecoveryState,
         settings: &WalletServiceSettings,
         lib: HeaderId,
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
-    ) -> Self {
+    ) -> Result<Self, WalletServiceError> {
         let RecoveryState {
             next_new_voucher_index,
             vouchers,
-            lib_wallet_state,
+            lib_voucher_state,
             pending_claims,
         } = state;
         let known_keys = settings
@@ -261,28 +349,33 @@ impl<'u> ServiceState<'u> {
             .iter()
             .map(|(key_id, pk)| (*pk, key_id.clone()));
 
-        // Initialize [`Wallet`] either from the persisted [`WalletState`]
-        // or from the current chain's LIB ledger state.
-        let (wallet, wallet_lib) = match lib_wallet_state {
-            Some((persisted_lib, wallet_state)) => (
-                Wallet::from_lib_wallet_state(known_keys, vouchers, persisted_lib, wallet_state),
-                persisted_lib,
-            ),
-            None => (
-                Wallet::from_lib_ledger_state(known_keys, vouchers, lib, lib_ledger),
+        let wallet = match lib_voucher_state {
+            Some((saved_at, _)) if saved_at != lib => {
+                return Err(WalletServiceError::SavedStateNotAtLib {
+                    saved: saved_at,
+                    lib,
+                });
+            }
+            Some((_, voucher_state)) => Wallet::from_lib_ledger_and_voucher_state(
+                known_keys,
+                vouchers,
                 lib,
+                lib_ledger,
+                voucher_state,
             ),
+            None => Wallet::from_lib_ledger_state(known_keys, vouchers, lib, lib_ledger),
         };
 
-        Self {
+        Ok(Self {
             next_new_voucher_index,
             wallet,
-            lib: wallet_lib,
+            lib,
             updater,
             pending_claims,
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
-        }
+            voucher_lookahead: VoucherLookahead::default(),
+        })
     }
 
     pub const fn lib(&self) -> HeaderId {
@@ -296,11 +389,46 @@ impl<'u> ServiceState<'u> {
     pub fn add_next_known_voucher(&mut self, cm: VoucherCm, nf: VoucherNullifier, key_id: KeyId) {
         let id = (key_id, self.next_new_voucher_index);
         self.next_new_voucher_index += 1;
+        self.voucher_lookahead.advance(self.next_new_voucher_index);
         self.wallet.add_known_voucher(cm, nf, id);
         self.update_state();
     }
 
+    /// The indices of the vouchers to hand to
+    /// [`Self::add_voucher_to_lookahead`], in order, for the wallet to
+    /// recognize the vouchers it issued before in the blocks it applies.
+    pub fn missing_voucher_lookahead(&self) -> Range<VoucherIndex> {
+        self.voucher_lookahead.missing(self.next_new_voucher_index)
+    }
+
+    /// Adds the voucher of `key_id` at `index`, which the wallet has not
+    /// issued, to those it looks for in the blocks it applies.
+    pub fn add_voucher_to_lookahead(
+        &mut self,
+        cm: VoucherCm,
+        nf: VoucherNullifier,
+        key_id: KeyId,
+        index: VoucherIndex,
+    ) {
+        if index >= self.next_new_voucher_index {
+            self.voucher_lookahead.insert(cm, nf, (key_id, index));
+        }
+    }
+
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
+        // Before the block is applied, which is when the wallet starts
+        // tracking the path of a voucher it knows.
+        if let Some((nf, id)) = self.voucher_lookahead.vouchers.remove(&block.voucher_cm) {
+            info!(
+                target: wallet::SERVICE,
+                block_id = ?block.id,
+                voucher_index = id.1,
+                "Recovered a voucher issued before from the block that carries it"
+            );
+            self.next_new_voucher_index = self.next_new_voucher_index.max(id.1.saturating_add(1));
+            self.voucher_lookahead.advance(self.next_new_voucher_index);
+            self.wallet.add_known_voucher(block.voucher_cm, nf, id);
+        }
         self.wallet.apply_block(block)?;
         // Note reservations are released after `pending_note_expiry_blocks`
         // (see `evict_expired`), not on spent.
@@ -414,15 +542,16 @@ impl<'u> ServiceState<'u> {
     }
 
     fn update_state(&self) {
-        let lib_wallet_state = self
+        let lib_voucher_state = self
             .wallet()
             .wallet_state_at(self.lib)
-            .expect("WalletState at LIB must exist");
+            .expect("WalletState at LIB must exist")
+            .vouchers;
 
         self.updater.update(Some(RecoveryState {
             next_new_voucher_index: self.next_new_voucher_index,
             vouchers: self.wallet.vouchers().clone(),
-            lib_wallet_state: Some((self.lib, lib_wallet_state)),
+            lib_voucher_state: Some((self.lib, lib_voucher_state)),
             pending_claims: self.pending_claims.clone(),
         }));
     }
@@ -687,7 +816,7 @@ mod tests {
         let recovery = RecoveryState {
             next_new_voucher_index: 0,
             vouchers: Vouchers::default(),
-            lib_wallet_state: None,
+            lib_voucher_state: None,
             pending_claims: PendingClaims::default(),
         };
 
@@ -697,7 +826,7 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater);
+        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater).unwrap();
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).
@@ -712,5 +841,204 @@ mod tests {
         // No panic: the advance is skipped and the LIB stays at a block whose
         // WalletState exists.
         assert_eq!(state.lib(), genesis);
+    }
+    fn fresh_settings() -> WalletServiceSettings {
+        WalletServiceSettings {
+            known_keys: HashMap::new(),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: lb_services_utils::overwatch::RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            era_schedule: era_schedule(),
+        }
+    }
+
+    /// The voucher of `index`, as the service derives it from the KMS.
+    fn voucher(index: VoucherIndex) -> (VoucherCm, VoucherNullifier) {
+        let secret = lb_core::mantle::ops::leader_claim::VoucherSecret::from(Fr::from(index + 1));
+        (
+            VoucherCm::from_secret(secret),
+            VoucherNullifier::from_secret(secret),
+        )
+    }
+
+    fn fill_voucher_lookahead(state: &mut ServiceState<'_>) {
+        for index in state.missing_voucher_lookahead() {
+            let (cm, nf) = voucher(index);
+            state.add_voucher_to_lookahead(cm, nf, "voucher-master".into(), index);
+        }
+    }
+
+    fn block(id: u8, parent: HeaderId, voucher_cm: VoucherCm) -> WalletBlock {
+        WalletBlock {
+            id: HeaderId::from([id; 32]),
+            parent,
+            epoch: 0.into(),
+            voucher_cm,
+            header_ops: vec![],
+            txs: lb_core::block::BlockTransactions::empty(),
+        }
+    }
+
+    /// A wallet that lost its state issues from index 0 again, while the chain
+    /// it syncs holds the vouchers it issued before.
+    #[test]
+    fn a_wallet_without_state_recovers_the_vouchers_it_issued_from_the_blocks() {
+        use std::sync::Arc;
+
+        let settings = fresh_settings();
+        let genesis = HeaderId::from([0; 32]);
+        let ledger =
+            LedgerState::from_utxos([], &ledger_config(), 0, &ConsensusExcludedKeys::empty());
+        let (sender, _receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let recovery =
+            <RecoveryState as overwatch::services::state::ServiceState>::from_settings(&settings)
+                .unwrap();
+        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater).unwrap();
+
+        assert_eq!(state.missing_voucher_lookahead(), 0..VOUCHER_LOOKAHEAD);
+        fill_voucher_lookahead(&mut state);
+        assert!(state.missing_voucher_lookahead().is_empty());
+        assert_eq!(state.wallet().vouchers().count(), 0);
+
+        // A block of another leader changes nothing.
+        let foreign = block(1, genesis, voucher(VOUCHER_LOOKAHEAD + 7).0);
+        state.apply_block(&foreign).unwrap();
+        assert_eq!(state.next_new_voucher_index(), 0);
+        assert_eq!(state.wallet().vouchers().count(), 0);
+
+        // The wallet proposed with vouchers 0 to 4 before; only that of 4 made
+        // it into the chain.
+        let (cm, nf) = voucher(4);
+        let own = block(2, foreign.id, cm);
+        state.apply_block(&own).unwrap();
+        assert_eq!(state.next_new_voucher_index(), 5);
+        assert_eq!(
+            state.wallet().get_voucher_by_nullifier(&nf),
+            Some(&("voucher-master".into(), 4))
+        );
+        // Its path is tracked from the block that carries it.
+        let wallet_state = state.wallet().wallet_state_at(own.id).unwrap();
+        assert!(wallet_state.vouchers.paths.contains_key(&cm));
+        // The lookahead is to be extended past the recovered voucher.
+        assert_eq!(
+            state.missing_voucher_lookahead(),
+            VOUCHER_LOOKAHEAD..5 + VOUCHER_LOOKAHEAD
+        );
+
+        // The next voucher the wallet issues is a new one.
+        let (cm, nf) = voucher(5);
+        state.add_next_known_voucher(cm, nf, "voucher-master".into());
+        assert_eq!(state.next_new_voucher_index(), 6);
+        assert_eq!(state.wallet().vouchers().count(), 2);
+    }
+
+    /// A saved state holds what the wallet tracks of the vouchers and none of
+    /// its notes. The wallet started from it holds the notes the ledger state
+    /// has for the keys it is configured with, and the saved voucher paths.
+    #[test]
+    fn a_wallet_started_from_a_saved_state_has_the_ledgers_notes_and_the_saved_vouchers() {
+        use std::sync::Arc;
+
+        use lb_core::{
+            block::BlockTransactions,
+            mantle::{Note, Utxo},
+        };
+        use lb_services_utils::overwatch::RecoveryData;
+        use overwatch::services::state::ServiceState as _;
+
+        let alice = ZkPublicKey::new(Fr::from(1u64));
+        let bob = ZkPublicKey::new(Fr::from(2u64));
+        let settings = |key: ZkPublicKey| WalletServiceSettings {
+            known_keys: HashMap::from([("key".into(), key)]),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            era_schedule: era_schedule(),
+        };
+        let genesis = HeaderId::from([0; 32]);
+        // No block of this test changes the notes: the ledger state is that
+        // of each.
+        let ledger = LedgerState::from_utxos(
+            [
+                Utxo::new([0; 32], 0, Note::new(100, alice)),
+                Utxo::new([0; 32], 1, Note::new(20, bob)),
+            ],
+            &ledger_config(),
+            0,
+            &ConsensusExcludedKeys::empty(),
+        );
+        let (sender, receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let block = |id: u8, parent: HeaderId, voucher_cm: VoucherCm| WalletBlock {
+            id: HeaderId::from([id; 32]),
+            parent,
+            epoch: 0.into(),
+            voucher_cm,
+            header_ops: vec![],
+            txs: BlockTransactions::empty(),
+        };
+
+        // A wallet with Alice's key issues a voucher, which the next block
+        // carries, and is saved at that block.
+        let fresh = RecoveryState::from_settings(&settings(alice)).unwrap();
+        let mut state =
+            ServiceState::new(fresh, &settings(alice), genesis, &ledger, &updater).unwrap();
+        let secret = Fr::from(7u64).into();
+        let voucher_cm = VoucherCm::from_secret(secret);
+        state.add_next_known_voucher(
+            voucher_cm,
+            VoucherNullifier::from_secret(secret),
+            "voucher-master".into(),
+        );
+        let saved_at = block(1, genesis, voucher_cm);
+        state.apply_block(&saved_at).unwrap();
+        state.advance_lib(saved_at.id, [genesis], 1, Vec::<VoucherNullifier>::new());
+        let saved: RecoveryState = receiver.borrow().clone().unwrap();
+        assert_eq!(saved.saved_at(), Some(saved_at.id));
+
+        // Started with Bob's key in place of Alice's, while the chain's LIB is
+        // the block it was saved at.
+        let state = ServiceState::new(
+            saved.clone(),
+            &settings(bob),
+            saved_at.id,
+            &ledger,
+            &updater,
+        )
+        .unwrap();
+        assert_eq!(state.lib(), saved_at.id);
+        let started = state.wallet().wallet_state_at(saved_at.id).unwrap();
+        assert_eq!(started.utxos_owned_by_pks([alice]).len(), 0);
+        assert_eq!(started.utxos_owned_by_pks([bob]).len(), 1);
+        assert!(started.vouchers.paths.contains_key(&voucher_cm));
+        let path_when_saved = started.vouchers.paths.get(&voucher_cm).cloned();
+
+        // Started while the chain's LIB is a later block: the saved vouchers
+        // are not of that block.
+        let lib = block(
+            2,
+            saved_at.id,
+            VoucherCm::from_secret(Fr::from(8u64).into()),
+        );
+        assert!(matches!(
+            ServiceState::new(saved.clone(), &settings(bob), lib.id, &ledger, &updater),
+            Err(WalletServiceError::SavedStateNotAtLib { saved, lib: at })
+                if saved == saved_at.id && at == lib.id
+        ));
+
+        // Brought forward to that block first, they are, and the voucher's
+        // path has followed the block in between.
+        let saved = saved.with_vouchers_at(lib.id, [&lib]).unwrap();
+        assert_eq!(saved.saved_at(), Some(lib.id));
+        let state = ServiceState::new(saved, &settings(bob), lib.id, &ledger, &updater).unwrap();
+        assert_eq!(state.lib(), lib.id);
+        let started = state.wallet().wallet_state_at(lib.id).unwrap();
+        assert_eq!(started.utxos_owned_by_pks([bob]).len(), 1);
+        assert!(started.vouchers.paths.contains_key(&voucher_cm));
+        assert_ne!(
+            started.vouchers.paths.get(&voucher_cm).cloned(),
+            path_when_saved
+        );
     }
 }

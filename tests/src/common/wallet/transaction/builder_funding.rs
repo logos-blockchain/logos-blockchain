@@ -13,7 +13,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::{Ed25519Key, MAX_ZK_SIGNING_KEYS, ZkPublicKey};
 use lb_mmr::MerkleMountainRange;
-use lb_wallet::{WalletError, WalletState};
+use lb_wallet::{VoucherState, WalletError, WalletState};
 use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use super::{error::WalletTransactionError, intent::WalletTransactionIntent};
@@ -59,10 +59,12 @@ pub fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
         pk_index,
         service_notes: HashTrieSetSync::new_sync(),
         channel_notes: HashTrieSetSync::new_sync(),
-        epoch: 0.into(),
-        vouchers: MerkleMountainRange::new(),
-        voucher_paths: HashTrieMapSync::new_sync(),
-        voucher_paths_snapshot: HashTrieMapSync::new_sync(),
+        vouchers: VoucherState {
+            epoch: 0.into(),
+            tree: MerkleMountainRange::new(),
+            paths: HashTrieMapSync::new_sync(),
+            paths_snapshot: HashTrieMapSync::new_sync(),
+        },
     }
 }
 
