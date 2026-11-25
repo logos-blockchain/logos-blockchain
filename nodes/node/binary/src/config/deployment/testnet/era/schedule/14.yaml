@@ -1,8 +1,13 @@
 # The era the testnet moves to at epoch 14, slot 4,200,000, which is
 # 2026-11-27T05:10:00Z: the rules of release 0.4, with the parameters of
-# `deployment/ceremony/genesis/testnet/deployment-template.yaml` and the
-# EmPoWering pool and payout rate of the testnet 0.4 PoW proposal. A test
-# schedule: nodes of releases 0.3.1 to 0.3.6 do not follow the chain past it.
+# `deployment/ceremony/genesis/testnet/deployment-template.yaml` but for:
+# - the security parameter, the Blend PoW's target transactions per block, the
+#   target PoW reward claims per block and the claim acceptance window, which
+#   stay as the genesis era set them,
+# - the EmPoWering pool and payout rate, and the block rewards, sized for the
+#   stake of this chain and a run to the end of January 2027.
+# A test schedule: nodes of releases 0.3.1 to 0.3.6 do not follow the chain
+# past it.
 !V2
 blend:
   common:
@@ -30,7 +35,7 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 120
+  security_param: 1000
   slot_activation_coeff:
     numerator: 1
     denominator: 30
@@ -49,11 +54,9 @@ cryptarchia:
       # (Raspberry Pi 5, one core), at which one solution is around fifty
       # seconds of work.
       base_difficulty: 19
-      # The reference load the threshold is calibrated at, so it has to be the
-      # load the network actually carries: two transactions per block. A
-      # theoretical capacity here would pin the threshold off its calibrated
-      # point.
-      target_transactions_per_block: 2
+      # The reference load the threshold is calibrated at: kept as the genesis
+      # era set it.
+      target_transactions_per_block: 12
       max_step: 2
       damping_num: 1
       damping_den_offset: 1
@@ -66,21 +69,24 @@ cryptarchia:
       minimum_difficulty: 19
       ema_smoothing_factor: 9
       ema_smoothing_precision: 10
-      # One claim per block: claims are transactions, and the per-block
-      # transaction budget is 2. The payout rate counts on it too: an epoch
-      # whose blocks carry that many claims each pays out rho of the pool.
-      target_claims_per_block: 1
-      # rho = rate_num / rate_den = 1/100 of the pool per epoch: with the
-      # pool this era starts with, about half of it is left after 30 days.
+      # Kept as the genesis era set it. The payout rate counts on it: an
+      # epoch whose blocks carry that many claims each pays out rho of the
+      # pool.
+      target_claims_per_block: 10
+      # rho = rate_num / rate_den = 1/26 of the pool per epoch. An epoch is
+      # 300,000 slots, about three and a half days: after 30 days about seven
+      # tenths of the pool this era starts with is left, and after 65 days
+      # about half.
       rate_num: 1
-      rate_den: 100
+      rate_den: 26
       # `pow_share / share_den` of the fees each block collects is
       # diverted to the pow reward pool at the epoch boundary.
       pow_share: 10
       share_den: 100
-      # Acceptance window in slots; must match the mining service. Ten
-      # block-intervals of tolerance for a claim to reach a block.
-      slot_window: 300
+      # Acceptance window in slots; must match the mining service. Kept as
+      # the genesis era set it: twenty block-intervals of tolerance for a
+      # claim to reach a block.
+      slot_window: 600
   sdp_config:
     # One entry per service type, in the order they are declared: the Blend
     # network.
@@ -111,13 +117,18 @@ cryptarchia:
   # The block rewards: the stake target, the scale of the emission's weight, the
   # weight of the pooled fees, a block's emission in full, and the Blend nodes'
   # share of a reward, the leader taking the rest.
+  #
+  # The genesis era's stake target is far below the chain's stake, which
+  # leaves a block's reward at its fee. This era emits: 200,000,000 a block
+  # while the stake is below 80,000,000,000,000, then less with each token of
+  # stake, down to nothing at the target of 100,000,000,000,000.
   block_rewards:
-    stake_target: 3000000000
-    emission_factor_scale: 120000000
+    stake_target: 100000000000000
+    emission_factor_scale: 20000000000000
     fee_average_numerator: 10512
     max_emission_per_block:
-      numerator: 62500
-      denominator: 657
+      numerator: 200000000
+      denominator: 1
     blend_share:
       numerator: 6
       denominator: 10
@@ -136,7 +147,8 @@ cryptarchia:
     leader_claim: 580
     claim_pow_reward: 1
   # The EmPoWering reward pool the era starts with, replacing what the
-  # genesis era left of its own.
-  pow_reward_pool: 5940000000000000
+  # genesis era left of its own: about twice the stake the chain started with,
+  # so that what is mined in the era's first two months is about that stake.
+  pow_reward_pool: 50000000000000
 time:
   slot_duration_in_seconds: 1

@@ -766,12 +766,39 @@ mod tests {
         let definition = era_1.parameters;
         assert!(!definition.ruleset.is_legacy());
         assert!(!definition.accepted_fork_digests.accepts(None));
-        // k = 120 at f = 1/30: 36,000 one-second slots.
-        assert_eq!(definition.epoch_length().get(), 36_000);
+        // k = 1000 at f = 1/30, as in the genesis era: 300,000 one-second
+        // slots.
+        assert_eq!(definition.epoch_length().get(), 300_000);
         let cryptarchia = &definition.ruleset.parameters().cryptarchia;
-        assert_eq!(cryptarchia.pow_reward_pool.0, Some(5_940_000_000_000_000));
+        // Kept as the genesis era set them.
+        let genesis_era = schedule.genesis().parameters.ruleset.parameters();
+        assert_eq!(
+            cryptarchia.security_param,
+            genesis_era.cryptarchia.security_param
+        );
+        assert_eq!(
+            cryptarchia.pow_config.blend.target_transactions_per_block,
+            genesis_era
+                .cryptarchia
+                .pow_config
+                .blend
+                .target_transactions_per_block
+        );
+        assert_eq!(
+            cryptarchia.pow_config.reward.target_claims_per_block,
+            genesis_era
+                .cryptarchia
+                .pow_config
+                .reward
+                .target_claims_per_block
+        );
+        assert_eq!(
+            cryptarchia.pow_config.reward.slot_window,
+            genesis_era.cryptarchia.pow_config.reward.slot_window
+        );
+        assert_eq!(cryptarchia.pow_reward_pool.0, Some(50_000_000_000_000));
         assert_eq!(cryptarchia.pow_config.reward.rate_num, 1);
-        assert_eq!(cryptarchia.pow_config.reward.rate_den.get(), 100);
+        assert_eq!(cryptarchia.pow_config.reward.rate_den.get(), 26);
         // The genesis era keeps the pool its genesis block gives it.
         let genesis = schedule.genesis().parameters.ruleset.parameters();
         assert!(genesis.cryptarchia.pow_reward_pool.is_unset());
