@@ -214,6 +214,10 @@ pub struct PoWServiceSettings {
     /// Unattended claiming: which keys to pay and how often to try. Omitting
     /// it leaves auto-claim off, so rewards are only claimed on demand.
     pub auto_claim: AutoClaimSettings,
+    /// Start mining as soon as the chain reaches `Online`, as if `StartMining`
+    /// had been received. It is read from the node's configuration at every
+    /// start; `PUT /pow/mining/stop` and `start` keep working at runtime.
+    pub start_on_boot: bool,
     pub era_schedule: ServiceEraSchedule,
     /// Storage-recovery bookkeeping, populated by the runtime on startup.
     pub recovery_data: RecoveryData,
@@ -587,9 +591,13 @@ where
         let mut inbound_relay = service_resources_handle.inbound_relay;
         // Persists the claimable/pending tickets so they survive restarts.
         let state_updater = service_resources_handle.state_updater;
-        // Mining is off until explicitly started and is not persisted: a
-        // restarted node does not resume mining automatically.
-        let mut is_mining = false;
+        // Mining is off until explicitly started and is not persisted — unless
+        // `start_on_boot` is set, in which case it arms as soon as the chain is
+        // `Online`, equivalent to an immediate `StartMining` request.
+        let mut is_mining = settings.start_on_boot;
+        if is_mining {
+            info!(target: LOG_TARGET, "PoW mining started automatically (start_on_boot = true)");
+        }
 
         // Auto-claim arms itself when targets are configured, and disarms once
         // every target has reached its threshold, stopping mining along with
