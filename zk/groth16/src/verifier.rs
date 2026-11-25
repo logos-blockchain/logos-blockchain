@@ -9,10 +9,10 @@ use ark_ff::{One as _, UniformRand as _, Zero as _};
 use ark_groth16::{Groth16, r1cs_to_qap::LibsnarkReduction};
 use ark_relations::r1cs::SynthesisError;
 use rand::thread_rng;
-use rayon::iter::{
-    IndexedParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _,
+use rayon::{
+    iter::{IndexedParallelIterator as _, IntoParallelRefIterator as _, ParallelIterator as _},
+    slice::ParallelSlice as _,
 };
-use rayon::slice::ParallelSlice as _;
 
 use crate::{proof::Proof, verification_key::PreparedVerificationKey};
 
