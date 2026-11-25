@@ -16,7 +16,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
-use lb_wallet::{Voucher, VoucherState, Vouchers, WalletBlock, WalletError, WalletState};
+use lb_wallet::{Voucher, VoucherState, Vouchers, WalletBlock, WalletError};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -208,8 +208,9 @@ impl PendingNotes {
 pub struct RecoveryState {
     next_new_voucher_index: VoucherIndex,
     vouchers: Vouchers<VoucherId>,
-    /// What the wallet tracks of the vouchers at the last known LIB.
-    /// `None` until the first recovery state update.
+    /// What the wallet tracks of the vouchers, and the block it tracks them
+    /// at: its LIB when the state was saved. `None` until the first recovery
+    /// state update.
     ///
     /// The notes of the wallet are not saved: they are read from the ledger
     /// state as the wallet starts.
@@ -234,6 +235,36 @@ impl overwatch::services::state::ServiceState for RecoveryState {
     }
 }
 
+impl RecoveryState {
+    /// The block the vouchers were saved at, if any were.
+    #[must_use]
+    pub fn saved_at(&self) -> Option<HeaderId> {
+        self.lib_voucher_state.as_ref().map(|(block, _)| *block)
+    }
+
+    /// This state with its vouchers brought forward from the block they were
+    /// saved at to `block`, over `blocks_since`: the blocks after the saved
+    /// one up to `block`, oldest first.
+    ///
+    /// A ledger state does not hold the paths of vouchers, so they can only
+    /// follow the chain block by block. A state without saved vouchers is
+    /// returned as it is.
+    pub fn with_vouchers_at<'b>(
+        mut self,
+        block: HeaderId,
+        blocks_since: impl IntoIterator<Item = &'b WalletBlock>,
+    ) -> Result<Self, WalletError> {
+        if let Some((saved_at, voucher_state)) = &mut self.lib_voucher_state {
+            for applied in blocks_since {
+                *voucher_state =
+                    voucher_state.apply_block(&self.vouchers, applied.epoch, applied.voucher_cm)?;
+            }
+            *saved_at = block;
+        }
+        Ok(self)
+    }
+}
+
 /// Provides operations on the states that must be synced to [`RecoveryState`].
 pub struct ServiceState<'u> {
     next_new_voucher_index: VoucherIndex,
@@ -246,13 +277,17 @@ pub struct ServiceState<'u> {
 }
 
 impl<'u> ServiceState<'u> {
+    /// The wallet at `lib`, the chain's LIB, whose ledger state `lib_ledger`
+    /// is: its notes are those the ledger state holds for the configured
+    /// keys, and its vouchers those of `state`, which has to hold them as of
+    /// `lib` if it holds any (see [`RecoveryState::with_vouchers_at`]).
     pub fn new(
         state: RecoveryState,
         settings: &WalletServiceSettings,
         lib: HeaderId,
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
-    ) -> Self {
+    ) -> Result<Self, WalletServiceError> {
         let RecoveryState {
             next_new_voucher_index,
             vouchers,
@@ -264,60 +299,32 @@ impl<'u> ServiceState<'u> {
             .iter()
             .map(|(key_id, pk)| (*pk, key_id.clone()));
 
-        // Initialize [`Wallet`] either from the persisted [`VoucherState`],
-        // without notes, or from the current chain's LIB ledger state.
-        let (wallet, wallet_lib) = match lib_voucher_state {
-            Some((persisted_lib, voucher_state)) => (
-                Wallet::from_lib_wallet_state(
-                    known_keys,
-                    vouchers,
-                    persisted_lib,
-                    WalletState::from_voucher_state(voucher_state),
-                ),
-                persisted_lib,
-            ),
-            None => (
-                Wallet::from_lib_ledger_state(known_keys, vouchers, lib, lib_ledger),
+        let wallet = match lib_voucher_state {
+            Some((saved_at, _)) if saved_at != lib => {
+                return Err(WalletServiceError::SavedStateNotAtLib {
+                    saved: saved_at,
+                    lib,
+                });
+            }
+            Some((_, voucher_state)) => Wallet::from_lib_ledger_and_voucher_state(
+                known_keys,
+                vouchers,
                 lib,
+                lib_ledger,
+                voucher_state,
             ),
+            None => Wallet::from_lib_ledger_state(known_keys, vouchers, lib, lib_ledger),
         };
 
-        Self {
+        Ok(Self {
             next_new_voucher_index,
             wallet,
-            lib: wallet_lib,
+            lib,
             updater,
             pending_claims,
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
-        }
-    }
-
-    /// Rebuilds the wallet at `block`, a block it holds a state at, from
-    /// `ledger`, the ledger state of that block: its notes become those of the
-    /// configured keys in `ledger`, and its vouchers stay tracked as they are
-    /// at `block`.
-    ///
-    /// The wallet then holds the state of `block` alone, which becomes its
-    /// LIB.
-    pub fn rebuild_at(&mut self, block: HeaderId, ledger: &LedgerState) -> Result<(), WalletError> {
-        let voucher_state = self.wallet.wallet_state_at(block)?.voucher_state();
-        let known_keys = self
-            .wallet
-            .known_keys()
-            .iter()
-            .map(|(pk, key_id)| (*pk, key_id.clone()))
-            .collect::<Vec<_>>();
-        self.wallet = Wallet::from_lib_ledger_and_voucher_state(
-            known_keys,
-            self.wallet.vouchers().clone(),
-            block,
-            ledger,
-            voucher_state,
-        );
-        self.lib = block;
-        self.update_state();
-        Ok(())
+        })
     }
 
     pub const fn lib(&self) -> HeaderId {
@@ -733,7 +740,7 @@ mod tests {
         let (sender, _receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
 
-        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater);
+        let mut state = ServiceState::new(recovery, &settings, genesis, &ledger, &updater).unwrap();
 
         // The first post-online LibUpdate delivers a new_lib the wallet never
         // applied (the silent bootstrap->online LIB jump outran the wallet).
@@ -751,10 +758,10 @@ mod tests {
     }
 
     /// A saved state holds what the wallet tracks of the vouchers and none of
-    /// its notes, which the wallet restored from it reads from the ledger
-    /// state for the keys it is configured with.
+    /// its notes. The wallet started from it holds the notes the ledger state
+    /// has for the keys it is configured with, and the saved voucher paths.
     #[test]
-    fn a_saved_state_holds_no_notes_which_are_read_from_the_ledger() {
+    fn a_wallet_started_from_a_saved_state_has_the_ledgers_notes_and_the_saved_vouchers() {
         use std::sync::Arc;
 
         use lb_core::{
@@ -774,6 +781,8 @@ mod tests {
             era_schedule: era_schedule(),
         };
         let genesis = HeaderId::from([0; 32]);
+        // No block of this test changes the notes: the ledger state is that
+        // of each.
         let ledger = LedgerState::from_utxos(
             [
                 Utxo::new([0; 32], 0, Note::new(100, alice)),
@@ -785,11 +794,20 @@ mod tests {
         );
         let (sender, receiver) = tokio::sync::watch::channel(None);
         let updater = StateUpdater::new(Arc::new(sender));
+        let block = |id: u8, parent: HeaderId, voucher_cm: VoucherCm| WalletBlock {
+            id: HeaderId::from([id; 32]),
+            parent,
+            epoch: 0.into(),
+            voucher_cm,
+            header_ops: vec![],
+            txs: BlockTransactions::empty(),
+        };
 
         // A wallet with Alice's key issues a voucher, which the next block
-        // carries.
+        // carries, and is saved at that block.
         let fresh = RecoveryState::from_settings(&settings(alice)).unwrap();
-        let mut state = ServiceState::new(fresh, &settings(alice), genesis, &ledger, &updater);
+        let mut state =
+            ServiceState::new(fresh, &settings(alice), genesis, &ledger, &updater).unwrap();
         let secret = Fr::from(7u64).into();
         let voucher_cm = VoucherCm::from_secret(secret);
         state.add_next_known_voucher(
@@ -797,39 +815,54 @@ mod tests {
             VoucherNullifier::from_secret(secret),
             "voucher-master".into(),
         );
-        let lib = HeaderId::from([1; 32]);
-        state
-            .apply_block(&WalletBlock {
-                id: lib,
-                parent: genesis,
-                epoch: 0.into(),
-                voucher_cm,
-                header_ops: vec![],
-                txs: BlockTransactions::empty(),
-            })
-            .unwrap();
-        state.advance_lib(lib, [genesis], 1, Vec::<VoucherNullifier>::new());
+        let saved_at = block(1, genesis, voucher_cm);
+        state.apply_block(&saved_at).unwrap();
+        state.advance_lib(saved_at.id, [genesis], 1, Vec::<VoucherNullifier>::new());
         let saved: RecoveryState = receiver.borrow().clone().unwrap();
+        assert_eq!(saved.saved_at(), Some(saved_at.id));
 
-        // Restored with Bob's key in place of Alice's.
-        let mut state = ServiceState::new(saved, &settings(bob), genesis, &ledger, &updater);
-        assert_eq!(state.lib(), lib);
-        let restored = state.wallet().wallet_state_at(lib).unwrap();
-        assert_eq!(restored.utxos.size(), 0);
-        assert!(restored.voucher_paths.contains_key(&voucher_cm));
+        // Started with Bob's key in place of Alice's, while the chain's LIB is
+        // the block it was saved at.
+        let state = ServiceState::new(
+            saved.clone(),
+            &settings(bob),
+            saved_at.id,
+            &ledger,
+            &updater,
+        )
+        .unwrap();
+        assert_eq!(state.lib(), saved_at.id);
+        let started = state.wallet().wallet_state_at(saved_at.id).unwrap();
+        assert_eq!(started.utxos_owned_by_pks([alice]).len(), 0);
+        assert_eq!(started.utxos_owned_by_pks([bob]).len(), 1);
+        assert!(started.voucher_paths.contains_key(&voucher_cm));
+        let path_when_saved = started.voucher_paths.get(&voucher_cm).cloned();
 
-        // The block left the notes as they were at genesis.
-        state.rebuild_at(lib, &ledger).unwrap();
-        let rebuilt = state.wallet().wallet_state_at(lib).unwrap();
-        assert_eq!(rebuilt.utxos_owned_by_pks([alice]).len(), 0);
-        assert_eq!(rebuilt.utxos_owned_by_pks([bob]).len(), 1);
-        assert!(rebuilt.voucher_paths.contains_key(&voucher_cm));
-        assert_eq!(state.lib(), lib);
-
-        // A block the wallet holds no state at.
+        // Started while the chain's LIB is a later block: the saved vouchers
+        // are not of that block.
+        let lib = block(
+            2,
+            saved_at.id,
+            VoucherCm::from_secret(Fr::from(8u64).into()),
+        );
         assert!(matches!(
-            state.rebuild_at(genesis, &ledger),
-            Err(WalletError::UnknownBlock(block)) if block == genesis
+            ServiceState::new(saved.clone(), &settings(bob), lib.id, &ledger, &updater),
+            Err(WalletServiceError::SavedStateNotAtLib { saved, lib: at })
+                if saved == saved_at.id && at == lib.id
         ));
+
+        // Brought forward to that block first, they are, and the voucher's
+        // path has followed the block in between.
+        let saved = saved.with_vouchers_at(lib.id, [&lib]).unwrap();
+        assert_eq!(saved.saved_at(), Some(lib.id));
+        let state = ServiceState::new(saved, &settings(bob), lib.id, &ledger, &updater).unwrap();
+        assert_eq!(state.lib(), lib.id);
+        let started = state.wallet().wallet_state_at(lib.id).unwrap();
+        assert_eq!(started.utxos_owned_by_pks([bob]).len(), 1);
+        assert!(started.voucher_paths.contains_key(&voucher_cm));
+        assert_ne!(
+            started.voucher_paths.get(&voucher_cm).cloned(),
+            path_when_saved
+        );
     }
 }

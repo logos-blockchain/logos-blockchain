@@ -187,29 +187,81 @@ pub struct VoucherState {
     pub voucher_paths_snapshot: VoucherPaths,
 }
 
-impl WalletState {
-    /// A state that tracks the vouchers as `vouchers` does, and holds no
-    /// notes: those are to be read from the ledger state of its block.
+impl VoucherState {
+    /// The vouchers as a ledger state gives them: the tree, and the path of
+    /// none.
     #[must_use]
-    pub fn from_voucher_state(vouchers: VoucherState) -> Self {
-        let VoucherState {
-            epoch,
-            vouchers,
-            voucher_paths,
-            voucher_paths_snapshot,
-        } = vouchers;
+    pub fn from_ledger(ledger: &LedgerState) -> Self {
         Self {
-            utxos: rpds::HashTrieMapSync::new_sync(),
-            pk_index: rpds::HashTrieMapSync::new_sync(),
-            service_notes: rpds::HashTrieSetSync::new_sync(),
-            channel_notes: rpds::HashTrieSetSync::new_sync(),
-            epoch,
-            vouchers,
-            voucher_paths,
-            voucher_paths_snapshot,
+            epoch: ledger.epoch_state().epoch,
+            vouchers: ledger.mantle_ledger().vouchers().clone(),
+            voucher_paths: rpds::HashTrieMapSync::new_sync(),
+            voucher_paths_snapshot: rpds::HashTrieMapSync::new_sync(),
         }
     }
 
+    /// The vouchers as tracked after a block of `epoch` that carries
+    /// `voucher_cm`.
+    ///
+    /// The tree takes the block's voucher, and the tracked paths follow it.
+    /// The voucher's own path is tracked from here on if it is one of
+    /// `known_vouchers`, and the paths of vouchers no longer among them are
+    /// dropped. The first block of an epoch takes the snapshot of the paths.
+    pub fn apply_block<VoucherId>(
+        &self,
+        known_vouchers: &Vouchers<VoucherId>,
+        epoch: Epoch,
+        voucher_cm: VoucherCm,
+    ) -> Result<Self, WalletError> {
+        // Snapshot voucher paths if epoch is advancing
+        let voucher_paths_snapshot = if epoch > self.epoch {
+            self.voucher_paths
+                .iter()
+                .map(|(cm, path)| {
+                    let mut path = path.clone();
+                    self.vouchers.refresh_path(&mut path)?;
+                    Ok((*cm, path))
+                })
+                .collect::<Result<_, WalletError>>()?
+        } else {
+            self.voucher_paths_snapshot.clone()
+        };
+
+        // Filter out vouchers that have been claimed/finalized.
+        // `known_vouchers` always reflects the latest set of vouchers to be
+        // tracked.
+        let mut voucher_paths = self.voucher_paths.clone();
+        for cm in self.voucher_paths.keys() {
+            if known_vouchers.get(cm).is_none() {
+                voucher_paths.remove_mut(cm);
+            }
+        }
+
+        // Push the new voucher to the MMR and update the tracked paths it
+        // settles
+        let (vouchers, new_path) = self
+            .vouchers
+            .push_with_lazy_paths(voucher_cm, &mut voucher_paths)
+            .map_err(|error| match error {
+                lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
+                lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
+            })?;
+
+        // Track the new voucher's path if it is owned by us
+        if known_vouchers.get(&voucher_cm).is_some() {
+            voucher_paths.insert_mut(voucher_cm, new_path);
+        }
+
+        Ok(Self {
+            epoch,
+            vouchers,
+            voucher_paths,
+            voucher_paths_snapshot,
+        })
+    }
+}
+
+impl WalletState {
     #[must_use]
     pub fn voucher_state(&self) -> VoucherState {
         VoucherState {
@@ -220,9 +272,23 @@ impl WalletState {
         }
     }
 
+    /// The state of a block: the notes its ledger state holds for the known
+    /// keys, and the tree of vouchers it holds, with the path of none.
+    #[must_use]
     pub fn from_ledger<KeyId>(
         known_keys: &HashMap<ZkPublicKey, KeyId>,
         ledger: &LedgerState,
+    ) -> Self {
+        Self::from_ledger_and_vouchers(known_keys, ledger, VoucherState::from_ledger(ledger))
+    }
+
+    /// The state of a block: the notes its ledger state holds for the known
+    /// keys, and the vouchers as `vouchers` tracks them at that block.
+    #[must_use]
+    pub fn from_ledger_and_vouchers<KeyId>(
+        known_keys: &HashMap<ZkPublicKey, KeyId>,
+        ledger: &LedgerState,
+        vouchers: VoucherState,
     ) -> Self {
         let mut utxos = rpds::HashTrieMapSync::new_sync();
         let mut pk_index = rpds::HashTrieMapSync::new_sync();
@@ -258,15 +324,21 @@ impl WalletState {
             }
         }
 
+        let VoucherState {
+            epoch,
+            vouchers,
+            voucher_paths,
+            voucher_paths_snapshot,
+        } = vouchers;
         Self {
             utxos,
             pk_index,
             service_notes,
             channel_notes,
-            epoch: ledger.epoch_state().epoch,
-            vouchers: ledger.mantle_ledger().vouchers().clone(),
-            voucher_paths: rpds::HashTrieMapSync::new_sync(),
-            voucher_paths_snapshot: rpds::HashTrieMapSync::new_sync(),
+            epoch,
+            vouchers,
+            voucher_paths,
+            voucher_paths_snapshot,
         }
     }
 
@@ -488,80 +560,25 @@ impl WalletState {
             }
         }
 
-        let (vouchers, voucher_paths, voucher_paths_snapshot) =
-            self.apply_voucher(known_vouchers, block)?;
+        let VoucherState {
+            epoch,
+            vouchers,
+            voucher_paths,
+            voucher_paths_snapshot,
+        } = self
+            .voucher_state()
+            .apply_block(known_vouchers, block.epoch, block.voucher_cm)?;
 
         Ok(Self {
             utxos,
             pk_index,
             service_notes,
             channel_notes,
-            epoch: block.epoch,
+            epoch,
             vouchers,
             voucher_paths,
             voucher_paths_snapshot,
         })
-    }
-
-    /// Apply the voucher commitment from the block to the wallet state.
-    ///
-    /// Returns:
-    /// - Updated MMR including the new voucher commitment
-    /// - Updated tracked voucher paths, including the new voucher if it is
-    ///   owned by us
-    /// - Snapshot of trakced voucher paths (updated only if epoch is advancing)
-    fn apply_voucher<VoucherId>(
-        &self,
-        known_vouchers: &Vouchers<VoucherId>,
-        block: &WalletBlock,
-    ) -> Result<
-        (
-            MerkleMountainRange<VoucherCm, ZkHasher>,
-            VoucherPaths,
-            VoucherPaths,
-        ),
-        WalletError,
-    > {
-        // Snapshot voucher paths if epoch is advancing
-        let snapshot = if block.epoch > self.epoch {
-            self.voucher_paths
-                .iter()
-                .map(|(cm, path)| {
-                    let mut path = path.clone();
-                    self.vouchers.refresh_path(&mut path)?;
-                    Ok((*cm, path))
-                })
-                .collect::<Result<_, WalletError>>()?
-        } else {
-            self.voucher_paths_snapshot.clone()
-        };
-
-        // Filter out vouchers that have been claimed/finalized.
-        // `known_vouchers` always reflects the latest set of vouchers to be
-        // tracked.
-        let mut voucher_paths = self.voucher_paths.clone();
-        for cm in self.voucher_paths.keys() {
-            if known_vouchers.get(cm).is_none() {
-                voucher_paths.remove_mut(cm);
-            }
-        }
-
-        // Push the new voucher to the MMR and update the tracked paths it
-        // settles
-        let (vouchers, new_path) = self
-            .vouchers
-            .push_with_lazy_paths(block.voucher_cm, &mut voucher_paths)
-            .map_err(|error| match error {
-                lb_mmr::PushWithPathsError::MmrFull(_) => WalletError::VoucherMmrFull,
-                lb_mmr::PushWithPathsError::InvalidTrackedPath(error) => error.into(),
-            })?;
-
-        // Track the new voucher's path if it is owned by us
-        if known_vouchers.get(&block.voucher_cm).is_some() {
-            voucher_paths.insert_mut(block.voucher_cm, new_path);
-        }
-
-        Ok((vouchers, voucher_paths, snapshot))
     }
 }
 
@@ -741,14 +758,8 @@ where
         voucher_state: VoucherState,
     ) -> Self {
         let known_keys = known_keys.into_iter().collect();
-        let notes = WalletState::from_ledger(&known_keys, ledger);
-        let wallet_state = WalletState {
-            utxos: notes.utxos,
-            pk_index: notes.pk_index,
-            service_notes: notes.service_notes,
-            channel_notes: notes.channel_notes,
-            ..WalletState::from_voucher_state(voucher_state)
-        };
+        let wallet_state =
+            WalletState::from_ledger_and_vouchers(&known_keys, ledger, voucher_state);
         Self::at_lib(known_keys, known_vouchers, lib, wallet_state)
     }
 

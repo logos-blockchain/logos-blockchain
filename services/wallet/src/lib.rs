@@ -94,6 +94,9 @@ pub enum WalletServiceError {
     #[error(transparent)]
     WalletError(#[from] WalletError),
 
+    #[error("The wallet's saved state is of block {saved}, not of the chain's LIB, {lib}")]
+    SavedStateNotAtLib { saved: HeaderId, lib: HeaderId },
+
     #[error("KMS API error: {0}")]
     KmsApi(DynError),
 
@@ -536,19 +539,19 @@ where
             .await?
             .ok_or(WalletServiceError::LedgerStateNotFound(lib))?;
 
-        let mut state = ServiceState::new(
+        let mut state = Self::state_at_lib(
             self.initial_state,
             &settings,
-            lib,
-            &lib_ledger,
+            (lib, &lib_ledger),
+            (&storage, &cryptarchia_api),
             &service_resources_handle.state_updater,
-        );
+        )
+        .await?;
         let voucher_master_key_id = settings.voucher_master_key_id;
 
-        Self::catch_up_with_chain(
-            &mut state,
-            (lib, &lib_ledger),
+        Self::backfill_missing_blocks(
             cryptarchia_info.tip,
+            &mut state,
             &storage,
             &cryptarchia_api,
             &settings.era_schedule,
@@ -1541,30 +1544,59 @@ where
         .await
     }
 
-    async fn load_notes_at_lib(
-        state: &mut ServiceState<'_>,
+    /// The wallet as it starts, at `lib`, the chain's LIB: built from the
+    /// LIB's ledger state and what its saved state holds.
+    async fn state_at_lib<'updater>(
+        saved: RecoveryState,
+        settings: &WalletServiceSettings,
         (lib, lib_ledger): (HeaderId, &LedgerState),
-        storage: &StorageApi<Tx>,
-        cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
-        era_schedule: &ServiceEraSchedule,
-    ) -> Result<(), WalletServiceError> {
-        Self::backfill_missing_blocks(lib, state, storage, cryptarchia_api, era_schedule).await?;
-        Ok(state.rebuild_at(lib, lib_ledger)?)
+        (storage, cryptarchia_api): (&StorageApi<Tx>, &CryptarchiaServiceApi<Cryptarchia>),
+        updater: &'updater overwatch::services::state::StateUpdater<Option<RecoveryState>>,
+    ) -> Result<ServiceState<'updater>, WalletServiceError> {
+        let saved =
+            Self::saved_state_at_lib(saved, lib, storage, cryptarchia_api, &settings.era_schedule)
+                .await?;
+        ServiceState::new(saved, settings, lib, lib_ledger, updater)
     }
 
-    /// Brings the wallet up to the chain's `tip` as it starts.
+    /// The wallet's saved state, with its vouchers brought forward from the
+    /// block they were saved at to `lib`, the chain's LIB.
     ///
-    /// Its notes are loaded first: see [`Self::load_notes_at_lib`].
-    async fn catch_up_with_chain(
-        state: &mut ServiceState<'_>,
-        lib: (HeaderId, &LedgerState),
-        tip: HeaderId,
+    /// The wallet is built at the LIB, from the LIB's ledger state. That holds
+    /// its notes, but not the Merkle paths of its vouchers, which the saved
+    /// state has as of the block it was saved at. The paths are brought to the
+    /// LIB over the blocks in between, of which only the vouchers matter here.
+    /// That is no block when the wallet was saved at the LIB.
+    ///
+    /// Fails if the LIB is not a descendant of the block the state was saved
+    /// at.
+    async fn saved_state_at_lib(
+        saved: RecoveryState,
+        lib: HeaderId,
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         era_schedule: &ServiceEraSchedule,
-    ) -> Result<(), WalletServiceError> {
-        Self::load_notes_at_lib(state, lib, storage, cryptarchia_api, era_schedule).await?;
-        Self::backfill_missing_blocks(tip, state, storage, cryptarchia_api, era_schedule).await
+    ) -> Result<RecoveryState, WalletServiceError> {
+        let Some(saved_at) = saved.saved_at() else {
+            return Ok(saved);
+        };
+        // From the LIB back to the block the state was saved at, included.
+        let headers = cryptarchia_api
+            .get_headers(Some(lib), Some(saved_at))
+            .await
+            .map_err(WalletServiceError::CryptarchiaApi)?
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut blocks_since = Vec::with_capacity(headers.len());
+        for header_id in headers.into_iter().rev().filter(|id| *id != saved_at) {
+            let block = Self::load_block(header_id, storage).await?;
+            blocks_since.push(WalletBlock::from_block(
+                &block,
+                era_schedule.epoch_for_slot(block.header().slot()),
+                &Events::new(),
+            ));
+        }
+        Ok(saved.with_vouchers_at(lib, &blocks_since)?)
     }
 
     async fn backfill_if_not_in_sync(
