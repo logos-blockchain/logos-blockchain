@@ -1541,37 +1541,34 @@ where
         .await
     }
 
-    /// Loads the notes of a wallet that was restored from a saved state.
+    /// Loads the wallet's notes from the ledger state of the chain's LIB, as
+    /// the wallet starts.
     ///
-    /// A saved state holds no notes, so a restored wallet starts without any.
-    /// It first applies the blocks from the block it was saved at up to the
-    /// chain's LIB, then reads its notes from the LIB's ledger state,
-    /// `lib_ledger`, for the keys in the config. The caller applies the blocks
-    /// after the LIB.
+    /// A wallet's saved state holds no notes, so a wallet restored from one
+    /// starts without any. The wallet first applies the blocks from the block
+    /// it was saved at up to the chain's LIB, then reads its notes from the
+    /// LIB's ledger state, `lib_ledger`, for the keys in the config. The
+    /// caller applies the blocks after the LIB.
+    ///
+    /// A wallet without saved state is already at the LIB with these notes:
+    /// for it this changes nothing.
     ///
     /// Fails if the wallet cannot be brought to the chain's LIB, which
     /// includes a wallet that was saved at a block after it.
-    ///
-    /// A wallet that was not restored was built from `lib_ledger` and already
-    /// has its notes: nothing is done for it.
-    async fn read_restored_notes(
+    async fn load_notes_at_lib(
         state: &mut ServiceState<'_>,
         (lib, lib_ledger): (HeaderId, &LedgerState),
         storage: &StorageApi<Tx>,
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         era_schedule: &ServiceEraSchedule,
     ) -> Result<(), WalletServiceError> {
-        if !state.is_restored() {
-            return Ok(());
-        }
         Self::backfill_missing_blocks(lib, state, storage, cryptarchia_api, era_schedule).await?;
         Ok(state.rescan_notes(lib, lib_ledger)?)
     }
 
     /// Brings the wallet up to the chain's `tip` as it starts.
     ///
-    /// A wallet restored from a saved state first loads its notes: see
-    /// [`Self::read_restored_notes`].
+    /// Its notes are loaded first: see [`Self::load_notes_at_lib`].
     async fn catch_up_with_chain(
         state: &mut ServiceState<'_>,
         lib: (HeaderId, &LedgerState),
@@ -1580,7 +1577,7 @@ where
         cryptarchia_api: &CryptarchiaServiceApi<Cryptarchia>,
         era_schedule: &ServiceEraSchedule,
     ) -> Result<(), WalletServiceError> {
-        Self::read_restored_notes(state, lib, storage, cryptarchia_api, era_schedule).await?;
+        Self::load_notes_at_lib(state, lib, storage, cryptarchia_api, era_schedule).await?;
         Self::backfill_missing_blocks(tip, state, storage, cryptarchia_api, era_schedule).await
     }
 

@@ -243,9 +243,6 @@ pub struct ServiceState<'u> {
     pending_claims: PendingClaims,
     pending_notes: PendingNotes,
     pending_note_expiry_blocks: u64,
-    /// Whether the wallet was restored from a saved state, which holds no
-    /// notes: they are still to be read from a ledger state.
-    restored: bool,
 }
 
 impl<'u> ServiceState<'u> {
@@ -269,7 +266,6 @@ impl<'u> ServiceState<'u> {
 
         // Initialize [`Wallet`] either from the persisted [`VoucherState`],
         // without notes, or from the current chain's LIB ledger state.
-        let restored = lib_voucher_state.is_some();
         let (wallet, wallet_lib) = match lib_voucher_state {
             Some((persisted_lib, voucher_state)) => (
                 Wallet::from_lib_wallet_state(
@@ -294,21 +290,15 @@ impl<'u> ServiceState<'u> {
             pending_claims,
             pending_notes: PendingNotes::default(),
             pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
-            restored,
         }
     }
 
-    /// Whether the wallet was restored from a saved state rather than built
-    /// from the ledger state of the LIB. Such a wallet holds no notes until
-    /// [`Self::rescan_notes`].
-    pub const fn is_restored(&self) -> bool {
-        self.restored
-    }
-
     /// Replaces the notes the wallet holds at `block` with those of the
-    /// configured keys in `ledger`, the ledger state of that block. To be
-    /// done before the blocks after it are applied, whose notes follow from
-    /// its own.
+    /// configured keys in `ledger`, the ledger state of that block.
+    ///
+    /// A wallet restored from a saved state holds no notes until this is
+    /// done. It has to be done before the blocks after `block` are applied:
+    /// their notes follow from its own.
     pub fn rescan_notes(
         &mut self,
         block: HeaderId,
@@ -787,7 +777,6 @@ mod tests {
         // carries.
         let fresh = RecoveryState::from_settings(&settings(alice)).unwrap();
         let mut state = ServiceState::new(fresh, &settings(alice), genesis, &ledger, &updater);
-        assert!(!state.is_restored());
         let secret = Fr::from(7u64).into();
         let voucher_cm = VoucherCm::from_secret(secret);
         state.add_next_known_voucher(
@@ -811,7 +800,6 @@ mod tests {
 
         // Restored with Bob's key in place of Alice's.
         let mut state = ServiceState::new(saved, &settings(bob), genesis, &ledger, &updater);
-        assert!(state.is_restored());
         assert_eq!(state.lib(), lib);
         let restored = state.wallet().wallet_state_at(lib).unwrap();
         assert_eq!(restored.utxos.size(), 0);
