@@ -19,6 +19,8 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use ::serde::{Deserialize, Deserializer, Serialize, Serializer, ser::Error as _};
+
 /// Abstraction over the hash type and hashing operations a
 /// [`DynamicMerkleTree`] needs.
 ///
@@ -112,18 +114,18 @@ impl<Hash> Eq for LazyHash<Hash> {}
 
 /// Serializes as the hash itself, which is to be computed before: see
 /// [`serde`]'s `Serialize` of [`DynamicMerkleTree`].
-impl<Hash: ::serde::Serialize> ::serde::Serialize for LazyHash<Hash> {
-    fn serialize<S: ::serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+impl<Hash: Serialize> Serialize for LazyHash<Hash> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0
             .get()
-            .ok_or_else(|| ::serde::ser::Error::custom("inner node hash was not computed"))?
+            .ok_or_else(|| S::Error::custom("inner node hash was not computed"))?
             .serialize(serializer)
     }
 }
 
 /// A deserialized hash is not trusted: it is read and left to be computed.
-impl<'de, Hash: ::serde::Deserialize<'de>> ::serde::Deserialize<'de> for LazyHash<Hash> {
-    fn deserialize<D: ::serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+impl<'de, Hash: Deserialize<'de>> Deserialize<'de> for LazyHash<Hash> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Hash::deserialize(deserializer).map(|_| Self::new())
     }
 }
