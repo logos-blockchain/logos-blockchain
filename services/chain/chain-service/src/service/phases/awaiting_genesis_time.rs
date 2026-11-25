@@ -106,20 +106,6 @@ where
         }
     }
 
-    /// Run the service through its phases in order.
-    pub(crate) async fn run_phases(self) -> Result<(), Error> {
-        self.process_awaiting_genesis_time()
-            .await
-            .process_initial_block_download()
-            .await
-            .process_prolonged_bootstrap_period()
-            .await?
-            .process_following()
-            .await;
-
-        Ok(())
-    }
-
     /// Runs the phase until the genesis time is reached.
     /// A no-op if the genesis time is already in the past.
     ///

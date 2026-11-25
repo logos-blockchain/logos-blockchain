@@ -940,8 +940,7 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        service
-            .run_phases()
+        service::phases::run_phases(service)
             .instrument(span!(target: LOG_TARGET, Level::TRACE, SERVICE_ID))
             .await?;
 
