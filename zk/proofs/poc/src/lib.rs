@@ -42,6 +42,7 @@ use lb_groth16::{
     CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser, groth16_batch_verify,
 };
 use lb_log_targets::proofs;
+use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use tracing::error;
 pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData, VOUCHER_MERKLE_PATH_LEN};
 
@@ -136,9 +137,10 @@ pub fn batch_verify(
         .collect();
 
     let expanded_proofs: Vec<Groth16Proof> = proofs_and_inputs
-        .iter()
-        .map(|(p, _)| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
-        .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
+        .par_iter()
+        .map(|(p, _)| Groth16Proof::try_from(p))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| VerifyError::Expansion)?;
 
     Ok(groth16_batch_verify(
         verification_key::POC_VK.as_ref(),

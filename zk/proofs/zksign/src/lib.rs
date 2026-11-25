@@ -14,6 +14,7 @@ use lb_groth16::{
 use lb_log_targets::proofs;
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
+use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use tracing::error;
 
 use crate::public::{ZkSignVerifierInputsJson, ZkSignVerifierInputsJsonTryFromError};
@@ -133,9 +134,10 @@ pub fn batch_verify(
         .collect();
 
     let expanded_proofs: Vec<Groth16Proof> = proofs_and_inputs
-        .iter()
-        .map(|(p, _)| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
-        .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
+        .par_iter()
+        .map(|(p, _)| Groth16Proof::try_from(p))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| VerifyError::Expansion)?;
 
     Ok(groth16_batch_verify(
         verification_key::ZKSIGN_VK.as_ref(),

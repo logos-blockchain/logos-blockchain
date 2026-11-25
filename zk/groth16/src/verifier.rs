@@ -1,11 +1,18 @@
 use core::fmt::{Display, Formatter};
 use std::{error::Error, fmt, ops::Mul as _};
 
-use ark_ec::{CurveGroup as _, VariableBaseMSM as _, pairing::Pairing};
-use ark_ff::{UniformRand as _, Zero as _};
+use ark_ec::{
+    VariableBaseMSM as _,
+    pairing::{MillerLoopOutput, Pairing},
+};
+use ark_ff::{One as _, UniformRand as _, Zero as _};
 use ark_groth16::{Groth16, r1cs_to_qap::LibsnarkReduction};
 use ark_relations::r1cs::SynthesisError;
 use rand::thread_rng;
+use rayon::{
+    iter::{IndexedParallelIterator as _, ParallelIterator as _},
+    slice::ParallelSlice as _,
+};
 
 use crate::{proof::Proof, verification_key::PreparedVerificationKey};
 
@@ -37,6 +44,20 @@ pub fn groth16_verify<E: Pairing>(
         .map_err(VerificationError)
 }
 
+/// The proofs that go through one Miller loop, on one thread.
+///
+/// The Miller loop of arkworks squares its accumulator once per step for
+/// each group of 4 pairs it is given, and runs the groups one after the
+/// other. A chunk of 4 proofs thus does the same work as one loop over all
+/// of them, while a smaller chunk repeats the squarings and a larger one
+/// gives the pool fewer tasks to balance.
+const PROOFS_PER_MILLER_LOOP: usize = 4;
+
+/// Verifies `proofs` as one batch, on the threads of the global `rayon` pool.
+///
+/// The work that grows with the number of proofs is split over the threads:
+/// a scalar multiplication and a Miller loop for each proof. Their products
+/// are combined into the single final exponentiation of the batch.
 pub fn groth16_batch_verify<E: Pairing>(
     vk: &PreparedVerificationKey<E>,
     proofs: &[Proof<E>],
@@ -50,10 +71,6 @@ pub fn groth16_batch_verify<E: Pairing>(
 
     let pis_c: Vec<E::G1Affine> = proofs.iter().map(|proof| proof.pi_c).collect();
 
-    let batched_pi_c = E::G1::msm(&pis_c, &ri)
-        .expect("msm fails only when slice length differ")
-        .into_affine();
-
     let batched_public_inputs: Vec<E::ScalarField> = std::iter::once(r_sum)
         .chain((0..vk.gamma_abc_g1().len() - 1).map(|i| {
             ri.iter()
@@ -63,23 +80,44 @@ pub fn groth16_batch_verify<E: Pairing>(
         }))
         .collect();
 
-    let batched_ic = E::G1::msm(vk.gamma_abc_g1(), &batched_public_inputs)
-        .expect("msm fails only when slice length differ")
-        .into_affine();
+    let (proofs_loop, vk_loop) = rayon::join(
+        || {
+            proofs
+                .par_chunks(PROOFS_PER_MILLER_LOOP)
+                .zip(ri.par_chunks(PROOFS_PER_MILLER_LOOP))
+                .map(|(proofs, ri)| {
+                    let (g1_terms, g2_terms): (Vec<E::G1Prepared>, Vec<E::G2Prepared>) = proofs
+                        .iter()
+                        .zip(ri)
+                        .map(|(proof, r)| {
+                            (E::G1Prepared::from(proof.pi_a.mul(*r)), proof.pi_b.into())
+                        })
+                        .unzip();
+                    E::multi_miller_loop(g1_terms, g2_terms).0
+                })
+                .reduce(E::TargetField::one, |a, b| a * b)
+        },
+        || {
+            let batched_pi_c =
+                E::G1::msm(&pis_c, &ri).expect("msm fails only when slice length differ");
+            let batched_ic = E::G1::msm(vk.gamma_abc_g1(), &batched_public_inputs)
+                .expect("msm fails only when slice length differ");
+            let g1_terms: [E::G1Prepared; 3] = [
+                E::G1Prepared::from(-vk.alpha_g1().mul(r_sum)),
+                E::G1Prepared::from(batched_ic),
+                E::G1Prepared::from(batched_pi_c),
+            ];
+            let g2_terms: [E::G2Prepared; 3] = [
+                vk.beta_g2().into(),
+                vk.gamma_g2_neg_pc().clone(),
+                vk.delta_g2_neg_pc().clone(),
+            ];
+            E::multi_miller_loop(g1_terms, g2_terms).0
+        },
+    );
 
-    let (g1_terms, g2_terms): (Vec<_>, Vec<_>) = proofs
-        .iter()
-        .enumerate()
-        .map(|(i, proof)| (proof.pi_a.mul(ri[i]).into_affine(), proof.pi_b.into()))
-        .chain([
-            ((-vk.alpha_g1().mul(r_sum)).into(), vk.beta_g2().into()),
-            (batched_ic, vk.gamma_g2_neg_pc().clone()),
-            (batched_pi_c, vk.delta_g2_neg_pc().clone()),
-        ])
-        .unzip();
-
-    let check = E::multi_pairing(g1_terms, g2_terms);
-    check.is_zero()
+    E::final_exponentiation(MillerLoopOutput(proofs_loop * vk_loop))
+        .is_some_and(|check| check.is_zero())
 }
 
 #[cfg(test)]
@@ -90,7 +128,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
+        Bn254, Fr, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
         Groth16VerificationKey, Groth16VerificationKeyJsonDeser,
     };
 
@@ -269,8 +307,7 @@ mod tests {
             "516548"
         ])
     });
-    #[test]
-    fn test_verify() {
+    fn fixtures() -> (PreparedVerificationKey<Bn254>, Groth16Proof, Vec<Fr>) {
         let proof: Groth16Proof =
             serde_json::from_value::<Groth16ProofJsonDeser>(PROOF.deref().clone())
                 .unwrap()
@@ -290,7 +327,31 @@ mod tests {
             .into_iter()
             .map(Groth16Input::into_inner)
             .collect();
-        let pvk = vk.into_prepared();
+        (vk.into_prepared(), proof, pi)
+    }
+
+    #[test]
+    fn test_verify() {
+        let (pvk, proof, pi) = fixtures();
         assert!(groth16_verify(&pvk, &proof, &pi).is_ok());
+    }
+
+    #[test]
+    fn test_batch_verify_one_proof() {
+        let (pvk, proof, pi) = fixtures();
+        assert!(groth16_batch_verify(&pvk, &[proof], &[pi]));
+    }
+
+    #[test]
+    fn test_batch_verify_over_several_miller_loops() {
+        let (pvk, proof, pi) = fixtures();
+        let count = 2 * PROOFS_PER_MILLER_LOOP + 1;
+        let proofs = vec![proof; count];
+        let mut pis = vec![pi; count];
+        assert!(groth16_batch_verify(&pvk, &proofs, &pis));
+
+        // A wrong public input in the last, partial chunk fails the batch.
+        pis[count - 1][0] += Fr::one();
+        assert!(!groth16_batch_verify(&pvk, &proofs, &pis));
     }
 }

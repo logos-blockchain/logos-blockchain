@@ -13,7 +13,13 @@
 //! [`empty_subtree_root`] macro to derive the cached
 //! [`MerkleHasher::empty_subtree_root`] method for a concrete hash type.
 
-use std::{fmt, marker::PhantomData, sync::Arc};
+use std::{
+    fmt,
+    marker::PhantomData,
+    sync::{Arc, OnceLock},
+};
+
+use ::serde::{Deserialize, Deserializer, Serialize, Serializer, ser::Error as _};
 
 /// Abstraction over the hash type and hashing operations a
 /// [`DynamicMerkleTree`] needs.
@@ -80,13 +86,57 @@ macro_rules! empty_subtree_root {
     };
 }
 
+/// The hash of an inner node, computed from its children the first time it is
+/// read.
+///
+/// A mutation rebuilds the nodes on the path from its leaf to the root. With
+/// hashes computed as the nodes are built, each of several mutations between
+/// two reads of the root would hash its whole path, though the nodes their
+/// paths share are replaced by the next one before anything reads them. Left
+/// to the first read, a node that is replaced unread is never hashed.
+#[derive(Clone, Debug)]
+struct LazyHash<Hash>(OnceLock<Hash>);
+
+impl<Hash> LazyHash<Hash> {
+    const fn new() -> Self {
+        Self(OnceLock::new())
+    }
+}
+
+/// The hash follows from the children of its node, which are compared with it.
+impl<Hash> PartialEq for LazyHash<Hash> {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<Hash> Eq for LazyHash<Hash> {}
+
+/// Serializes as the hash itself, which is to be computed before: see
+/// [`serde`]'s `Serialize` of [`DynamicMerkleTree`].
+impl<Hash: Serialize> Serialize for LazyHash<Hash> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0
+            .get()
+            .ok_or_else(|| S::Error::custom("inner node hash was not computed"))?
+            .serialize(serializer)
+    }
+}
+
+/// A deserialized hash is not trusted: it is read and left to be computed.
+impl<'de, Hash: Deserialize<'de>> Deserialize<'de> for LazyHash<Hash> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Hash::deserialize(deserializer).map(|_| Self::new())
+    }
+}
+
 #[derive(::serde::Serialize, ::serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 enum Node<Hash> {
     Inner {
         left: Arc<Self>,
         right: Arc<Self>,
         // Hash is bound to a value, not to confuse with Hasher
-        value: Hash,
+        value: LazyHash<Hash>,
         right_subtree_size: usize,
         left_subtree_size: usize,
         height: usize,
@@ -183,7 +233,7 @@ impl<Hash: Copy> Node<Hash> {
                 if left.height() != right.height() {
                     return Err("sibling subtrees have different heights");
                 }
-                Self::new_inner::<H>(left, right)
+                Self::new_inner(left, right)
             }
         };
         if node.height() > TREE_HEIGHT_EXCEPT_ROOT {
@@ -192,10 +242,7 @@ impl<Hash: Copy> Node<Hash> {
         Ok(Arc::new(node))
     }
 
-    fn new_inner<H>(left: Arc<Self>, right: Arc<Self>) -> Self
-    where
-        H: MerkleHasher<Hash = Hash>,
-    {
+    fn new_inner(left: Arc<Self>, right: Arc<Self>) -> Self {
         if let (
             Self::Empty {
                 height: left_height,
@@ -223,7 +270,7 @@ impl<Hash: Copy> Node<Hash> {
             right_subtree_size: right.size(),
             left_subtree_size: left.size(),
             height: left.height() + 1,
-            value: hash::<H>(&left, &right),
+            value: LazyHash::new(),
             left,
             right,
         }
@@ -248,13 +295,13 @@ impl<Hash: Copy> Node<Hash> {
 
                 if index < left.capacity() {
                     // modify the left subtree
-                    Arc::new(Self::new_inner::<H>(
+                    Arc::new(Self::new_inner(
                         left.insert_or_modify::<H, _>(index, f),
                         Arc::clone(right),
                     ))
                 } else {
                     // modify the right subtree
-                    Arc::new(Self::new_inner::<H>(
+                    Arc::new(Self::new_inner(
                         Arc::clone(left),
                         right.insert_or_modify::<H, _>(index - left.capacity(), f),
                     ))
@@ -266,7 +313,7 @@ impl<Hash: Copy> Node<Hash> {
                     index == 0,
                     "Cannot expand an empty subtree more than one node at a time",
                 );
-                Arc::new(Self::new_inner::<H>(
+                Arc::new(Self::new_inner(
                     Arc::new(Self::Empty { height: height - 1 }).insert_or_modify::<H, _>(index, f),
                     Arc::new(Self::Empty { height: height - 1 }),
                 ))
@@ -356,7 +403,10 @@ impl<Hash: Copy> Node<Hash> {
         H: MerkleHasher<Hash = Hash>,
     {
         match self {
-            Self::Inner { value, .. } | Self::Leaf { value } => *value,
+            Self::Inner {
+                value, left, right, ..
+            } => *value.0.get_or_init(|| hash::<H>(left, right)),
+            Self::Leaf { value } => *value,
             Self::Empty { height } => H::empty_subtree_root(*height),
         }
     }
@@ -502,11 +552,10 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
     #[must_use]
     pub fn root(&self) -> H::Hash {
         match self.root.as_ref() {
-            Node::Inner { value, .. } => *value,
             Node::Leaf { .. } => {
                 panic!("Cannot get root from a leaf node, expected an inner node or empty node");
             }
-            Node::Empty { .. } => H::empty_subtree_root(self.root.height()),
+            Node::Inner { .. } | Node::Empty { .. } => self.root.value::<H>(),
         }
     }
 
@@ -597,7 +646,7 @@ impl<H: MerkleHasher> DynamicMerkleTree<H> {
         } else {
             Arc::new(Node::Empty { height: height - 1 })
         };
-        Arc::new(Node::new_inner::<H>(left, right))
+        Arc::new(Node::new_inner(left, right))
     }
 }
 
@@ -638,6 +687,9 @@ pub mod serde {
         where
             S: Serializer,
         {
+            // The hashes of the inner nodes are serialized, and computed on
+            // their first read only.
+            let _root = self.root.value::<H>();
             let mut state = serializer.serialize_struct("DynamicMerkleTree", 1)?;
             state.serialize_field("root", &self.root)?;
             state.end()
@@ -960,6 +1012,60 @@ mod tests {
         assert_canonical(&recovered.root);
     }
 
+    /// The nodes that mutations replace before the root is read are never
+    /// hashed: adjacent leaves share all of their path but its lowest nodes.
+    #[test]
+    fn test_inner_nodes_are_hashed_on_the_first_read_of_the_root() {
+        use std::cell::Cell;
+
+        thread_local! {
+            static COMPRESSIONS: Cell<usize> = const { Cell::new(0) };
+        }
+
+        struct CountingHasher;
+
+        impl MerkleHasher for CountingHasher {
+            type Hash = Fr;
+
+            const EMPTY_VALUE: Fr = TestHasher::EMPTY_VALUE;
+
+            fn compress(left: &Fr, right: &Fr) -> Fr {
+                COMPRESSIONS.set(COMPRESSIONS.get() + 1);
+                TestHasher::compress(left, right)
+            }
+
+            fn empty_subtree_root(height: usize) -> Fr {
+                TestHasher::empty_subtree_root(height)
+            }
+        }
+
+        const LEAVES: usize = 16;
+        let mut tree = DynamicMerkleTree::<CountingHasher>::new();
+        for value in 0..LEAVES {
+            tree = tree.insert(fr_from_usize(value)).0;
+        }
+        assert_eq!(COMPRESSIONS.get(), 0);
+
+        let root = tree.root();
+        // The 15 inner nodes over the 16 leaves, and the nodes from them up to
+        // the root.
+        assert_eq!(
+            COMPRESSIONS.get(),
+            (LEAVES - 1) + (TREE_HEIGHT_EXCEPT_ROOT - 4)
+        );
+        let rebuilt = DynamicMerkleTree::<TestHasher>::from_sorted_items(
+            (0..LEAVES).map(|value| (value, fr_from_usize(value))),
+        );
+        assert_eq!(root, rebuilt.root());
+
+        // A second read hashes nothing.
+        assert_eq!(tree.root(), root);
+        assert_eq!(
+            COMPRESSIONS.get(),
+            (LEAVES - 1) + (TREE_HEIGHT_EXCEPT_ROOT - 4)
+        );
+    }
+
     #[test]
     fn test_direct_serde_roundtrip_preserves_canonical_structure() {
         let items = [
@@ -1236,12 +1342,12 @@ mod tests {
         match node.as_ref() {
             Node::Inner { left, right, .. } => {
                 if index < left.capacity() {
-                    Arc::new(Node::new_inner::<TestHasher>(
+                    Arc::new(Node::new_inner(
                         insert_at_any_position(left, index, value),
                         Arc::clone(right),
                     ))
                 } else {
-                    Arc::new(Node::new_inner::<TestHasher>(
+                    Arc::new(Node::new_inner(
                         Arc::clone(left),
                         insert_at_any_position(right, index - left.capacity(), value),
                     ))
@@ -1252,12 +1358,12 @@ mod tests {
                 let left = Arc::new(Node::Empty { height: height - 1 });
                 let right = Arc::new(Node::Empty { height: height - 1 });
                 if index < half {
-                    Arc::new(Node::new_inner::<TestHasher>(
+                    Arc::new(Node::new_inner(
                         insert_at_any_position(&left, index, value),
                         right,
                     ))
                 } else {
-                    Arc::new(Node::new_inner::<TestHasher>(
+                    Arc::new(Node::new_inner(
                         left,
                         insert_at_any_position(&right, index - half, value),
                     ))
@@ -1280,7 +1386,7 @@ mod tests {
         };
         let right = Arc::new(Node::Empty { height: height - 1 });
         Arc::new(Node::Inner {
-            value: hash::<H>(&left, &right),
+            value: LazyHash(OnceLock::from(hash::<H>(&left, &right))),
             left_subtree_size: left.size(),
             right_subtree_size: right.size(),
             height,
