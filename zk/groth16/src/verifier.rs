@@ -44,8 +44,14 @@ pub fn groth16_verify<E: Pairing>(
         .map_err(VerificationError)
 }
 
-/// The proofs a thread takes at a time: fewer are not worth handing over.
-const PROOFS_PER_THREAD: usize = 2;
+/// The proofs that go through one Miller loop, on one thread.
+///
+/// The Miller loop of arkworks squares its accumulator once per step for
+/// each group of 4 pairs it is given, and runs the groups one after the
+/// other. A chunk of 4 proofs thus does the same work as one loop over all
+/// of them, while a smaller chunk repeats the squarings and a larger one
+/// gives the pool fewer tasks to balance.
+const PROOFS_PER_MILLER_LOOP: usize = 4;
 
 /// Verifies `proofs` as one batch, on the threads of the global `rayon` pool.
 ///
@@ -77,8 +83,8 @@ pub fn groth16_batch_verify<E: Pairing>(
     let (proofs_loop, vk_loop) = rayon::join(
         || {
             proofs
-                .par_chunks(PROOFS_PER_THREAD)
-                .zip(ri.par_chunks(PROOFS_PER_THREAD))
+                .par_chunks(PROOFS_PER_MILLER_LOOP)
+                .zip(ri.par_chunks(PROOFS_PER_MILLER_LOOP))
                 .map(|(proofs, ri)| {
                     let (g1_terms, g2_terms): (Vec<E::G1Prepared>, Vec<E::G2Prepared>) = proofs
                         .iter()
@@ -124,7 +130,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
+        Bn254, Fr, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
         Groth16VerificationKey, Groth16VerificationKeyJsonDeser,
     };
 
@@ -303,8 +309,7 @@ mod tests {
             "516548"
         ])
     });
-    #[test]
-    fn test_verify() {
+    fn fixtures() -> (PreparedVerificationKey<Bn254>, Groth16Proof, Vec<Fr>) {
         let proof: Groth16Proof =
             serde_json::from_value::<Groth16ProofJsonDeser>(PROOF.deref().clone())
                 .unwrap()
@@ -324,7 +329,31 @@ mod tests {
             .into_iter()
             .map(Groth16Input::into_inner)
             .collect();
-        let pvk = vk.into_prepared();
+        (vk.into_prepared(), proof, pi)
+    }
+
+    #[test]
+    fn test_verify() {
+        let (pvk, proof, pi) = fixtures();
         assert!(groth16_verify(&pvk, &proof, &pi).is_ok());
+    }
+
+    #[test]
+    fn test_batch_verify_one_proof() {
+        let (pvk, proof, pi) = fixtures();
+        assert!(groth16_batch_verify(&pvk, &[proof], &[pi]));
+    }
+
+    #[test]
+    fn test_batch_verify_over_several_miller_loops() {
+        let (pvk, proof, pi) = fixtures();
+        let count = 2 * PROOFS_PER_MILLER_LOOP + 1;
+        let proofs = vec![proof; count];
+        let mut pis = vec![pi; count];
+        assert!(groth16_batch_verify(&pvk, &proofs, &pis));
+
+        // A wrong public input in the last, partial chunk fails the batch.
+        pis[count - 1][0] += Fr::one();
+        assert!(!groth16_batch_verify(&pvk, &proofs, &pis));
     }
 }
