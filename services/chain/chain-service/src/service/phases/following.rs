@@ -67,7 +67,7 @@ where
                     }
                 },
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
-                _ = self.state_recording_timer.tick() => self.record_recovery_state(),
+                _ = self.state_recording_timer.tick() => self.record_recovery_state().await,
             }
         }
     }

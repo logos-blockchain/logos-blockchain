@@ -21,7 +21,10 @@ use lb_utils::tokio::task::spawn_blocking;
 use rocksdb::{DB, Direction, Error, IteratorMode, Options, WriteBatch};
 use serde::{Deserialize, Serialize};
 
-use crate::backend::{StorageBackend, StorageTransaction};
+use crate::{
+    KeyValuePair,
+    backend::{StorageBackend, StorageTransaction},
+};
 
 const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
@@ -109,13 +112,14 @@ impl RocksBackend {
         self.load(&key).map_err(Into::into)
     }
 
-    pub fn store_block_data(
+    pub fn store_block_data_and_recovery(
         &self,
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Bytes,
         events: Bytes,
         immutable_ids: BTreeMap<Slot, HeaderId>,
+        recovery_writes: Vec<KeyValuePair>,
     ) -> Result<(), ChainError> {
         let header_bytes = <[u8; 32]>::from(header_id);
         let block_key = Bytes::copy_from_slice(&header_bytes);
@@ -123,17 +127,12 @@ impl RocksBackend {
         let parent_value = Bytes::copy_from_slice(&<[u8; 32]>::from(parent_id));
         let events_key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
 
-        let db_transaction = self.txn(move |db| {
-            let mut batch = WriteBatch::default();
-            batch.put(block_key, block);
-            batch.put(parent_key, parent_value);
-            batch.put(events_key, events);
-            insert_immutable_block_ids(&mut batch, immutable_ids);
-            db.write(batch)?;
-            Ok(None)
-        });
-        drop(self.execute(db_transaction)?);
-        Ok(())
+        let mut batch = WriteBatch::default();
+        batch.put(block_key, block);
+        batch.put(parent_key, parent_value);
+        batch.put(events_key, events);
+
+        self.write_chain_batch(batch, immutable_ids, recovery_writes)
     }
 
     pub fn remove_block(&self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {
@@ -145,15 +144,12 @@ impl RocksBackend {
         // Load the block first so we can return it.
         let val = self.load(&block_key)?;
 
-        let db_transaction = self.txn(move |db| {
-            let mut batch = WriteBatch::default();
-            batch.delete(block_key);
-            batch.delete(parent_key);
-            batch.delete(events_key);
-            db.write(batch)?;
-            Ok(None)
-        });
-        drop(self.execute(db_transaction)?);
+        let mut batch = WriteBatch::default();
+        batch.delete(block_key);
+        batch.delete(parent_key);
+        batch.delete(events_key);
+
+        self.rocks.write(batch)?;
         Ok(val)
     }
 
@@ -171,19 +167,27 @@ impl RocksBackend {
         self.load(&key).map_err(Into::into)
     }
 
-    pub fn store_immutable_block_ids(
+    pub fn store_immutable_block_ids_and_recovery(
         &self,
         ids: BTreeMap<Slot, HeaderId>,
+        recovery_writes: Vec<KeyValuePair>,
     ) -> Result<(), ChainError> {
-        let db_transaction = self.txn(move |db| {
-            let mut batch = WriteBatch::default();
-            insert_immutable_block_ids(&mut batch, ids);
-            db.write(batch)?;
-            Ok(None)
-        });
-        drop(self.execute(db_transaction)?);
+        self.write_chain_batch(WriteBatch::default(), ids, recovery_writes)
+    }
 
-        Ok(())
+    fn write_chain_batch(
+        &self,
+        mut batch: WriteBatch,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
+        recovery_writes: Vec<KeyValuePair>,
+    ) -> Result<(), ChainError> {
+        insert_immutable_block_ids(&mut batch, immutable_ids);
+
+        for KeyValuePair { key, value } in recovery_writes {
+            batch.put(key, value);
+        }
+
+        self.rocks.write(batch).map_err(Into::into)
     }
 
     pub fn get_immutable_block_id(&self, slot: Slot) -> Result<Option<HeaderId>, ChainError> {

@@ -1,9 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    num::NonZeroUsize,
-    ops::RangeInclusive,
-    pin::Pin,
-};
+use std::{collections::HashMap, num::NonZeroUsize, ops::RangeInclusive, pin::Pin};
 
 use bytes::Bytes;
 use futures::Stream;
@@ -11,7 +6,7 @@ use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 use tokio::sync::oneshot::Sender;
 
-use super::RocksBackend;
+use super::{ChainError, RocksBackend};
 use crate::{
     StorageMsg, StorageServiceError,
     backend::{StorageBackend, StorageTransaction},
@@ -52,20 +47,23 @@ pub fn handle_request(msg: StorageMsg, backend: &RocksBackend) -> Result<(), Sto
             response_tx,
         } => handle_get_block(backend, header_id, response_tx),
 
-        StorageMsg::StoreBlockData {
+        StorageMsg::StoreBlockDataAndRecovery {
             header_id,
             parent_id,
             block,
             events,
             immutable_ids,
+            recovery_writes,
             response_tx,
-        } => handle_store_block_data(
-            backend,
-            header_id,
-            parent_id,
-            block,
-            events,
-            immutable_ids,
+        } => send_chain_write_result(
+            backend.store_block_data_and_recovery(
+                header_id,
+                parent_id,
+                block,
+                events,
+                immutable_ids,
+                recovery_writes,
+            ),
             response_tx,
         ),
 
@@ -84,10 +82,14 @@ pub fn handle_request(msg: StorageMsg, backend: &RocksBackend) -> Result<(), Sto
             response_tx,
         } => handle_get_block_events(backend, header_id, response_tx),
 
-        StorageMsg::StoreImmutableBlockIds {
-            ids: block_ids,
+        StorageMsg::StoreImmutableBlockIdsAndRecovery {
+            ids,
+            recovery_writes,
             response_tx,
-        } => handle_store_immutable_block_ids(backend, block_ids, response_tx),
+        } => send_chain_write_result(
+            backend.store_immutable_block_ids_and_recovery(ids, recovery_writes),
+            response_tx,
+        ),
 
         StorageMsg::GetImmutableBlockId { slot, response_tx } => {
             handle_get_immutable_block_id(backend, slot, response_tx)
@@ -221,30 +223,19 @@ fn handle_get_block(
     Ok(())
 }
 
-fn handle_store_block_data(
-    backend: &RocksBackend,
-    header_id: HeaderId,
-    parent_id: HeaderId,
-    block: Bytes,
-    events: Bytes,
-    immutable_ids: BTreeMap<Slot, HeaderId>,
+fn send_chain_write_result(
+    result: Result<(), ChainError>,
     response_tx: Sender<Result<(), String>>,
 ) -> Result<(), StorageServiceError> {
-    let result = backend
-        .store_block_data(header_id, parent_id, block, events, immutable_ids)
-        .map_err(|e| StorageServiceError::BackendError(e.into()));
-
     let response = result.as_ref().map_err(ToString::to_string).copied();
 
     response_tx
         .send(response)
         .map_err(|_| StorageServiceError::ReplyError {
-            message: format!(
-                "Failed to send reply for store block data request by header_id: {header_id}"
-            ),
+            message: "Failed to send reply for chain data write".to_owned(),
         })?;
 
-    result
+    result.map_err(|error| StorageServiceError::BackendError(error.into()))
 }
 
 fn handle_get_block_parent(
@@ -302,26 +293,6 @@ fn handle_remove_block(
                 "Failed to send reply for remove block request by header_id: {header_id}"
             ),
         })
-}
-
-fn handle_store_immutable_block_ids(
-    backend: &RocksBackend,
-    ids: BTreeMap<Slot, HeaderId>,
-    response_tx: Sender<Result<(), String>>,
-) -> Result<(), StorageServiceError> {
-    let result = backend
-        .store_immutable_block_ids(ids)
-        .map_err(|e| StorageServiceError::BackendError(e.into()));
-
-    let response = result.as_ref().map_err(ToString::to_string).copied();
-
-    response_tx
-        .send(response)
-        .map_err(|_| StorageServiceError::ReplyError {
-            message: "Failed to send reply for store immutable block ids request".to_owned(),
-        })?;
-
-    result
 }
 
 fn handle_get_immutable_block_id(

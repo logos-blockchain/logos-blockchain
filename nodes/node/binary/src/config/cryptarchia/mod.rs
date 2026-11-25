@@ -118,6 +118,7 @@ impl ServiceConfig {
                     era.parameters.fork_digest,
                 )
             })),
+            checkpoint_interval_blocks: user.service.checkpoint_interval_blocks,
             recovery_data: recovery_data.clone(),
             starting_state: genesis_block.clone().into(),
             sync: lb_chain_service::SyncConfig {

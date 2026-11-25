@@ -32,7 +32,7 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
 
-use crate::{StorageMsg, StorageService};
+use crate::{KeyValuePair, StorageMsg, StorageService};
 
 /// Typed API for the storage service.
 pub struct StorageApi<Tx = ()> {
@@ -145,13 +145,21 @@ impl<Tx> StorageApi<Tx> {
             .await
     }
 
-    pub async fn store_immutable_block_ids(
+    /// Atomically store immutable block IDs and already encoded recovery data.
+    pub async fn store_immutable_block_ids_and_recovery(
         &self,
         ids: BTreeMap<Slot, HeaderId>,
+        recovery_writes: Vec<KeyValuePair>,
     ) -> Result<(), DynError> {
-        self.request(|response_tx| StorageMsg::StoreImmutableBlockIds { ids, response_tx })
-            .await?
-            .map_err(Into::into)
+        self.request(
+            |response_tx| StorageMsg::StoreImmutableBlockIdsAndRecovery {
+                ids,
+                recovery_writes,
+                response_tx,
+            },
+        )
+        .await?
+        .map_err(Into::into)
     }
 
     pub async fn scan_immutable_block_ids(
@@ -206,23 +214,27 @@ impl<Tx> StorageApi<Tx>
 where
     Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
 {
-    /// Stores `block` in its canonical encoding, the one chain sync serves.
-    pub async fn store_block_data(
+    /// Atomically stores the canonical block bytes served by chain sync,
+    /// block events, immutable block IDs, and already encoded recovery data.
+    pub async fn store_block_data_and_recovery(
         &self,
-        id: HeaderId,
+        header_id: HeaderId,
         parent_id: HeaderId,
         block: Block<Tx>,
         events: Events,
         immutable_ids: BTreeMap<Slot, HeaderId>,
+        recovery_writes: Vec<KeyValuePair>,
     ) -> Result<(), DynError> {
         let block = Bytes::from(block.encode_to_vec());
         let events = Bytes::try_from(events)?;
-        self.request(|response_tx| StorageMsg::StoreBlockData {
-            header_id: id,
+
+        self.request(|response_tx| StorageMsg::StoreBlockDataAndRecovery {
+            header_id,
             parent_id,
             block,
             events,
             immutable_ids,
+            recovery_writes,
             response_tx,
         })
         .await?

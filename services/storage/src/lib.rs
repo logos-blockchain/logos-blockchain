@@ -8,7 +8,7 @@ pub mod rocksdb;
 
 use std::{fmt::Display, sync::Arc, time::Instant};
 
-pub use api::requests::StorageMsg;
+pub use api::requests::{KeyValuePair, StorageMsg};
 use async_trait::async_trait;
 use backend::StorageBackend as _;
 use lb_log_targets::storage;

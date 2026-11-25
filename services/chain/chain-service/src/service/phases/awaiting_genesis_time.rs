@@ -1,10 +1,9 @@
 use core::fmt::{self, Debug};
-use std::{collections::HashSet, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashSet, pin::Pin, time::Duration};
 
 use futures::StreamExt as _;
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_core::{
-    era::ForkDigest,
     header::HeaderId,
     mantle::{
         ledger::verification_mode::StandardMode,
@@ -12,8 +11,8 @@ use lb_core::{
         transactions::states::Preverified,
     },
 };
-use lb_cryptarchia_engine::{EraSchedule, Slot};
-use overwatch::services::{relay::InboundRelay, state::StateUpdater};
+use lb_cryptarchia_engine::Slot;
+use overwatch::services::relay::InboundRelay;
 use serde::{Serialize, de::DeserializeOwned};
 use time::OffsetDateTime;
 use tokio::{
@@ -24,11 +23,12 @@ use tracing::{debug, error, info};
 
 use super::{InitialBlockDownload, Phase, PhaseTag};
 use crate::{
-    AppliedBlock, ConsensusMsg, Cryptarchia, CryptarchiaConsensusState, Error, LOG_TARGET,
-    LibUpdate, ProcessedBlockEvent, StartingState,
+    AppliedBlock, ConsensusMsg, Cryptarchia, Error, LOG_TARGET, LibUpdate, ProcessedBlockEvent,
+    StartingState,
     notifier::ChainOnlineNotifier,
     relays::CryptarchiaConsensusRelays,
     service::{Service, reject_chain_sync_event},
+    states::RecoveryRecorder,
     sync::block_provider::BlockProvider,
 };
 
@@ -73,8 +73,7 @@ where
         starting_state: StartingState,
         cryptarchia: Cryptarchia,
         inbound_relay: InboundRelay<ConsensusMsg<Tx>>,
-        state_updater: StateUpdater<Option<CryptarchiaConsensusState>>,
-        fork_digests: Arc<EraSchedule<ForkDigest>>,
+        recovery_recorder: RecoveryRecorder,
         new_block_subscription_sender: broadcast::Sender<ProcessedBlockEvent>,
         lib_subscription_sender: broadcast::Sender<LibUpdate>,
         chain_online_notifier: ChainOnlineNotifier,
@@ -92,8 +91,7 @@ where
             },
             cryptarchia,
             inbound_relay,
-            state_updater,
-            fork_digests,
+            recovery_recorder,
             new_block_subscription_sender,
             lib_subscription_sender,
             chain_online_notifier,
@@ -147,7 +145,7 @@ where
                     }
                 },
                 Some(tick) = self.slot_timer.next() => self.current_slot = tick.slot,
-                _ = self.state_recording_timer.tick() => self.record_recovery_state(),
+                _ = self.state_recording_timer.tick() => self.record_recovery_state().await,
             }
         }
     }

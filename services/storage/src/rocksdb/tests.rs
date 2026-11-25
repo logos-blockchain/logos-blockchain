@@ -1,8 +1,10 @@
 use std::iter;
 
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 
 use super::*;
+use crate::StorageMsg;
 
 #[test]
 fn loads_prefix_entries() {
@@ -307,12 +309,13 @@ fn store_block_data_stores_block_and_indexes() {
     let immutable_id = HeaderId::from([2u8; 32]);
 
     backend
-        .store_block_data(
+        .store_block_data_and_recovery(
             header_id,
             parent_id,
             block.clone(),
             events.clone(),
             [(Slot::new(7), immutable_id)].into(),
+            Vec::new(),
         )
         .unwrap();
 
@@ -329,6 +332,167 @@ fn store_block_data_stores_block_and_indexes() {
 }
 
 #[test]
+fn chain_data_commits_recovery_writes_with_block_and_indexes() {
+    let directory = TempDir::new().unwrap();
+    let settings = RocksBackendSettings {
+        db_path: directory.path().into(),
+        read_only: false,
+        column_family: None,
+    };
+    let backend = RocksBackend::new(settings.clone()).unwrap();
+
+    let header_id = [1; 32].into();
+    let parent_id = [2; 32].into();
+    let slot = Slot::new(7);
+
+    let progress_key = Bytes::from_static(b"recovery/cryptarchia-progress");
+    let checkpoint_key = Bytes::from_static(b"recovery/cryptarchia");
+    let progress = Bytes::from_static(b"tip and lib");
+    let checkpoint = Bytes::from_static(b"ledger snapshot");
+    let block = Bytes::from_static(b"block");
+    let events = Bytes::from_static(b"events");
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    handle_request(
+        StorageMsg::StoreBlockDataAndRecovery {
+            header_id,
+            parent_id,
+            block: block.clone(),
+            events: events.clone(),
+            immutable_ids: [(slot, header_id)].into(),
+            recovery_writes: vec![KeyValuePair {
+                key: progress_key.clone(),
+                value: progress.clone(),
+            }],
+            response_tx,
+        },
+        &backend,
+    )
+    .unwrap();
+
+    assert_eq!(response_rx.try_recv(), Ok(Ok(())));
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    handle_request(
+        StorageMsg::StoreImmutableBlockIdsAndRecovery {
+            ids: BTreeMap::new(),
+            recovery_writes: vec![KeyValuePair {
+                key: checkpoint_key.clone(),
+                value: checkpoint.clone(),
+            }],
+            response_tx,
+        },
+        &backend,
+    )
+    .unwrap();
+
+    assert_eq!(response_rx.try_recv(), Ok(Ok(())));
+
+    drop(backend);
+    let reopened = RocksBackend::new(settings).unwrap();
+
+    assert_eq!(reopened.get_block(header_id).unwrap(), Some(block));
+    assert_eq!(
+        reopened.get_block_parent(header_id).unwrap(),
+        Some(parent_id)
+    );
+    assert_eq!(reopened.get_block_events(header_id).unwrap(), Some(events));
+    assert_eq!(
+        reopened.get_immutable_block_id(slot).unwrap(),
+        Some(header_id)
+    );
+
+    assert_eq!(reopened.load(&progress_key).unwrap(), Some(progress));
+    assert_eq!(reopened.load(&checkpoint_key).unwrap(), Some(checkpoint));
+}
+
+#[test]
+fn chain_data_reports_read_only_write_failures() {
+    let directory = TempDir::new().unwrap();
+    let mut settings = RocksBackendSettings {
+        db_path: directory.path().into(),
+        read_only: false,
+        column_family: None,
+    };
+    let backend = RocksBackend::new(settings.clone()).unwrap();
+
+    let existing_id = [1; 32].into();
+    let new_id = [2; 32].into();
+    let existing_block = Bytes::from_static(b"existing block");
+    let key = Bytes::from_static(b"recovery/cryptarchia-progress");
+    let value = Bytes::from_static(b"existing recovery");
+    let slot = Slot::new(7);
+
+    backend
+        .store_block_data_and_recovery(
+            existing_id,
+            [0; 32].into(),
+            existing_block.clone(),
+            Bytes::new(),
+            [(slot, existing_id)].into(),
+            vec![KeyValuePair {
+                key: key.clone(),
+                value: value.clone(),
+            }],
+        )
+        .unwrap();
+
+    drop(backend);
+
+    settings.read_only = true;
+    let read_only = RocksBackend::new(settings).unwrap();
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    let result = handle_request(
+        StorageMsg::StoreBlockDataAndRecovery {
+            header_id: new_id,
+            parent_id: existing_id,
+            block: Bytes::from_static(b"new block"),
+            events: Bytes::new(),
+            immutable_ids: [(slot, new_id)].into(),
+            recovery_writes: vec![KeyValuePair {
+                key: key.clone(),
+                value: Bytes::from_static(b"new recovery"),
+            }],
+            response_tx,
+        },
+        &read_only,
+    );
+
+    assert!(result.is_err());
+    assert!(response_rx.try_recv().unwrap().is_err());
+
+    let (response_tx, mut response_rx) = oneshot::channel();
+    let result = handle_request(
+        StorageMsg::StoreImmutableBlockIdsAndRecovery {
+            ids: [(slot, new_id)].into(),
+            recovery_writes: vec![KeyValuePair {
+                key: key.clone(),
+                value: Bytes::from_static(b"new recovery"),
+            }],
+            response_tx,
+        },
+        &read_only,
+    );
+
+    assert!(result.is_err());
+    assert!(response_rx.try_recv().unwrap().is_err());
+
+    assert!(read_only.remove_block(existing_id).is_err());
+
+    assert_eq!(
+        read_only.get_block(existing_id).unwrap(),
+        Some(existing_block)
+    );
+    assert_eq!(read_only.get_block(new_id).unwrap(), None);
+    assert_eq!(
+        read_only.get_immutable_block_id(slot).unwrap(),
+        Some(existing_id)
+    );
+    assert_eq!(read_only.load(&key).unwrap(), Some(value));
+}
+
+#[test]
 fn immutable_block_ids() {
     let temp_dir = TempDir::new().unwrap();
     let backend = RocksBackend::new(RocksBackendSettings {
@@ -340,8 +504,9 @@ fn immutable_block_ids() {
 
     // Store
     backend
-        .store_immutable_block_ids(
+        .store_immutable_block_ids_and_recovery(
             [(0.into(), [0u8; 32].into()), (1.into(), [1u8; 32].into())].into(),
+            Vec::new(),
         )
         .unwrap();
 

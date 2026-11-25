@@ -1,14 +1,31 @@
-use core::{num::NonZeroUsize, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
+};
 
+use lb_chain_service::DEFAULT_CHECKPOINT_INTERVAL_BLOCKS;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
+    /// Finalized blocks between full ledger checkpoints. Larger values reduce
+    /// disk writes and increase the amount of replay on restart.
+    pub checkpoint_interval_blocks: NonZeroU64,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            bootstrap: BootstrapConfig::default(),
+            sync: SyncConfig::default(),
+            checkpoint_interval_blocks: DEFAULT_CHECKPOINT_INTERVAL_BLOCKS,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
