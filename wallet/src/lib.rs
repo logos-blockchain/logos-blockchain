@@ -724,13 +724,47 @@ where
     ) -> Self {
         let known_keys = known_keys.into_iter().collect();
         let wallet_state = WalletState::from_ledger(&known_keys, ledger);
+        Self::at_lib(known_keys, known_vouchers, lib, wallet_state)
+    }
 
+    /// Initialize [`Wallet`] from a given [`LedgerState`] at LIB, for a
+    /// wallet that already tracks vouchers.
+    ///
+    /// The notes are those the ledger state holds for the known keys. The
+    /// vouchers are tracked from `voucher_state`: a ledger state does not
+    /// hold their Merkle paths.
+    pub fn from_lib_ledger_and_voucher_state(
+        known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
+        known_vouchers: Vouchers<VoucherId>,
+        lib: HeaderId,
+        ledger: &LedgerState,
+        voucher_state: VoucherState,
+    ) -> Self {
+        let known_keys = known_keys.into_iter().collect();
+        let notes = WalletState::from_ledger(&known_keys, ledger);
+        let wallet_state = WalletState {
+            utxos: notes.utxos,
+            pk_index: notes.pk_index,
+            service_notes: notes.service_notes,
+            channel_notes: notes.channel_notes,
+            ..WalletState::from_voucher_state(voucher_state)
+        };
+        Self::at_lib(known_keys, known_vouchers, lib, wallet_state)
+    }
+
+    fn at_lib(
+        known_keys: HashMap<ZkPublicKey, KeyId>,
+        known_vouchers: Vouchers<VoucherId>,
+        lib: HeaderId,
+        wallet_state: WalletState,
+    ) -> Self {
         info!(
             target: LOG_TARGET,
             ?lib,
             n_known_keys = known_keys.len(),
             n_known_vouchers = known_vouchers.count(),
             n_all_vouchers = wallet_state.vouchers.len(),
+            n_voucher_paths = wallet_state.voucher_paths.size(),
             "initializing wallet with LIB ledger state"
         );
 
@@ -773,34 +807,6 @@ where
             known_vouchers,
             wallet_states: [(lib, wallet_state)].into(),
         }
-    }
-
-    /// Replaces the notes of the wallet state at `block` with those `ledger`,
-    /// the ledger state of that block, holds for the known keys.
-    ///
-    /// The notes of a wallet state are those of the keys that were known as
-    /// its blocks were applied, so a state restored under other keys misses
-    /// the notes of the keys added since, and keeps those of the keys removed.
-    /// What the wallet tracks of the vouchers, which a ledger state cannot
-    /// give back, is kept.
-    pub fn rescan_notes(
-        &mut self,
-        block: HeaderId,
-        ledger: &LedgerState,
-    ) -> Result<(), WalletError> {
-        let state = self
-            .wallet_states
-            .get_mut(&block)
-            .ok_or(WalletError::UnknownBlock(block))?;
-        let scanned = WalletState::from_ledger(&self.known_keys, ledger);
-        *state = WalletState {
-            utxos: scanned.utxos,
-            pk_index: scanned.pk_index,
-            service_notes: scanned.service_notes,
-            channel_notes: scanned.channel_notes,
-            ..WalletState::from_voucher_state(state.voucher_state())
-        };
-        Ok(())
     }
 
     #[must_use]
@@ -1035,10 +1041,11 @@ mod tests {
 
     type TestVoucherId = (u64, u64);
 
-    /// A wallet restored from a state saved under other keys holds the notes
-    /// of those keys, until it reads its notes from the ledger again.
+    /// A wallet built from a ledger state and the vouchers another wallet
+    /// tracks holds the notes of its own keys, and that wallet's voucher
+    /// paths.
     #[test]
-    fn rescanning_notes_follows_the_known_keys_and_keeps_the_vouchers() {
+    fn a_wallet_built_from_a_ledger_and_a_voucher_state_keeps_the_voucher_paths() {
         let alice = pk(1);
         let bob = pk(2);
         let (voucher_cm, voucher_nf) = voucher(100, 0);
@@ -1053,16 +1060,16 @@ mod tests {
             &ConsensusExcludedKeys::empty(),
         );
 
-        // Saved while only Alice's key was known, at a block that carries one
-        // of the wallet's vouchers and leaves the notes as they were.
-        let mut saved = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+        // A wallet with Alice's key, at a block that carries one of its
+        // vouchers and leaves the notes as they were.
+        let mut tracking = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
             [(alice, 1u64)],
             Vouchers::new([(voucher_cm, voucher_nf, (100, 0))]),
             genesis,
             &ledger,
         );
         let lib = HeaderId::from([1; 32]);
-        saved
+        tracking
             .apply_block(&WalletBlock {
                 id: lib,
                 parent: genesis,
@@ -1072,32 +1079,25 @@ mod tests {
                 txs: BlockTransactions::empty(),
             })
             .unwrap();
-        let saved_state = saved.wallet_state_at(lib).unwrap();
-        assert!(saved_state.voucher_paths.contains_key(&voucher_cm));
+        let tracked = tracking.wallet_state_at(lib).unwrap();
+        assert!(tracked.voucher_paths.contains_key(&voucher_cm));
 
-        // Restored with Bob's key in place of Alice's.
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_wallet_state(
+        // Built with Bob's key in place of Alice's.
+        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_and_voucher_state(
             [(bob, 2u64)],
             Vouchers::new([(voucher_cm, voucher_nf, (100, 0))]),
             lib,
-            saved_state.clone(),
+            &ledger,
+            tracked.voucher_state(),
         );
-        let restored = wallet.wallet_state_at(lib).unwrap();
-        assert_eq!(restored.utxos_owned_by_pks([alice]).len(), 1);
-        assert_eq!(restored.utxos_owned_by_pks([bob]).len(), 0);
-
-        wallet.rescan_notes(lib, &ledger).unwrap();
-        let rescanned = wallet.wallet_state_at(lib).unwrap();
-        assert_eq!(rescanned.utxos_owned_by_pks([alice]).len(), 0);
-        assert_eq!(rescanned.utxos_owned_by_pks([bob]).len(), 1);
-        assert_eq!(rescanned.utxos.size(), 1);
-        assert_eq!(rescanned.vouchers.len(), saved_state.vouchers.len());
-        assert!(rescanned.voucher_paths.contains_key(&voucher_cm));
-
-        assert!(matches!(
-            wallet.rescan_notes(genesis, &ledger),
-            Err(WalletError::UnknownBlock(block)) if block == genesis
-        ));
+        let built = wallet.wallet_state_at(lib).unwrap();
+        assert_eq!(built.utxos_owned_by_pks([alice]).len(), 0);
+        assert_eq!(built.utxos_owned_by_pks([bob]).len(), 1);
+        assert_eq!(built.utxos.size(), 1);
+        assert_eq!(built.vouchers.len(), tracked.vouchers.len());
+        assert!(built.voucher_paths.contains_key(&voucher_cm));
+        // It holds the state of that block alone.
+        assert!(!wallet.has_processed_block(genesis));
     }
 
     #[test]

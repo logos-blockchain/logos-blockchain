@@ -1549,7 +1549,7 @@ where
         era_schedule: &ServiceEraSchedule,
     ) -> Result<(), WalletServiceError> {
         Self::backfill_missing_blocks(lib, state, storage, cryptarchia_api, era_schedule).await?;
-        Ok(state.rescan_notes(lib, lib_ledger)?)
+        Ok(state.rebuild_at(lib, lib_ledger)?)
     }
 
     /// Brings the wallet up to the chain's `tip` as it starts.
