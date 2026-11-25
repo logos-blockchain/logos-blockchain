@@ -1541,14 +1541,26 @@ where
         .await
     }
 
-    /// Reads the notes of a wallet restored from a saved state, which holds
-    /// none, from a ledger state, for the configured keys.
+    /// Loads the notes of a wallet that was restored from a saved state.
     ///
-    /// The ledger state has to be that of a block the wallet holds a state
-    /// at. That is the block the wallet was saved at when the chain still
-    /// keeps its ledger state, and the chain's LIB otherwise, whose ledger
-    /// state `lib_ledger` is and which the wallet is first brought to. The
-    /// blocks after it are applied on top of that by the caller.
+    /// A saved state holds no notes, so a restored wallet starts without any
+    /// and reads them from a ledger state, for the keys in the config.
+    ///
+    /// The wallet can only use the ledger state of a block it has a state
+    /// for, so which one it reads depends on how far the chain has moved since
+    /// the wallet was saved:
+    ///
+    /// - The chain still has the ledger state of the block the wallet was
+    ///   saved at: the notes are read from that ledger state.
+    /// - That ledger state has been pruned: the wallet first applies the blocks
+    ///   up to the chain's LIB, then reads the notes from the LIB's ledger
+    ///   state, `lib_ledger`.
+    ///
+    /// Either way the wallet ends up with its notes at one block. The caller
+    /// applies the blocks after that block.
+    ///
+    /// A wallet that was not restored was built from `lib_ledger` and already
+    /// has its notes: nothing is done for it.
     async fn read_restored_notes(
         state: &mut ServiceState<'_>,
         (lib, lib_ledger): (HeaderId, &LedgerState),
@@ -1557,23 +1569,23 @@ where
         era_schedule: &ServiceEraSchedule,
     ) -> Result<(), WalletServiceError> {
         if !state.is_restored() {
-            // Built from `lib_ledger` for the configured keys already.
             return Ok(());
         }
         let saved_lib = state.lib();
         if saved_lib != lib
             && let Some(saved_lib_ledger) = cryptarchia_api.get_ledger_state(saved_lib).await?
         {
-            // The chain's LIB is not past the block the wallet was saved at.
+            // The chain still has the ledger state the wallet was saved at.
             return Ok(state.rescan_notes(saved_lib, &saved_lib_ledger)?);
         }
         Self::backfill_missing_blocks(lib, state, storage, cryptarchia_api, era_schedule).await?;
         Ok(state.rescan_notes(lib, lib_ledger)?)
     }
 
-    /// Brings the wallet, as it starts, to the chain's `tip`: its notes are
-    /// first read from a ledger state, should it have been restored from a
-    /// saved state.
+    /// Brings the wallet up to the chain's `tip` as it starts.
+    ///
+    /// A wallet restored from a saved state first loads its notes: see
+    /// [`Self::read_restored_notes`].
     async fn catch_up_with_chain(
         state: &mut ServiceState<'_>,
         lib: (HeaderId, &LedgerState),
