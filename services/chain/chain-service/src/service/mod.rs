@@ -699,7 +699,7 @@ where
                 Error::Storage(format!("Failed to store chain recovery state: {error}"))
             })?;
 
-        self.recovery_recorder.committed(checkpoint_lib_height);
+        self.recovery_recorder.mark_committed(checkpoint_lib_height);
 
         Ok(())
     }
@@ -1047,7 +1047,7 @@ where
         .map_err(|e| Error::Storage(format!("Failed to store block data: {e}")))?;
 
     if let Some((recorder, _)) = recovery {
-        recorder.committed(checkpoint_lib_height);
+        recorder.mark_committed(checkpoint_lib_height);
     }
 
     log_newly_canonical_blocks(

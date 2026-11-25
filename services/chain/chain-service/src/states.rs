@@ -304,7 +304,7 @@ impl RecoveryRecorder {
         Ok((entries, checkpoint_lib_height))
     }
 
-    pub(crate) const fn committed(&mut self, checkpoint_lib_height: Option<BlockNumber>) {
+    pub(crate) const fn mark_committed(&mut self, checkpoint_lib_height: Option<BlockNumber>) {
         if let Some(height) = checkpoint_lib_height {
             self.checkpoint_lib_height = Some(height);
         }
@@ -366,7 +366,7 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(checkpoint_height, Some(0));
 
-        fresh.committed(checkpoint_height);
+        fresh.mark_committed(checkpoint_height);
         let (entries, checkpoint_height) = fresh.prepare(&chain, HashSet::new()).await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(checkpoint_height, None);
@@ -410,7 +410,7 @@ mod tests {
             assert_eq!(checkpoint_height, Some(candidate.lib_branch().length()));
         }
 
-        restarted.committed(Some(CHECKPOINT_INTERVAL_BLOCKS));
+        restarted.mark_committed(Some(CHECKPOINT_INTERVAL_BLOCKS));
         let (entries, checkpoint_height) = restarted
             .prepare(&past_interval, HashSet::new())
             .await
