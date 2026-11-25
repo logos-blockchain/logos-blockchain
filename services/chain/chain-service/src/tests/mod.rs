@@ -60,6 +60,7 @@ use tokio::{
 use crate::{
     BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia, CryptarchiaConsensus,
     CryptarchiaConsensusState, Error, OfflineGracePeriodConfig, TipEra,
+    api::ApiError,
     relays::CryptarchiaConsensusRelays,
     service::{get_block_ids, process_block},
 };
@@ -631,6 +632,89 @@ async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     assert_eq!(cryptarchia.info(), initial_info);
     assert!(new_block_rx.try_recv().is_err());
     assert!(lib_rx.try_recv().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_block_write_can_be_retried() {
+    let db_dir = TempDir::new().unwrap();
+    let settings = RocksBackendSettings {
+        db_path: db_dir.path().join("db"),
+        read_only: false,
+        column_family: None,
+    };
+    drop(RocksBackend::new(settings.clone()).unwrap());
+    let read_only = RocksBackend::new(RocksBackendSettings {
+        read_only: true,
+        ..settings.clone()
+    })
+    .unwrap();
+
+    let (storage_tx, mut storage_rx) = mpsc::channel(10);
+    let storage_svc = tokio::spawn(async move {
+        let first = storage_rx.recv().await.unwrap();
+        assert!(matches!(first, StorageMsg::StoreBlockData { .. }));
+        StorageService::<TestRuntimeServiceId>::handle_storage_message(first, &read_only);
+        drop(read_only);
+
+        let writable = RocksBackend::new(settings).unwrap();
+        while let Some(msg) = storage_rx.recv().await {
+            StorageService::<TestRuntimeServiceId>::handle_storage_message(msg, &writable);
+        }
+    });
+
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays = CryptarchiaConsensusRelays::new(
+        OutboundRelay::new(broadcast_tx),
+        StorageApi::new(OutboundRelay::new(storage_tx)),
+        OutboundRelay::new(time_tx),
+    );
+    let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
+    let (lib_tx, mut lib_rx) = broadcast::channel(10);
+
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let initial_info = cryptarchia.info();
+    let block_id = block.header().id();
+    let slot = block.header().slot();
+    let storage = relays.storage();
+
+    let failure = verify_and_process_block(
+        &mut cryptarchia,
+        block.clone(),
+        slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .err()
+    .expect("the write to read-only storage must fail");
+
+    assert!(
+        matches!(ApiError::from(failure), ApiError::Storage(reason) if reason.contains("RocksDB error"))
+    );
+    assert_eq!(cryptarchia.info(), initial_info);
+    assert!(new_block_rx.try_recv().is_err());
+    assert!(lib_rx.try_recv().is_err());
+    assert!(storage.get_block_bytes(&block_id).await.unwrap().is_none());
+
+    verify_and_process_block(
+        &mut cryptarchia,
+        block,
+        slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await
+    .expect("the same block applies once storage accepts writes");
+
+    assert_eq!(cryptarchia.tip(), block_id);
+    assert_eq!(new_block_rx.try_recv().unwrap().block_id, block_id);
+    assert!(storage.get_block_bytes(&block_id).await.unwrap().is_some());
+
+    drop(relays);
+    storage_svc.await.unwrap();
 }
 
 /// `tx`, carried by a block at `slot`.

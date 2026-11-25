@@ -77,6 +77,9 @@ pub enum ApiError {
     InvalidBody(String),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
+    /// Local persistence failed while applying the block.
+    #[error("Block storage failed: {0}")]
+    Storage(String),
     /// The block's deferred ZK signatures or leader claim proofs failed batch
     /// verification. Tx hashes don't commit to their proofs, so only the
     /// received copy of the transactions is invalid, not necessarily the block.
@@ -652,6 +655,7 @@ impl From<crate::Error> for ApiError {
             crate::Error::InvalidSlot { parent, block } => Self::InvalidSlot { parent, block },
             crate::Error::InvalidLeaderProof => Self::InvalidLeaderProof,
             crate::Error::InvalidSignature => Self::InvalidSignature,
+            crate::Error::Storage(reason) => Self::Storage(reason),
             crate::Error::BatchDeferredProofVerification(err) => {
                 Self::DeferredProofVerification(err)
             }

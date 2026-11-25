@@ -123,17 +123,13 @@ impl RocksBackend {
         let parent_value = Bytes::copy_from_slice(&<[u8; 32]>::from(parent_id));
         let events_key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
 
-        let db_transaction = self.txn(move |db| {
-            let mut batch = WriteBatch::default();
-            batch.put(block_key, block);
-            batch.put(parent_key, parent_value);
-            batch.put(events_key, events);
-            insert_immutable_block_ids(&mut batch, immutable_ids);
-            db.write(batch)?;
-            Ok(None)
-        });
-        drop(self.execute(db_transaction)?);
-        Ok(())
+        let mut batch = WriteBatch::default();
+        batch.put(block_key, block);
+        batch.put(parent_key, parent_value);
+        batch.put(events_key, events);
+        insert_immutable_block_ids(&mut batch, immutable_ids);
+
+        self.rocks.write(batch).map_err(Into::into)
     }
 
     pub fn remove_block(&self, header_id: HeaderId) -> Result<Option<Bytes>, ChainError> {

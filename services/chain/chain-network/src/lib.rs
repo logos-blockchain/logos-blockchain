@@ -982,6 +982,7 @@ fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
 /// - `CommsFailure`: relay failure has nothing to do with block validity; a
 ///   blanket "reject" here would poison the cache whenever chain-service is
 ///   temporarily unreachable.
+/// - `Storage`: a local write failure does not determine block validity.
 /// - `InvalidSignature` / `InvalidUncles` / `InvalidBody`: they condemn only
 ///   the received copy, since the block ID commits to none of the signature,
 ///   the uncles and the transactions. A genuine copy may arrive later.
@@ -1001,6 +1002,7 @@ const fn is_recoverable_apply_error(err: &Error) -> bool {
                 | ApiError::FutureBlock { .. }
                 | ApiError::AlreadyApplied(_)
                 | ApiError::CommsFailure(_)
+                | ApiError::Storage(_)
                 | ApiError::InvalidSignature
                 | ApiError::InvalidUncles(_)
                 | ApiError::InvalidBody(_)
@@ -1344,6 +1346,13 @@ mod tests {
             resolve_reference(1, prefix, &mempool).await,
             Err(Error::CollidingReference { index: 1, prefix: p }) if p == prefix
         ));
+    }
+
+    #[test]
+    fn local_storage_failure_does_not_reject_the_block() {
+        let error = Error::Cryptarchia(ApiError::Storage("write failed".into()));
+
+        assert!(is_recoverable_apply_error(&error));
     }
 
     /// Failures in what the block ID does not commit to (the signature, the
