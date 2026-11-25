@@ -21,7 +21,7 @@ concurrency:
 jobs:
   cluster-fork-detector:
     name: Run cluster fork detector
-    runs-on: bladerunner-linux
+    runs-on: [self-hosted, linux, x64]
     timeout-minutes: 180
     env:
       CARGO_TERM_COLOR: always
