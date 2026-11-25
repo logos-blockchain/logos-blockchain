@@ -83,14 +83,11 @@ const INTEGER_DURATIONS: &[(&[&str], &str, &str, u64)] = &[
     ),
 ];
 
-/// 0.3.2 defaults that are not the current ones, as 0.3.2 wrote them: the
-/// mempool `tx_ttl` went from 9h to 1h, and a `null` kademlia `caching` was
-/// libp2p's default, which `cache_size` now defaults to. The upgrade test fails
-/// on any other 0.3.2 default left in the upgraded config.
-const STALE_DEFAULTS: &[(&[&str], &str, &str)] = &[
-    (&["mempool"], "tx_ttl", "'32400.000000000'"),
-    (KADEMLIA, "caching", "null"),
-];
+/// 0.3.2 defaults that are not the current ones, as 0.3.2 wrote them: a `null`
+/// kademlia `caching` was libp2p's default, which `cache_size` now defaults to.
+/// The upgrade test fails on any other 0.3.2 default left in the upgraded
+/// config.
+const STALE_DEFAULTS: &[(&[&str], &str, &str)] = &[(KADEMLIA, "caching", "null")];
 
 /// 0.3.2 `caching: {type: Disabled} | {type: Enabled, config: {max_peers}}`,
 /// now `cache_size: null | <max_peers>`.
@@ -339,7 +336,7 @@ network:
       identify: {interval: 5m}
       chain_sync: {peer_response_timeout: 1s 500ms}
       nat: {autonat: {probe_interval: 250ms}, mapping: {timeout: 1s 500ms}}
-mempool: {seen_items_subscription_channel_size: 64}
+mempool: {tx_ttl: 9h, seen_items_subscription_channel_size: 64}
 tracing:
   level: INFO
   logger: {file: {}}

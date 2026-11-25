@@ -1248,7 +1248,7 @@ async fn included_tx_remains_resolvable_after_recovery() {
 async fn removed_tx_is_released_by_its_age_since_admission() {
     let (old, recent) = (tx("old"), tx("recent"));
     let mut pool = pool_with_admission_times(
-        default_settings(),
+        ttl_settings(TEST_TX_TTL),
         InMemoryStorageAdapter::default(),
         &[(&old, minutes_ago(71)), (&recent, minutes_ago(30))],
     )
