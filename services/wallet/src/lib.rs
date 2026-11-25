@@ -1541,20 +1541,6 @@ where
         .await
     }
 
-    /// Loads the wallet's notes from the ledger state of the chain's LIB, as
-    /// the wallet starts.
-    ///
-    /// A wallet's saved state holds no notes, so a wallet restored from one
-    /// starts without any. The wallet first applies the blocks from the block
-    /// it was saved at up to the chain's LIB, then reads its notes from the
-    /// LIB's ledger state, `lib_ledger`, for the keys in the config. The
-    /// caller applies the blocks after the LIB.
-    ///
-    /// A wallet without saved state is already at the LIB with these notes:
-    /// for it this changes nothing.
-    ///
-    /// Fails if the wallet cannot be brought to the chain's LIB, which
-    /// includes a wallet that was saved at a block after it.
     async fn load_notes_at_lib(
         state: &mut ServiceState<'_>,
         (lib, lib_ledger): (HeaderId, &LedgerState),
