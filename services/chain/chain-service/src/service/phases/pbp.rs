@@ -142,7 +142,7 @@ mod tests {
 
     use super::{Preverified, ProlongedBootstrapPeriod, Service, StandardMode};
     use crate::{
-        CryptarchiaConsensusState,
+        LibCheckpoint,
         notifier::ChainOnlineNotifier,
         relays::CryptarchiaConsensusRelays,
         service::EpochStateQuerySourceTracker,
@@ -159,7 +159,7 @@ mod tests {
         let eras = single_era(ledger_config(1.try_into().unwrap()));
         let mut chain = genesis_cryptarchia_on(leader_utxo, Arc::clone(&eras));
         let fork_digests = Arc::new(eras.map(|_| ForkDigest::new([0x11; 32])));
-        let checkpoint = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+        let checkpoint = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
             &chain,
             HashSet::new(),
             &fork_digests,

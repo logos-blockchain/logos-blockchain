@@ -7,7 +7,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_binary_codec::bincode::DeserializeOp as _;
-use lb_chain_service::{CryptarchiaConsensusState, CryptarchiaInfo, saved_tip_era};
+use lb_chain_service::{CryptarchiaInfo, LibCheckpoint, saved_tip_era};
 use lb_common_http_client::CommonHttpClient;
 use lb_core::header::HeaderId;
 use lb_http_api_common::queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery};
@@ -156,7 +156,7 @@ async fn peerless_crash_recovers_canonical_history_after_the_checkpoint() {
         refreshed_checkpoint != genesis_checkpoint,
         "the recorder should have replaced the genesis checkpoint"
     );
-    let checkpoint = CryptarchiaConsensusState::from_bytes(&refreshed_checkpoint).unwrap();
+    let checkpoint = LibCheckpoint::from_bytes(&refreshed_checkpoint).unwrap();
 
     let checkpoint_height = node
         .client
@@ -176,7 +176,7 @@ async fn peerless_crash_recovers_canonical_history_after_the_checkpoint() {
     let before = node.client.consensus_info().await.unwrap().cryptarchia_info;
     let (genesis, history_before) = canonical_history(&node.client, &before).await;
     assert_eq!(
-        CryptarchiaConsensusState::from_bytes(&genesis_checkpoint)
+        LibCheckpoint::from_bytes(&genesis_checkpoint)
             .unwrap()
             .tip(),
         genesis,
@@ -303,13 +303,13 @@ async fn corrupt_full_checkpoint_aborts_node_startup() {
     database_settings.read_only = false;
     let database = RocksBackend::new(database_settings.clone()).unwrap();
     let mut checkpoint = database.load(&checkpoint_key).unwrap().unwrap();
-    assert!(CryptarchiaConsensusState::from_bytes(&checkpoint).is_ok());
+    assert!(LibCheckpoint::from_bytes(&checkpoint).is_ok());
 
     checkpoint.truncate(1);
     database.store(checkpoint_key.clone(), checkpoint).unwrap();
 
     let corrupted = database.load(&checkpoint_key).unwrap().unwrap();
-    assert!(CryptarchiaConsensusState::from_bytes(&corrupted).is_err());
+    assert!(LibCheckpoint::from_bytes(&corrupted).is_err());
     assert_eq!(database.load(&progress_key).unwrap(), Some(compact));
     drop(database);
 

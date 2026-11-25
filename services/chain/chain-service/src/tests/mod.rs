@@ -76,8 +76,8 @@ use tokio::{
 
 use crate::{
     BlockProviderConfig, BlockWithVerifiedHeader, BootstrapConfig, Cryptarchia,
-    CryptarchiaConsensus, CryptarchiaConsensusState, CryptarchiaSettings, Error,
-    OfflineGracePeriodConfig, StartingState, SyncConfig, TipEra,
+    CryptarchiaConsensus, CryptarchiaSettings, Error, LibCheckpoint, OfflineGracePeriodConfig,
+    StartingState, SyncConfig, TipEra,
     relays::CryptarchiaConsensusRelays,
     saved_tip_era,
     service::{get_block_ids, process_block},
@@ -413,7 +413,7 @@ async fn recover_latest_lib_and_tip_from_an_older_checkpoint() {
         next_slot = slot.strict_add(1.into());
 
         if height == 2 {
-            let checkpoint = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+            let checkpoint = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
                 &live,
                 no_stale_blocks.clone(),
                 &fork_digests,
@@ -470,7 +470,7 @@ async fn recover_latest_lib_and_tip_from_an_older_checkpoint() {
     let saved_checkpoint_bytes = recovery_data.take(&checkpoint_key).unwrap().unwrap();
     assert_eq!(saved_checkpoint_bytes, checkpoint_bytes.unwrap());
 
-    let saved_checkpoint = CryptarchiaConsensusState::from_bytes(&saved_checkpoint_bytes).unwrap();
+    let saved_checkpoint = LibCheckpoint::from_bytes(&saved_checkpoint_bytes).unwrap();
     let mut progress = RecoveryProgress::load(&saved_checkpoint, &recovery_data).unwrap();
     assert_eq!(progress.lib, lib_id);
     assert_eq!(progress.tip, tip_id);
@@ -594,7 +594,7 @@ async fn recovery_chain_with_uncle_whose_parent_is_older_than_lib() {
             .expect("the block should be valid before the restart");
     }
 
-    let recovery_state = CryptarchiaConsensusState {
+    let recovery_state = LibCheckpoint {
         tip: b2_id,
         tip_era: TipEra {
             slot: b2_slot,
@@ -800,7 +800,7 @@ async fn get_block_ids_past_recovered_lib() {
     let (b1, b2) = (&blocks[0], &blocks[1]);
     let (b1_id, b2_id) = (b1.header().id(), b2.header().id());
 
-    let recovery_state = CryptarchiaConsensusState {
+    let recovery_state = LibCheckpoint {
         tip: b2_id,
         tip_era: TipEra {
             slot: b2.header().slot(),
@@ -1045,12 +1045,9 @@ async fn fork_switch_persists_tip_lib_and_pruning_progress() {
 
     let (mut chain, _) = genesis.online();
     let fork_digests = Arc::new(chain.ledger.era_schedule().map(|_| FORK_DIGEST));
-    let mut checkpoint = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
-        &chain,
-        HashSet::new(),
-        &fork_digests,
-    )
-    .unwrap();
+    let mut checkpoint =
+        LibCheckpoint::from_cryptarchia_and_unpruned_blocks(&chain, HashSet::new(), &fork_digests)
+            .unwrap();
     checkpoint.last_engine_state = None;
 
     let mut recorder = RecoveryRecorder::new(&checkpoint, fork_digests);
@@ -1125,7 +1122,7 @@ async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
         .next()
         .unwrap();
 
-    let initial = CryptarchiaConsensusState::load(&settings).unwrap();
+    let initial = LibCheckpoint::load(&settings).unwrap();
     let mut recorder = RecoveryRecorder::new(
         &initial,
         Arc::new(settings.era_schedule.map(|era| era.parameters.1)),
@@ -1177,7 +1174,7 @@ async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
     let checkpoint_key = recovery_key(b"cryptarchia");
     let before_rollover = relays
         .storage()
-        .load::<CryptarchiaConsensusState>(checkpoint_key.clone())
+        .load::<LibCheckpoint>(checkpoint_key.clone())
         .await
         .unwrap()
         .unwrap();
@@ -1196,7 +1193,7 @@ async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
     .get(&checkpoint_key)
     .unwrap()
     .unwrap();
-    let rolled_over = CryptarchiaConsensusState::from_bytes(&refreshed_bytes).unwrap();
+    let rolled_over = LibCheckpoint::from_bytes(&refreshed_bytes).unwrap();
     assert_eq!(rolled_over.lib, chain.lib());
     assert_eq!(rolled_over.lib_block_length, ROLLOVER_HEIGHT);
     assert_eq!(
@@ -1227,7 +1224,7 @@ async fn block_import_rolls_over_checkpoint_and_recovers_the_next_lib() {
         "the next block rewrote the checkpoint"
     );
 
-    let checkpoint = CryptarchiaConsensusState::load(&settings).unwrap();
+    let checkpoint = LibCheckpoint::load(&settings).unwrap();
     assert_eq!(checkpoint.lib, rolled_over.lib);
     assert_eq!(checkpoint.lib_block_length, ROLLOVER_HEIGHT);
 

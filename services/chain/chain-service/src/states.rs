@@ -61,13 +61,13 @@ pub fn saved_tip_era(recovery_data: &RecoveryData) -> Result<Option<TipEra>, Dyn
         return Ok(None);
     };
 
-    let state = CryptarchiaConsensusState::from_bytes(&bytes).map_err(decode_error)?;
+    let state = LibCheckpoint::from_bytes(&bytes).map_err(decode_error)?;
     Ok(Some(state.tip_era))
 }
 
 /// Full LIB checkpoint. Its field layout matches existing node databases.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct CryptarchiaConsensusState {
+pub struct LibCheckpoint {
     pub(crate) tip: HeaderId,
     pub(crate) tip_era: TipEra,
     pub(crate) lib: HeaderId,
@@ -89,7 +89,7 @@ pub struct CryptarchiaConsensusState {
     pub(crate) last_engine_state: Option<LastEngineState>,
 }
 
-impl CryptarchiaConsensusState {
+impl LibCheckpoint {
     pub(crate) fn load(settings: &CryptarchiaSettings) -> Result<Self, Error> {
         match settings
             .recovery_data
@@ -106,7 +106,7 @@ impl CryptarchiaConsensusState {
         self.tip
     }
 
-    /// Re-create the [`CryptarchiaConsensusState`]
+    /// Re-create the [`LibCheckpoint`]
     /// given the cryptarchia engine and ledger state.
     ///
     /// Furthermore, it allows to specify blocks deleted from the cryptarchia
@@ -147,7 +147,7 @@ impl CryptarchiaConsensusState {
     }
 }
 
-impl ServiceState for CryptarchiaConsensusState {
+impl ServiceState for LibCheckpoint {
     type Settings = CryptarchiaSettings;
     type Error = Error;
 
@@ -195,7 +195,7 @@ pub struct RecoveryProgress {
 }
 
 impl RecoveryProgress {
-    pub(crate) fn from_checkpoint(checkpoint: &CryptarchiaConsensusState) -> Self {
+    pub(crate) fn from_checkpoint(checkpoint: &LibCheckpoint) -> Self {
         Self {
             tip: checkpoint.tip,
             tip_era: checkpoint.tip_era,
@@ -207,7 +207,7 @@ impl RecoveryProgress {
     }
 
     pub(crate) fn load(
-        checkpoint: &CryptarchiaConsensusState,
+        checkpoint: &LibCheckpoint,
         recovery_data: &RecoveryData,
     ) -> Result<Self, Error> {
         let Some(bytes) = recovery_data
@@ -248,7 +248,7 @@ pub struct RecoveryRecorder {
 
 impl RecoveryRecorder {
     pub(crate) fn new(
-        checkpoint: &CryptarchiaConsensusState,
+        checkpoint: &LibCheckpoint,
         fork_digests: Arc<EraSchedule<ForkDigest>>,
     ) -> Self {
         Self {
@@ -272,7 +272,7 @@ impl RecoveryRecorder {
             .is_none_or(|height| lib_height.saturating_sub(height) >= CHECKPOINT_INTERVAL_BLOCKS);
 
         let checkpoint_lib_height = if checkpoint_due {
-            let state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+            let state = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
                 cryptarchia,
                 storage_blocks_to_remove.clone(),
                 &self.fork_digests,
@@ -353,7 +353,7 @@ mod tests {
     async fn checkpoints_roll_over_by_finalized_block_count() {
         let chain = recovery_test_chain();
         let fork_digests = Arc::new(fork_digests(chain.ledger.era_schedule()));
-        let mut saved = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+        let mut saved = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
             &chain,
             HashSet::new(),
             &fork_digests,
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn loads_progress_or_uses_the_legacy_checkpoint() {
         let chain = recovery_test_chain();
-        let legacy = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+        let legacy = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
             &chain,
             HashSet::new(),
             &fork_digests(chain.ledger.era_schedule()),
@@ -670,13 +670,13 @@ mod tests {
             single_era(ledger_config),
         );
 
-        // Build [`CryptarchiaConsensusState`] with the pruned blocks.
+        // Build [`LibCheckpoint`] with the pruned blocks.
         let pruned_stale_blocks = pruned_blocks
             .stale_blocks()
             .copied()
             .collect::<HashSet<_>>();
         let fork_digests = fork_digests(ledger_state.era_schedule());
-        let recovery_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+        let recovery_state = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
             &Cryptarchia {
                 ledger: ledger_state,
                 consensus: cryptarchia_engine.clone(),
@@ -838,14 +838,14 @@ mod tests {
         let info_before = original.info();
 
         // Save state (simulates what happens before shutdown).
-        let saved_state = CryptarchiaConsensusState::from_cryptarchia_and_unpruned_blocks(
+        let saved_state = LibCheckpoint::from_cryptarchia_and_unpruned_blocks(
             &original,
             HashSet::new(),
             &fork_digests(original.ledger.era_schedule()),
         )
         .unwrap();
         let encoded_state = saved_state.to_bytes().unwrap();
-        let saved_state = CryptarchiaConsensusState::from_bytes(&encoded_state).unwrap();
+        let saved_state = LibCheckpoint::from_bytes(&encoded_state).unwrap();
 
         // Restore (simulates initialize_cryptarchia on restart):
         // Create a new Cryptarchia from the saved LIB with its slot and length.

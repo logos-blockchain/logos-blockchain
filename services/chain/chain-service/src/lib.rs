@@ -69,7 +69,7 @@ use tracing_futures::Instrument as _;
 pub use crate::{
     bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
     service::phases::PhaseTag,
-    states::{CryptarchiaConsensusState, TipEra, saved_tip_era},
+    states::{LibCheckpoint, TipEra, saved_tip_era},
     sync::config::{BlockProviderConfig, SyncConfig},
     uncle::UncleError,
     verified::{BlockWithVerifiedHeader, VerifiedBlockHeader},
@@ -967,10 +967,8 @@ where
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
-    fn load_recovery(
-        settings: &CryptarchiaSettings,
-    ) -> (CryptarchiaConsensusState, RecoveryProgress) {
-        let checkpoint = CryptarchiaConsensusState::load(settings).unwrap_or_else(|error| {
+    fn load_recovery(settings: &CryptarchiaSettings) -> (LibCheckpoint, RecoveryProgress) {
+        let checkpoint = LibCheckpoint::load(settings).unwrap_or_else(|error| {
             panic!(
                 "The saved chain checkpoint cannot be read ({error}). Remove the node's state and sync again."
             )
@@ -1104,7 +1102,7 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn initialize_cryptarchia(
-        checkpoint: &CryptarchiaConsensusState,
+        checkpoint: &LibCheckpoint,
         progress: &RecoveryProgress,
         bootstrap_config: &BootstrapConfig,
         era_schedule: Arc<EraScheduledConfig>,
@@ -1297,7 +1295,7 @@ where
     /// Returns an error if the parent of a non-genesis LIB is not found in
     /// storage.
     async fn cryptarchia_from_recovered_lib(
-        recovery_state: &CryptarchiaConsensusState,
+        recovery_state: &LibCheckpoint,
         era_schedule: Arc<EraScheduledConfig>,
         state: State,
         storage: &StorageApi<Tx>,
