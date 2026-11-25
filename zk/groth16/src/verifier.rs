@@ -2,7 +2,7 @@ use core::fmt::{Display, Formatter};
 use std::{error::Error, fmt, ops::Mul as _};
 
 use ark_ec::{
-    CurveGroup as _, VariableBaseMSM as _,
+    VariableBaseMSM as _,
     pairing::{MillerLoopOutput, Pairing},
 };
 use ark_ff::{One as _, UniformRand as _, Zero as _};
@@ -90,7 +90,7 @@ pub fn groth16_batch_verify<E: Pairing>(
                         .iter()
                         .zip(ri)
                         .map(|(proof, r)| {
-                            (proof.pi_a.mul(*r).into_affine().into(), proof.pi_b.into())
+                            (E::G1Prepared::from(proof.pi_a.mul(*r)), proof.pi_b.into())
                         })
                         .unzip();
                     E::multi_miller_loop(g1_terms, g2_terms).0
@@ -98,16 +98,14 @@ pub fn groth16_batch_verify<E: Pairing>(
                 .reduce(E::TargetField::one, |a, b| a * b)
         },
         || {
-            let batched_pi_c = E::G1::msm(&pis_c, &ri)
-                .expect("msm fails only when slice length differ")
-                .into_affine();
+            let batched_pi_c =
+                E::G1::msm(&pis_c, &ri).expect("msm fails only when slice length differ");
             let batched_ic = E::G1::msm(vk.gamma_abc_g1(), &batched_public_inputs)
-                .expect("msm fails only when slice length differ")
-                .into_affine();
+                .expect("msm fails only when slice length differ");
             let g1_terms: [E::G1Prepared; 3] = [
-                (-vk.alpha_g1().mul(r_sum)).into_affine().into(),
-                batched_ic.into(),
-                batched_pi_c.into(),
+                E::G1Prepared::from(-vk.alpha_g1().mul(r_sum)),
+                E::G1Prepared::from(batched_ic),
+                E::G1Prepared::from(batched_pi_c),
             ];
             let g2_terms: [E::G2Prepared; 3] = [
                 vk.beta_g2().into(),
