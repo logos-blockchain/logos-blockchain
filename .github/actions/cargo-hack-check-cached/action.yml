@@ -1,7 +1,7 @@
 name: Cargo Hack Check (Cache-Aware)
 
 
-description: Runs cargo hack check with cache support
+description: Runs cargo hack clippy with cache support
 
 
 inputs:

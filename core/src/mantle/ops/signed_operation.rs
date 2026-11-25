@@ -50,7 +50,7 @@ impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
     /// Converts a `SignedOperation<T, State, Mode>` into a
     /// `SignedOperation<T, NewState, Mode>` without performing any
     /// verification.
-    #[cfg(not(any(test, feature = "test-utils")))]
+    #[cfg(not(feature = "test-utils"))]
     #[must_use]
     pub(crate) fn into_state_trusted<NewState: VerificationState>(
         self,
@@ -61,7 +61,7 @@ impl<T: ProvableOperation, State: VerificationState, Mode: VerificationMode>
     /// Converts a `SignedOperation<T, State, Mode>` into a
     /// `SignedOperation<T, NewState, Mode>` without performing any
     /// verification.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(feature = "test-utils")]
     #[must_use]
     pub fn into_state_trusted<NewState: VerificationState>(
         self,

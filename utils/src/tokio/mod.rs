@@ -57,8 +57,6 @@ pub mod task {
         unexpected_cfgs,
         reason = "tokio_unstable is supplied externally through RUSTFLAGS"
     )]
-    #[expect(clippy::allow_attributes, reason = "cfg-selected spawn implementation")]
-    #[allow(clippy::needless_return, reason = "cfg-selected spawn implementation")]
     pub fn spawn<T>(
         name: &'static str,
         future: impl Future<Output = T> + Send + 'static,
@@ -66,18 +64,15 @@ pub mod task {
     where
         T: Send + 'static,
     {
-        #[cfg(all(feature = "tokio-task-names", tokio_unstable))]
-        {
-            return tokio::task::Builder::new()
+        cfg_select! {
+            all(feature = "tokio-task-names", tokio_unstable) => tokio::task::Builder::new()
                 .name(name)
                 .spawn(future)
-                .unwrap_or_else(|_| panic!("failed to spawn named Tokio task `{name}`"));
-        }
-
-        #[cfg(not(all(feature = "tokio-task-names", tokio_unstable)))]
-        {
-            let _ = name;
-            tokio::spawn(future)
+                .unwrap_or_else(|_| panic!("failed to spawn named Tokio task `{name}`")),
+            _ => {
+                let _ = name;
+                tokio::spawn(future)
+            }
         }
     }
 
@@ -85,8 +80,6 @@ pub mod task {
         unexpected_cfgs,
         reason = "tokio_unstable is supplied externally through RUSTFLAGS"
     )]
-    #[expect(clippy::allow_attributes, reason = "cfg-selected spawn implementation")]
-    #[allow(clippy::needless_return, reason = "cfg-selected spawn implementation")]
     pub fn spawn_blocking<T>(
         name: &'static str,
         function: impl FnOnce() -> T + Send + 'static,
@@ -94,18 +87,15 @@ pub mod task {
     where
         T: Send + 'static,
     {
-        #[cfg(all(feature = "tokio-task-names", tokio_unstable))]
-        {
-            return tokio::task::Builder::new()
+        cfg_select! {
+            all(feature = "tokio-task-names", tokio_unstable) => tokio::task::Builder::new()
                 .name(name)
                 .spawn_blocking(function)
-                .unwrap_or_else(|_| panic!("failed to spawn named Tokio blocking task `{name}`"));
-        }
-
-        #[cfg(not(all(feature = "tokio-task-names", tokio_unstable)))]
-        {
-            let _ = name;
-            tokio::task::spawn_blocking(function)
+                .unwrap_or_else(|_| panic!("failed to spawn named Tokio blocking task `{name}`")),
+            _ => {
+                let _ = name;
+                tokio::task::spawn_blocking(function)
+            }
         }
     }
 
@@ -113,8 +103,6 @@ pub mod task {
         unexpected_cfgs,
         reason = "tokio_unstable is supplied externally through RUSTFLAGS"
     )]
-    #[expect(clippy::allow_attributes, reason = "cfg-selected spawn implementation")]
-    #[allow(clippy::needless_return, reason = "cfg-selected spawn implementation")]
     pub fn spawn_on<T>(
         runtime: &Handle,
         name: &'static str,
@@ -123,18 +111,15 @@ pub mod task {
     where
         T: Send + 'static,
     {
-        #[cfg(all(feature = "tokio-task-names", tokio_unstable))]
-        {
-            return tokio::task::Builder::new()
+        cfg_select! {
+            all(feature = "tokio-task-names", tokio_unstable) => tokio::task::Builder::new()
                 .name(name)
                 .spawn_on(future, runtime)
-                .unwrap_or_else(|_| panic!("failed to spawn named Tokio task `{name}`"));
-        }
-
-        #[cfg(not(all(feature = "tokio-task-names", tokio_unstable)))]
-        {
-            let _ = name;
-            runtime.spawn(future)
+                .unwrap_or_else(|_| panic!("failed to spawn named Tokio task `{name}`")),
+            _ => {
+                let _ = name;
+                runtime.spawn(future)
+            }
         }
     }
 

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-# Runs a cache-aware Cargo Hack check for all crates in the workspace.
+# Runs a cache-aware Cargo Hack Clippy pass for all crates in the workspace.
 
 
 import json
 import dataclasses
 import argparse
+import hashlib
 import os
 from collections import namedtuple
 from pathlib import Path
@@ -36,6 +37,8 @@ CACHE_DIRECTORY = WORKSPACE_ROOT / ".cache/cargo-hack-check"
 COMPUTE_CREATE_HASH_SCRIPT = CURRENT_FILE_DIRECTORY / "compute_crate_hash.sh"
 TAG = "[Cargo Hack Powerset]"
 STRICT_WARNING_FLAG = "deny"
+# Part of every crate's cache key, so changing it re-runs all crates.
+FEATURE_POWERSET_COMMAND = ["cargo", "hack", "clippy", "--feature-powerset", "--all-targets"]
 
 
 ###############
@@ -111,7 +114,9 @@ class WorkspaceMember:
 
     def compute_cache_key(self) -> str:
         manifest = Path(self.manifest_path)
-        return compute_crate_hash(manifest.parent)
+        crate_hash = compute_crate_hash(manifest.parent)
+        command = " ".join(FEATURE_POWERSET_COMMAND)
+        return hashlib.sha256(f"{crate_hash}\n{command}".encode()).hexdigest()
 
     def save_cache_key(self, cache_key: str):
         with self.get_cache_path().open("w") as file:
@@ -330,11 +335,7 @@ class CargoHackCheckEntry:
         return hash(self.manifest_path_posix)
 
     def as_feature_powerset_command(self) -> List[str]:
-        # Changing this doesn't void the cache.
-        # TODO: Consider adding the command line options to the cache key.
-        return [
-            "cargo", "hack", "check", "--feature-powerset", "--all-targets", "--manifest-path", self.manifest_path_posix
-        ]
+        return [*FEATURE_POWERSET_COMMAND, "--manifest-path", self.manifest_path_posix]
 
 
 class CargoHackCheckCommand:

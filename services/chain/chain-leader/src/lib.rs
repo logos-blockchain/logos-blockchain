@@ -760,13 +760,11 @@ where
             return;
         }
 
-        #[cfg(not(feature = "testing-disable-proposal-publish"))]
-        blend_adapter.publish_proposal(block.to_proposal()).await;
-        #[cfg(feature = "testing-disable-proposal-publish")]
-        let _ = {
+        if cfg!(feature = "testing-disable-proposal-publish") {
             tracing::warn!(target: LOG_TARGET, "proposal publishing is disabled by the `testing-disable-proposal-publish` feature");
-            blend_adapter
-        };
+        } else {
+            blend_adapter.publish_proposal(block.to_proposal()).await;
+        }
 
         metrics::consensus_proposals_created_local();
     }
