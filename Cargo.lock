@@ -4322,6 +4322,7 @@ dependencies = [
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "logos-blockchain-wallet-service",
  "overwatch",
  "rand 0.8.8",
  "rand_chacha 0.3.1",
