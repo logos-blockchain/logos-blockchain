@@ -1,20 +1,12 @@
 pub mod balance {
     use std::collections::HashMap;
 
-    use axum::{
-        http::StatusCode,
-        response::{IntoResponse, Response},
-    };
     use lb_core::{
         header::HeaderId,
         mantle::{NoteId, Value},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
-    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
-    use tracing::error;
-
-    const LOG_TARGET: &str = api::http::wallet::BALANCE;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletBalanceResponseBody {
@@ -23,31 +15,9 @@ pub mod balance {
         pub notes: HashMap<NoteId, Value>,
         pub address: ZkPublicKey,
     }
-
-    impl IntoResponse for WalletBalanceResponseBody {
-        fn into_response(self) -> Response {
-            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!(
-                    target: LOG_TARGET,
-                    "WalletBalanceResponseBody serialization error: {e}"
-                );
-                // We panic here because this should never happen, and if it
-                // does, it's a critical error that we want to
-                // be immediately visible during development and
-                // testing.
-                panic!("WalletBalanceResponseBody serialization failed: {e}")
-            });
-
-            (StatusCode::OK, json).into_response()
-        }
-    }
 }
 
 pub mod claimable_vouchers {
-    use axum::{
-        http::StatusCode,
-        response::{IntoResponse, Response},
-    };
     use lb_core::{
         header::HeaderId,
         mantle::{
@@ -55,11 +25,7 @@ pub mod claimable_vouchers {
             ops::leader_claim::{VoucherCm, VoucherNullifier},
         },
     };
-    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
-    use tracing::error;
-
-    const LOG_TARGET: &str = api::http::wallet::CLAIMABLE_VOUCHERS;
 
     #[derive(Serialize, Deserialize)]
     pub struct ClaimableVoucherInfoResponseBody {
@@ -82,41 +48,15 @@ pub mod claimable_vouchers {
         /// could claim in total at `tip`.
         pub total_claimable: Value,
     }
-
-    impl IntoResponse for WalletClaimableVouchersResponseBody {
-        fn into_response(self) -> Response {
-            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!(
-                    target: LOG_TARGET,
-                    "WalletClaimableVouchersResponseBody serialization failed: {e}"
-                );
-                // We panic here because this should never happen, and if it
-                // does, it's a critical error that we want to
-                // be immediately visible during development and
-                // testing.
-                panic!("WalletClaimableVouchersResponseBody serialization failed: {e}")
-            });
-
-            (StatusCode::OK, json).into_response()
-        }
-    }
 }
 
 pub mod aged_notes {
-    use axum::{
-        http::StatusCode,
-        response::{IntoResponse, Response},
-    };
     use lb_core::{
         header::HeaderId,
         mantle::{NoteId, Value},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
-    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
-    use tracing::error;
-
-    const LOG_TARGET: &str = api::http::wallet::AGED_NOTES;
 
     /// One wallet-owned UTXO old enough to take part in the leadership
     /// lottery.
@@ -149,31 +89,9 @@ pub mod aged_notes {
         /// Total value staked across `notes`, saturating.
         pub total_value: Value,
     }
-
-    impl IntoResponse for LeaderAgedNotesResponseBody {
-        fn into_response(self) -> Response {
-            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!(
-                    target: LOG_TARGET,
-                    "LeaderAgedNotesResponseBody serialization failed: {e}"
-                );
-                // We panic here because this should never happen, and if it
-                // does, it's a critical error that we want to
-                // be immediately visible during development and
-                // testing.
-                panic!("LeaderAgedNotesResponseBody serialization failed: {e}")
-            });
-
-            (StatusCode::OK, json).into_response()
-        }
-    }
 }
 
 pub mod transfer_funds {
-    use axum::{
-        http::StatusCode,
-        response::{IntoResponse, Response},
-    };
     use lb_core::{
         header::HeaderId,
         mantle::{
@@ -182,11 +100,7 @@ pub mod transfer_funds {
         },
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
-    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
-    use tracing::error;
-
-    const LOG_TARGET: &str = api::http::wallet::TRANSFER_FUNDS;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
@@ -207,24 +121,6 @@ pub mod transfer_funds {
     {
         fn from(value: SignedOps<State, StandardMode>) -> Self {
             Self { hash: value.hash() }
-        }
-    }
-
-    impl IntoResponse for WalletTransferFundsResponseBody {
-        fn into_response(self) -> Response {
-            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!(
-                    target: LOG_TARGET,
-                    "WalletTransferFundsResponseBody serialization failed: {e}"
-                );
-                // We panic here because this should never happen, and if it
-                // does, it's a critical error that we want to
-                // be immediately visible during development and
-                // testing.
-                panic!("WalletTransferFundsResponseBody serialization failed: {e}")
-            });
-
-            (StatusCode::CREATED, json).into_response()
         }
     }
 }

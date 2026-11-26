@@ -23,7 +23,6 @@ pub use lb_storage_service::{
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 pub use lb_tracing_service::Tracing;
-use lb_tx_service::storage::adapters::RocksStorageAdapter;
 pub use lb_tx_service::{
     network::adapters::libp2p::{
         Libp2pAdapter as MempoolNetworkAdapter, Settings as MempoolAdapterSettings,
@@ -47,7 +46,7 @@ use crate::{
         storage::ServiceConfig as StorageConfig, time::ServiceConfig as TimeConfig,
         wallet::ServiceConfig as WalletConfig,
     },
-    generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
+    generic_services::SdpService,
 };
 pub use crate::{
     cli::Command,
@@ -94,17 +93,7 @@ pub type TimeService = generic_services::TimeService<RuntimeServiceId>;
 
 pub type PoWService = generic_services::PoWService<RuntimeServiceId>;
 
-pub type ApiService = lb_api_service::ApiService<
-    AxumBackend<
-        NtpTimeBackend,
-        RocksStorageAdapter<ValidatedTx, TxHash>,
-        SdpMempoolAdapter<RuntimeServiceId>,
-        SdpWalletAdapter<RuntimeServiceId>,
-        SdpRecoveryBackend<RuntimeServiceId>,
-        CryptarchiaLeaderService,
-    >,
-    RuntimeServiceId,
->;
+pub type ApiService = lb_api_service::ApiService<AxumBackend, RuntimeServiceId>;
 
 pub type StorageService = lb_storage_service::StorageService<RuntimeServiceId>;
 

@@ -3,7 +3,6 @@ use std::{
     ptr,
 };
 
-use lb_api_service::http::blend::{self, JoinError, blend_join_network};
 use lb_blend_service::message::NetworkInfo;
 use lb_c_macros::panic_to_error;
 use lb_chain_service::Epoch;
@@ -14,19 +13,18 @@ use lb_core::{
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
 use lb_ledger::mantle::sdp::rewards::blend as ledger_blend;
 use lb_node::{
-    RuntimeServiceId, config::deployment::era::ruleset::EraRuleset,
-    generic_services::blend::BlendService,
+    api::calls::blend::{self, join_network},
+    config::deployment::era::ruleset::EraRuleset,
 };
-use lb_sdp_service::{SdpMessage, SdpStatus, SdpSubmission, status};
+use lb_sdp_service::status;
 use multiaddr::PeerId;
-use overwatch::overwatch::OverwatchHandle;
 
 use crate::{
     LogosBlockchainNode,
     api::{
-        chain::api::ChainFfiApi, common::overwatch::ensure_ready, cryptarchia::TxHash,
-        sdp::make_sdp_request, time::get_time_info_sync, types::value::Value,
-        wallet::WalletService,
+        node::to_json_c_string,
+        time::get_time_info_sync,
+        types::{hash::TxHash, value::Value},
     },
     errors::{OperationStatus, OperationStatusCode},
     option::FfiOption,
@@ -116,34 +114,18 @@ pub unsafe extern "C" fn blend_join_as_core_node(
 
     let node = unsafe { &*node };
 
-    let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
-    let result: StatusResult<SdpSubmission> = runtime_handle.block_on(async {
-        blend_join_network::<BlendService<RuntimeServiceId>, WalletService, RuntimeServiceId>(
-            node.get_overwatch_handle(),
-            locator,
-            service_note_id,
-        )
-        .await
-        .map_err(|error| {
-            let code = match error {
-                JoinError::Internal(_) => OperationStatusCode::RelayError,
-                JoinError::KeyNotInWallet(_) | JoinError::NoServiceNote { .. } => {
-                    OperationStatusCode::NotFound
-                }
-            };
-            OperationStatus::error(code, format!("Failed to join blend network: {error}"))
-        })
-    });
-
-    result
-        .map(|submission| DeclarationId::from(submission.declaration_id))
-        .into()
+    node.call(
+        "Failed to join blend network",
+        join_network(node.get_overwatch_handle(), locator, service_note_id),
+    )
+    .map(|submission| DeclarationId::from(submission.declaration_id))
+    .into()
 }
 
 /// Gets the current Blend network information.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`blend_info`](blend::blend_info) function.
+/// [`blend_info`](lb_node::api::calls::blend::info) function.
 ///
 /// # Arguments
 ///
@@ -157,20 +139,10 @@ pub unsafe extern "C" fn blend_join_as_core_node(
 pub(crate) fn blend_info_sync(
     node: &LogosBlockchainNode,
 ) -> StatusResult<Option<NetworkInfo<PeerId>>> {
-    let runtime_handle = node.get_runtime_handle()?;
-    let overwatch_handle = node.get_overwatch_handle();
-
-    runtime_handle
-        .block_on(blend::blend_info::<
-            BlendService<RuntimeServiceId>,
-            RuntimeServiceId,
-        >(overwatch_handle))
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to get blend info: {error}"),
-            )
-        })
+    node.call(
+        "Failed to get blend info",
+        blend::info(node.get_overwatch_handle()),
+    )
 }
 
 pub type FfiBlendInfoResult = FfiStatusResult<*mut c_char>;
@@ -204,20 +176,7 @@ pub unsafe extern "C" fn blend_info(node: *const LogosBlockchainNode) -> FfiBlen
     let node = unsafe { &*node };
     let network_info = unwrap_or_return_error!(blend_info_sync(node));
 
-    let json_network_info =
-        unwrap_or_return_error!(serde_json::to_string(&network_info).map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RuntimeError,
-                format!("Failed to serialize blend info: {error}"),
-            )
-        }));
-    let json_network_info_c =
-        unwrap_or_return_error!(CString::new(json_network_info).map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RuntimeError,
-                format!("Failed to create CString: {error}"),
-            )
-        }));
+    let json_network_info_c = unwrap_or_return_error!(to_json_c_string(&network_info));
     FfiBlendInfoResult::ok(json_network_info_c.into_raw())
 }
 
@@ -316,38 +275,6 @@ pub struct BlendWithdrawal {
     pub unlocks_at_epoch: u32,
 }
 
-async fn post_withdraw(
-    overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-) -> StatusResult<SdpSubmission> {
-    let SdpStatus { participation, .. } = make_sdp_request(overwatch_handle, |reply_channel| {
-        SdpMessage::GetStatus { reply_channel }
-    })
-    .await?;
-
-    let live_declaration_id = participation
-        .and_then(|participation| participation.live())
-        .ok_or_else(|| {
-            OperationStatus::error(
-                OperationStatusCode::NotFound,
-                "The node has no live Blend declaration to withdraw.",
-            )
-        })?;
-
-    make_sdp_request(overwatch_handle, |reply_channel| {
-        SdpMessage::PostWithdrawal {
-            declaration_id: live_declaration_id,
-            reply_channel,
-        }
-    })
-    .await?
-    .map_err(|error| {
-        OperationStatus::error(
-            OperationStatusCode::ServiceError,
-            format!("Failed to withdraw: {error}"),
-        )
-    })
-}
-
 /// Withdraws this node's Blend declaration, leaving the core set.
 ///
 /// # Arguments
@@ -360,32 +287,13 @@ async fn post_withdraw(
 /// Fails with [`OperationStatusCode::NotFound`] if the node has no live
 /// declaration, and right away if the node is not `Online`.
 fn blend_withdraw_sync(node: &LogosBlockchainNode) -> StatusResult<BlendWithdrawal> {
-    let overwatch_handle = node.get_overwatch_handle();
-    let runtime_handle = node.get_runtime_handle()?;
-    runtime_handle.block_on(async {
-        let current_epoch = ChainFfiApi::from_overwatch_handle(overwatch_handle)
-            .await?
-            .get_online_epoch()
-            .await?;
-
-        let withdraw_tx_hash = {
-            let SdpSubmission { tx_id, .. } = post_withdraw(overwatch_handle).await?;
-
-            let Some(tx_id) = tx_id else {
-                return Err(OperationStatus::error(
-                    OperationStatusCode::ServiceError,
-                    "The withdrawal was not submitted.",
-                ));
-            };
-
-            tx_id
-        };
-
-        let unlocks_at_epoch = current_epoch.strict_add(WITHDRAWAL_UNLOCK_DELAY).into();
-        Ok(BlendWithdrawal {
-            tx_hash: withdraw_tx_hash.0,
-            unlocks_at_epoch,
-        })
+    let withdrawal = node.call(
+        "Failed to withdraw",
+        blend::withdraw(node.get_overwatch_handle()),
+    )?;
+    Ok(BlendWithdrawal {
+        tx_hash: withdrawal.tx_hash.0,
+        unlocks_at_epoch: withdrawal.unlocks_at_epoch.into(),
     })
 }
 
@@ -502,27 +410,11 @@ impl From<lb_chain_service::BlendRewards> for BlendRewards {
 /// with [`OperationStatusCode::NotFound`] if the node has no declaration in
 /// the ledger, and right away if the node is not `Online`.
 fn blend_rewards_sync(node: &LogosBlockchainNode) -> StatusResult<BlendRewards> {
-    let overwatch_handle = node.get_overwatch_handle();
-    node.get_runtime_handle()?.block_on(async {
-        let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
-        chain_ffi_api.ensure_online().await?;
-        let SdpStatus { participation, .. } = make_sdp_request(overwatch_handle, |reply_channel| {
-            SdpMessage::GetStatus { reply_channel }
-        })
-        .await?;
-        // A withdrawn declaration still earns until its `withdraw_at`.
-        let Some(participation) = participation else {
-            return Err(OperationStatus::error(
-                OperationStatusCode::NotFound,
-                "The node has no Blend declaration.",
-            ));
-        };
-
-        let rewards = chain_ffi_api
-            .get_blend_rewards(participation.declaration_id())
-            .await?;
-        Ok(rewards.into())
-    })
+    node.call(
+        "Failed to get the Blend rewards",
+        blend::rewards(node.get_overwatch_handle()),
+    )
+    .map(Into::into)
 }
 
 pub type FfiBlendRewardsResult = FfiStatusResult<BlendRewards>;
@@ -892,40 +784,13 @@ pub struct BlendStatus {
 /// The status on success, or an [`OperationStatus`] error on failure. Fails
 /// right away if the node is not `Online`.
 fn blend_status_sync(node: &LogosBlockchainNode) -> StatusResult<BlendStatus> {
-    let overwatch_handle = node.get_overwatch_handle();
-    node.get_runtime_handle()?.block_on(async {
-        ensure_ready::<BlendService<RuntimeServiceId>>(overwatch_handle).await?;
-
-        let chain_ffi_api = ChainFfiApi::from_overwatch_handle(overwatch_handle).await?;
-        chain_ffi_api.ensure_online().await?;
-
-        let status = make_sdp_request(overwatch_handle, |reply_channel| {
-            SdpMessage::GetBlendStatus { reply_channel }
-        })
-        .await?
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::ServiceError,
-                format!("Failed to get the Blend status: {error}"),
-            )
-        })?;
-
-        let core_status = blend::blend_core_status::<
-            BlendService<RuntimeServiceId>,
-            RuntimeServiceId,
-        >(overwatch_handle)
-        .await
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to query the Blend service: {error}"),
-            )
-        })?;
-
-        Ok(BlendStatus {
-            sdp: status.into(),
-            core: core_status.map(Into::into).into(),
-        })
+    let status = node.call(
+        "Failed to get the Blend status",
+        blend::status(node.get_overwatch_handle()),
+    )?;
+    Ok(BlendStatus {
+        sdp: status.sdp.into(),
+        core: status.core.map(Into::into).into(),
     })
 }
 

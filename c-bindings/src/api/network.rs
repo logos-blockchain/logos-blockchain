@@ -1,9 +1,11 @@
-use lb_api_service::http::libp2p::libp2p_info;
+use std::ffi::{CString, c_char};
+
 use lb_c_macros::panic_to_error;
 use lb_network_service::backends::libp2p::Libp2pInfo;
 
 use crate::{
     LogosBlockchainNode,
+    api::config::cstr_to_path,
     errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -41,7 +43,7 @@ impl From<Libp2pInfo> for NetworkInfo {
 /// Gets the node's libp2p connectivity information.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`libp2p_info`](lb_api_service::http::libp2p::libp2p_info) function.
+/// [`info`](lb_node::api::calls::network::info) function.
 ///
 /// # Arguments
 ///
@@ -52,14 +54,10 @@ impl From<Libp2pInfo> for NetworkInfo {
 /// A [`Result`] containing the swarm information on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_network_info_sync(node: &LogosBlockchainNode) -> StatusResult<Libp2pInfo> {
-    node.get_runtime_handle()?
-        .block_on(libp2p_info(node.get_overwatch_handle()))
-        .map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::RelayError,
-                format!("Failed to get network info: {error}"),
-            )
-        })
+    node.call(
+        "Failed to get network info",
+        lb_node::api::calls::network::info(node.get_overwatch_handle()),
+    )
 }
 
 pub type FfiNetworkInfoResult = FfiStatusResult<NetworkInfo>;
@@ -93,4 +91,57 @@ pub unsafe extern "C" fn get_network_info(
     let info = unwrap_or_return_error!(get_network_info_sync(node));
 
     FfiNetworkInfoResult::ok(NetworkInfo::from(info))
+}
+
+/// Result type for [`get_peer_id`]. On success, `value` is a pointer to a
+/// NUL-terminated C string containing the base58-encoded libp2p `PeerId`.
+pub type FfiGetPeerIdResult = FfiStatusResult<*mut c_char>;
+
+/// Derives the libp2p `PeerId` from the node key in a user config file,
+/// equivalent to the `get-peer-id` CLI command.
+///
+/// # Arguments
+///
+/// - `config_path`: Path to the user config YAML file.
+///
+/// # Returns
+///
+/// A [`FfiGetPeerIdResult`] containing a pointer to an allocated C string
+/// (the base58-encoded `PeerId`) on success, or an [`OperationStatus`] error
+/// on failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that `config_path` is a valid NUL-terminated C string.
+///
+/// # Memory Management
+///
+/// This function allocates memory for the output C string. The caller must
+/// free this memory using the [`free_cstring`](super::free_cstring) function.
+#[must_use]
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_peer_id(config_path: *const c_char) -> FfiGetPeerIdResult {
+    return_error_if_null_pointer!(config_path);
+
+    let config_path = unsafe { cstr_to_path(config_path) };
+
+    let peer_id = match lb_node::cli::get_peer_id::peer_id_from_config(&config_path) {
+        Ok(peer_id) => peer_id,
+        Err(error) => {
+            return FfiGetPeerIdResult::err(OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error deriving peer id: {error:?}"),
+            ));
+        }
+    };
+
+    match CString::new(peer_id.to_string()) {
+        Ok(peer_id) => FfiGetPeerIdResult::ok(peer_id.into_raw()),
+        Err(error) => FfiGetPeerIdResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create CString: {error}"),
+        )),
+    }
 }

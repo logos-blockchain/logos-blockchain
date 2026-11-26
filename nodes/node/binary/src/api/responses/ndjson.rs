@@ -4,7 +4,7 @@ use axum::{
 };
 use futures::{Stream, StreamExt as _};
 use http::StatusCode;
-use lb_api_service::http::DynError;
+use overwatch::DynError;
 use serde::Serialize;
 
 pub fn from_stream<T>(stream: impl Stream<Item = T> + Send + 'static) -> Response

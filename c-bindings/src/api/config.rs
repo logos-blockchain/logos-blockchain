@@ -14,7 +14,7 @@ use tokio::runtime::Runtime;
 
 use crate::{
     OperationStatus,
-    api::{deployment::to_c_string, lifecycle::resolve_run_config},
+    api::{lifecycle::resolve_run_config, node::to_c_string},
     errors::OperationStatusCode,
     result::FfiStatusResult,
     return_error_if_null_pointer, unwrap_or_return_error,
@@ -316,7 +316,7 @@ mod test {
     use crate::api::{
         free_cstring,
         keys::{KeyType, add_key, generate_key, remove_key},
-        peer::get_peer_id,
+        network::get_peer_id,
     };
 
     fn cstring(path: &Path) -> CString {
