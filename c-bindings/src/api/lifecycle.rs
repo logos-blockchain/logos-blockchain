@@ -29,9 +29,8 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 ///   configuration file.
 /// - `custom_deployment_path`: An optional pointer to a string representing the
 ///   path to the custom deployment configuration file. If null, the
-///   `DEPLOYMENT` environment variable is consulted, otherwise the binary
-///   default deployment is used (e.g., devnet for release candidates and
-///   testnet for releases).
+///   `DEPLOYMENT` environment variable is consulted, otherwise the node follows
+///   the testnet release 0.3.1 started.
 ///
 /// Environment-variable overrides (e.g. `HTTP_HOST`, `NET_PORT`, `LOG_LEVEL`,
 /// `STATE_PATH`) are applied on top of the YAML config, matching the behaviour
@@ -74,9 +73,8 @@ pub unsafe extern "C" fn start_lb_node(
 ///   configuration file.
 /// - `custom_deployment_path`: An optional pointer to a string representing the
 ///   path to the custom deployment configuration file. If null, the
-///   `DEPLOYMENT` environment variable is consulted, otherwise the binary
-///   default deployment is used (e.g., devnet for release candidates and
-///   testnet for releases).
+///   `DEPLOYMENT` environment variable is consulted, otherwise the node follows
+///   the testnet release 0.3.1 started.
 ///
 /// Environment-variable overrides (e.g. `HTTP_HOST`, `NET_PORT`, `LOG_LEVEL`,
 /// `STATE_PATH`) are applied on top of the YAML config, matching the behaviour
@@ -192,7 +190,7 @@ unsafe fn get_deployment_config(
     custom_deployment_path: *const c_char,
 ) -> StatusResult<DeploymentSettings> {
     if custom_deployment_path.is_null() {
-        Ok(DeploymentSettings::default())
+        Ok(DeploymentSettings::testnet())
     } else {
         let custom_deployment_path = unsafe { std::ffi::CStr::from_ptr(custom_deployment_path) }
             .to_str()

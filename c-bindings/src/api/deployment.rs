@@ -103,7 +103,7 @@ pub type FfiDeploymentInfoResult = FfiStatusResult<*mut DeploymentInfo>;
 ///   configuration file.
 /// - `custom_deployment_path`: An optional pointer to a string holding the path
 ///   to a custom deployment file. If null, the `DEPLOYMENT` environment
-///   variable is used, falling back to the embedded default deployment.
+///   variable is used, falling back to the testnet release 0.3.1 started.
 ///
 /// # Returns
 ///
