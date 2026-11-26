@@ -147,7 +147,8 @@ impl UserConfig {
             Value::Null => Value::Mapping(Mapping::new()),
             overrides => overrides,
         };
-        let upgraded_from = migrations::upgrade(&mut overrides)?;
+        let (_, keystore) = Self::keystore(path, &overrides)?;
+        let upgraded_from = migrations::upgrade(&mut overrides, keystore.as_ref())?;
         let config = Self::load_overrides(path, overrides)?;
         if let Some(from) = upgraded_from {
             config.save_upgraded(path, from);
@@ -155,18 +156,27 @@ impl UserConfig {
         Ok(config)
     }
 
-    fn load_overrides(path: &Path, overrides: Value) -> Result<Self> {
+    /// The path of the keystore of the config at `path`, and the keystore when
+    /// it exists.
+    fn keystore(path: &Path, overrides: &Value) -> Result<(PathBuf, Option<Keystore>)> {
         let kms = overrides
             .get("kms")
             .cloned()
             .map_or_else(|| Ok(KmsConfig::default()), serde_yaml::from_value)?;
         let keystore_path = kms.keystore_path(path);
+        let keystore = keystore_path
+            .is_file()
+            .then(|| Keystore::load(&keystore_path))
+            .transpose()?;
+        Ok((keystore_path, keystore))
+    }
 
-        let has_keystore = keystore_path.is_file();
-        let mut config = if has_keystore {
-            Keystore::load(&keystore_path)?.config_values()?
-        } else {
-            Value::Mapping(Mapping::new())
+    fn load_overrides(path: &Path, overrides: Value) -> Result<Self> {
+        let (keystore_path, keystore) = Self::keystore(path, &overrides)?;
+        let has_keystore = keystore.is_some();
+        let mut config = match keystore {
+            Some(keystore) => keystore.config_values()?,
+            None => Value::Mapping(Mapping::new()),
         };
         merge(&mut config, overrides);
         deserialize_from_value(config, OnUnknownKeys::Fail).map_err(|error| {

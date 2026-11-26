@@ -7,6 +7,11 @@
 //! leader wallet's `max_tx_fee` are gone and the built-in log filter 0.3.2
 //! wrote into every config is no longer written.
 //!
+//! The public key of a note was `zkhash(KDF, sk)` up to 0.3.6 and is derived
+//! from the nullifier key of `sk` now. Every public key a config names of a
+//! secret key of the config or of the keystore is derived again, as are the
+//! key ids made of one. A `zk_id` is still `zkhash(KDF, sk)` and is kept.
+//!
 //! 0.3.2 also wrote every default into the config. Those still the default are
 //! dropped when the upgraded config is written sparse; those that aren't,
 //! [`STALE_DEFAULTS`] and the generated log file prefix, are dropped here, so
@@ -16,15 +21,20 @@
 //! Every step also accepts the new form, so a config already in it comes out
 //! unchanged; everything the steps don't name passes through untouched.
 
-use core::time::Duration;
+use core::{mem, time::Duration};
+use std::collections::HashMap;
 
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    keys::{Key, kdf_public_key},
+};
 use lb_tracing::filter::envfilter::default_envfilter_config;
 use serde::Deserialize;
-use serde_yaml::{Mapping, Value};
+use serde_yaml::{Mapping, Value, to_value};
 use tracing::Level;
 
-use crate::config::{TracingConfig, tracing::serde::filter::Layer};
+use crate::config::{TracingConfig, keystore::Keystore, tracing::serde::filter::Layer};
 
 const KADEMLIA: &[&str] = &["network", "backend", "swarm", "kademlia"];
 const CHAIN_SYNC: &[&str] = &["network", "backend", "swarm", "chain_sync"];
@@ -93,7 +103,7 @@ struct StdDuration {
     nanos: u32,
 }
 
-pub fn migrate(config: &mut Value) -> Result<()> {
+pub fn migrate(config: &mut Value, keystore: Option<&Keystore>) -> Result<()> {
     let original = config.clone();
     for (section, key, default) in STALE_DEFAULTS {
         if let Some(section) = mapping_at(config, section)
@@ -145,7 +155,58 @@ pub fn migrate(config: &mut Value) -> Result<()> {
         drop_built_in_log_filter(config);
         drop_generated_log_prefix(config);
     }
+    rederive_note_public_keys(config, keystore)
+}
+
+/// Replaces the public key every ZK secret key of the config and of `keystore`
+/// had up to 0.3.6 by its current one, wherever the config names it: as a
+/// public key or as the id of the key.
+fn rederive_note_public_keys(config: &mut Value, keystore: Option<&Keystore>) -> Result<()> {
+    let config_keys: HashMap<KeyId, Key> = config
+        .get("kms")
+        .and_then(|kms| kms.get("backend"))
+        .and_then(|backend| backend.get("keys"))
+        .cloned()
+        .map(serde_yaml::from_value)
+        .transpose()
+        .wrap_err("reading `kms.backend.keys`")?
+        .unwrap_or_default();
+    let rederived = config_keys
+        .values()
+        .chain(keystore.into_iter().flat_map(Keystore::secret_keys))
+        .filter_map(|key| match key {
+            Key::Zk(key) => Some((kdf_public_key(key.as_fr()), key.to_public_key())),
+            Key::Ed25519(_) => None,
+        })
+        .map(|(old, new)| Ok((to_value(old)?, to_value(new)?)))
+        .collect::<Result<HashMap<_, _>>>()?;
+    replace_public_keys(config, &rederived);
     Ok(())
+}
+
+fn replace_public_keys(value: &mut Value, rederived: &HashMap<Value, Value>) {
+    match value {
+        Value::Mapping(mapping) => {
+            *mapping = mem::take(mapping)
+                .into_iter()
+                .map(|(key, mut value)| {
+                    if key.as_str() != Some("zk_id") {
+                        replace_public_keys(&mut value, rederived);
+                    }
+                    (rederived.get(&key).cloned().unwrap_or(key), value)
+                })
+                .collect();
+        }
+        Value::Sequence(values) => values
+            .iter_mut()
+            .for_each(|value| replace_public_keys(value, rederived)),
+        Value::Tagged(tagged) => replace_public_keys(&mut tagged.value, rederived),
+        public_key => {
+            if let Some(rederived) = rederived.get(public_key) {
+                *public_key = rederived.clone();
+            }
+        }
+    }
 }
 
 fn mapping_at<'a>(config: &'a mut Value, path: &[&str]) -> Option<&'a mut Mapping> {
@@ -251,9 +312,9 @@ tracing:
 ");
         config["tracing"]["filter"] = Value::Tagged(Box::new(TaggedValue {
             tag: Tag::new("Env"),
-            value: serde_yaml::to_value(default_envfilter_config(Level::INFO).unwrap()).unwrap(),
+            value: to_value(default_envfilter_config(Level::INFO).unwrap()).unwrap(),
         }));
-        migrate(&mut config).unwrap();
+        migrate(&mut config, None).unwrap();
         assert_eq!(
             config,
             yaml(
@@ -277,7 +338,7 @@ tracing:
         );
         // Already upgraded, nothing changes.
         let upgraded = config.clone();
-        migrate(&mut config).unwrap();
+        migrate(&mut config, None).unwrap();
         assert_eq!(config, upgraded);
 
         // Disabled caching, a custom prefix and a customised filter are kept.
@@ -287,7 +348,7 @@ network: {backend: {swarm: {kademlia: {caching: {type: Disabled}}}}}
 tracing: {logger: {file: {prefix: node-a}}, filter: !Env {filters: {'*': DEBUG}}}
 ",
         );
-        migrate(&mut config).unwrap();
+        migrate(&mut config, None).unwrap();
         assert_eq!(
             config,
             yaml(
