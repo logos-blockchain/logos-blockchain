@@ -1,4 +1,3 @@
-use crate::mantle::transactions::{TxDecodeContext, TxEra};
 use std::{collections::HashMap, ops::Deref};
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
@@ -28,7 +27,7 @@ use crate::{
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::{Hashable, MantleTx, StorageSize, hashable},
         transactions::{
-            GasPrices,
+            GasPrices, TxDecodeContext, TxEra,
             codec::minimum_signed_transaction_size,
             thresholds::RunningThresholds,
             tx_list::{

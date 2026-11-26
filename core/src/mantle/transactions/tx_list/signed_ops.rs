@@ -1,4 +1,3 @@
-use crate::mantle::transactions::TxDecodeContext;
 use std::ops::Deref;
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
@@ -16,7 +15,7 @@ use crate::{
             Hashable, MantleTx, PreverifiedMantleTransaction, SignedMantleTx, StorageSize, hashable,
         },
         transactions::{
-            OpProofRefs, VerifiedOperations,
+            OpProofRefs, TxDecodeContext, VerifiedOperations,
             hash::TxHashView,
             states::{Preverified, Unverified, VerificationState},
             tx_list::{OpProofs, OpRefs, Ops, common::TxList, hash::tx_hasher},

@@ -1,4 +1,3 @@
-use crate::mantle::transactions::TxDecodeContext;
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -22,6 +21,7 @@ use crate::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
         },
+        transactions::TxDecodeContext,
     },
 };
 

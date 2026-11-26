@@ -6,10 +6,12 @@ pub mod global_allocators;
 pub mod panic;
 
 use color_eyre::eyre::{Result, eyre};
-use lb_core::mantle::transactions::TxEra;
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
-    transactions::states::{Preverified, Unverified},
+    transactions::{
+        TxEra,
+        states::{Preverified, Unverified},
+    },
 };
 pub use lb_core::{
     header::HeaderId,
