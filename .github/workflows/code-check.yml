@@ -144,10 +144,6 @@ jobs:
           # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
           - bladerunner-linux
           - bladerunner-macos
-        # The workspace's tests and the test support checks run side by side, so neither waits for the other.
-        suite:
-          - workspace
-          - test-support
     runs-on: ${{ matrix.os }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
@@ -187,20 +183,18 @@ jobs:
             fi
           done
 
-      # Restores the compiler outputs of master's last build of this suite. Pushes to master save; pull requests only
-      # restore.
+      # Restores the compiler outputs of master's last build. Pushes to master save; pull requests only restore.
       - name: Set up mbx build cache
         uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd  # Version 1.7.4
         with:
           version: 1.30.0
           github-cache-mode: objects
           isolate-objects-cache: true
-          cache-generation: tests-${{ matrix.suite }}-v1
+          cache-generation: tests-v1
 
       # mbx doesn't cache while another rustc wrapper is set, so the build steps clear the one the runner image may set
       # for sccache.
       - name: Run the node binary with the testing feature to check the one-node config files validity
-        if: matrix.suite == 'test-support'
         run: |
           unset RUSTC_WRAPPER
           mbx run --locked -p logos-blockchain-node --features testing \
@@ -226,7 +220,6 @@ jobs:
       # - Benchmarks take more than six hours and would exceed the job timeout.
       # - End-to-end integration tests run separately in their dedicated workflow.
       - name: Cargo test all except end-to-end integration tests
-        if: matrix.suite == 'workspace'
         timeout-minutes: 90
         run: |
           unset RUSTC_WRAPPER
@@ -234,7 +227,6 @@ jobs:
             --all-features --no-fail-fast --exclude logos-blockchain-tests $NEXTEST_BUILD_ONLY
 
       - name: Run test support unit tests
-        if: matrix.suite == 'test-support'
         run: |
           unset RUSTC_WRAPPER
           mbx nextest run --locked --lib --retries 2 --no-fail-fast -p logos-blockchain-tests $NEXTEST_BUILD_ONLY
@@ -254,7 +246,7 @@ jobs:
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         if: failure()
         with:
-          name: integration-test-artifacts-${{ runner.os }}-${{ matrix.suite }}-${{ github.sha }}
+          name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
           path: tests/.run_*
 

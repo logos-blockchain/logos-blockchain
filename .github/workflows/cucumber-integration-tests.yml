@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   tests:
-    name: Run cucumber integration tests [${{ matrix.shard.name }}] (${{ matrix.platform.label }})
+    name: Run cucumber integration tests (${{ matrix.platform.label }})
     # Heavy, self-hosted suite: run ONLY inside the merge queue so the pull
     # request phase reports only the lightweight `Cucumber result` check below.
     if: ${{ github.event_name == 'merge_group' }}
@@ -27,7 +27,7 @@ jobs:
       checks: write
 
     strategy:
-      # A failed OS must not cancel the other OS because only one OS needs to pass each shard.
+      # A failed OS must not cancel the other OS because only one OS needs to pass.
       fail-fast: false
       matrix:
         platform:
@@ -40,13 +40,6 @@ jobs:
             label: self-hosted-macos
             peer_label: self-hosted-linux
             max_concurrent_scenarios: "3"
-        # The suites run in shards of similar length, side by side. Keep the `Cucumber result` job's checks in step
-        # with this list.
-        shard:
-          - name: transactions-eras
-            suites: [ transactions, era-boundaries, smoke, fees, external-smoke ]
-          - name: blend-mempool
-            suites: [ blend, mempool, cryptarchia, cli ]
     runs-on: ${{ matrix.platform.os }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
@@ -89,8 +82,8 @@ jobs:
         uses: ./.github/actions/verify-local-ntp-server
 
       # This cooperative checkpoint is reused before each expensive phase.
-      # It does not cancel the workflow. If the other OS has completed this
-      # shard and its `Report success` step passed, this lane skips all
+      # It does not cancel the workflow. If the other OS has completed the
+      # entire lane and its `Report success` step passed, this lane skips all
       # remaining expensive work and proceeds to cleanup.
       - &check_peer_success
         name: Stop if another Cucumber OS has already passed
@@ -103,7 +96,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           current-label: ${{ matrix.platform.label }}
           peer-label: ${{ matrix.platform.peer_label }}
-          job-name-prefix: Run cucumber integration tests [${{ matrix.shard.name }}]
+          job-name-prefix: Run cucumber integration tests
 
       # Build release binaries for the cucumber tests.
       - name: Build binaries for cucumber tests
@@ -111,11 +104,10 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
-          # Only the shard that runs the external runner smoke test needs its binary.
           args: >-
             --locked --profile ci-release
-            -p logos-blockchain-node --bin logos-blockchain-node
-            ${{ contains(matrix.shard.suites, 'external-smoke') && '-p blockchain-test-interop --bin cucumber-external-smoke' || '' }}
+            -p logos-blockchain-node -p blockchain-test-interop
+            --bin logos-blockchain-node --bin cucumber-external-smoke
 
       - name: Build cucumber runners
         id: runners
@@ -140,7 +132,7 @@ jobs:
       - *check_peer_success
 
       - name: Run external Cucumber runner smoke test
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'external-smoke') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 15
         uses: ./.github/actions/run-cucumber-suite
         env:
@@ -161,7 +153,7 @@ jobs:
 
       # Feature: Smoke (@smoke_ci)
       - name: Run cucumber suite - smoke
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'smoke') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -175,7 +167,7 @@ jobs:
 
       # Feature: Cryptarchia (@cryptarchia_ci)
       - name: Run cucumber suite - cryptarchia
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'cryptarchia') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -189,7 +181,7 @@ jobs:
 
       # Feature: Happy-path era boundaries (@era_boundaries)
       - name: Run cucumber suite - era boundaries
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'era-boundaries') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -202,7 +194,7 @@ jobs:
 
       # Feature: Blend (@blend_ci)
       - name: Run cucumber suite - blend
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'blend') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -216,7 +208,7 @@ jobs:
 
       # Feature: Transactions (@transactions_ci)
       - name: Run cucumber suite - transactions
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'transactions') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 120
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -231,7 +223,7 @@ jobs:
 
       # Feature: Fees (@fees_ci)
       - name: Run cucumber suite - fees
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'fees') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -246,7 +238,7 @@ jobs:
 
       # Feature: Mempool (@mempool_ci)
       - name: Run cucumber suite - mempool
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'mempool') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -261,7 +253,7 @@ jobs:
 
       # Feature: CLI utility binary (@cli_ci)
       - name: Run cucumber suite - CLI utilities
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.shard.suites, 'cli') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 60
         uses: ./.github/actions/run-cucumber-suite
         with:
@@ -277,7 +269,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: cucumber-junit-${{ runner.os }}-${{ matrix.shard.name }}
+          name: cucumber-junit-${{ runner.os }}
           path: ${{ github.workspace }}/tests/**/cucumber_tests/temp/cucumber-output-junit.xml
           if-no-files-found: warn
 
@@ -287,7 +279,7 @@ jobs:
         continue-on-error: true
         uses: dorny/test-reporter@v1
         with:
-          name: Cucumber-${{ runner.os }}-${{ matrix.shard.name }}
+          name: Cucumber-${{ runner.os }}
           path: ${{ github.workspace }}/tests/**/cucumber_tests/temp/cucumber-output-junit.xml
           reporter: java-junit
 
@@ -311,15 +303,14 @@ jobs:
       # required result job. A cooperatively stopped lane skips this step.
       - name: Report success
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' }}
-        run: echo "All Cucumber suites of the ${{ matrix.shard.name }} shard passed on ${{ matrix.platform.label }}"
+        run: echo "All Cucumber tests passed on ${{ matrix.platform.label }}"
 
   # This is the stable required check for the Cucumber suite.
   #
   # It intentionally has no `needs: tests`: on merge_group it starts alongside
-  # the matrix and polls the current workflow run. It succeeds once every shard
-  # has passed on either OS, that is once either OS's lane for the shard has
-  # completed and its `Report success` step passed. It fails once both lanes of
-  # a shard have completed without reporting success.
+  # the matrix and polls the current workflow run. It succeeds as soon as either
+  # OS has completed the entire lane and its `Report success` step passed.
+  # It fails once both lanes have completed without reporting success.
   #
   # On pull requests it succeeds immediately without starting self-hosted jobs.
   cucumber-result:
@@ -347,21 +338,11 @@ jobs:
           sparse-checkout: .github/actions/check-any-lane-result
           sparse-checkout-cone-mode: false
 
-      # One check per shard of the `tests` matrix.
-      - name: Check Cucumber result - transactions-eras
+      - name: Check Cucumber result
         if: ${{ github.event_name == 'merge_group' }}
         uses: ./.github/actions/check-any-lane-result
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          result-name: Cucumber transactions-eras
-          job-name-prefix: Run cucumber integration tests [transactions-eras]
-          lane-labels-json: '["self-hosted-linux", "self-hosted-macos"]'
-
-      - name: Check Cucumber result - blend-mempool
-        if: ${{ github.event_name == 'merge_group' }}
-        uses: ./.github/actions/check-any-lane-result
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          result-name: Cucumber blend-mempool
-          job-name-prefix: Run cucumber integration tests [blend-mempool]
+          result-name: Cucumber
+          job-name-prefix: Run cucumber integration tests
           lane-labels-json: '["self-hosted-linux", "self-hosted-macos"]'

@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   tests:
-    name: Run end-to-end integration tests [${{ matrix.group.name }}] (${{ matrix.platform.label }})
+    name: Run end-to-end integration tests (${{ matrix.platform.label }})
     # Heavy, self-hosted suite: run ONLY inside the merge queue so the pull
     # request phase reports only the lightweight `E2E result` check below.
     if: ${{ github.event_name == 'merge_group' }}
@@ -27,7 +27,7 @@ jobs:
       checks: write
 
     strategy:
-      # A failed OS must not cancel the other OS because only one OS needs to pass each group.
+      # A failed OS must not cancel the other OS because only one OS needs to pass.
       fail-fast: false
       matrix:
         platform:
@@ -38,14 +38,6 @@ jobs:
           - os: bladerunner-macos
             label: self-hosted-macos
             peer_label: self-hosted-linux
-        # The groups run side by side, each running the phases it lists. Keep the `E2E result` job's checks in step
-        # with this list.
-        group:
-          # The phases whose tests need a node built with testing features.
-          - name: feature-nodes
-            phases: [ mantle-sdp, tip-poll-self-heal ]
-          - name: remaining
-            phases: [ remaining ]
     runs-on: ${{ matrix.platform.os }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
@@ -92,8 +84,8 @@ jobs:
         uses: ./.github/actions/verify-local-ntp-server
 
       # This cooperative checkpoint is reused before each expensive phase.
-      # It does not cancel the workflow. If the other OS has completed this
-      # group and its `Report success` step passed, this lane skips all
+      # It does not cancel the workflow. If the other OS has completed the
+      # entire lane and its `Report success` step passed, this lane skips all
       # remaining expensive work and proceeds to cleanup.
       - &check_peer_success
         name: Stop if another E2E OS has already passed
@@ -106,11 +98,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           current-label: ${{ matrix.platform.label }}
           peer-label: ${{ matrix.platform.peer_label }}
-          job-name-prefix: Run end-to-end integration tests [${{ matrix.group.name }}]
+          job-name-prefix: Run end-to-end integration tests
 
       # Build the testing-featured node binary required by mantle_sdp.
       - name: Build testing binary for mantle_sdp
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.group.phases, 'mantle-sdp') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -123,7 +115,7 @@ jobs:
       # Run the isolated SDP ops target that requires the testing-featured node binary.
       - name: End-to-end integration tests - mantle_sdp
         id: mantle_sdp_end_to_end
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.group.phases, 'mantle-sdp') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
@@ -136,7 +128,7 @@ jobs:
 
       # Build the testing-featured node binary required by tip_poll_self_heal.
       - name: Build testing binary for tip_poll_self_heal
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.group.phases, 'tip-poll-self-heal') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -149,7 +141,7 @@ jobs:
       # Run the isolated tip-poll self-heal test that requires the testing-featured node binary.
       - name: End-to-end integration tests - tip_poll_self_heal
         id: tip_poll_self_heal_end_to_end
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.group.phases, 'tip-poll-self-heal') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
@@ -163,7 +155,7 @@ jobs:
       # Build the node binary, the only one the remaining end-to-end tests run. The other binaries get their release
       # build after each merge, in the Post-merge checks workflow.
       - name: Build the node binary for the remaining end-to-end tests
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.group.phases, 'remaining') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
           command: build
@@ -176,7 +168,7 @@ jobs:
       # Run the remaining end-to-end integration tests using cargo-nextest for better performance and reliability
       - name: End-to-end integration tests
         id: end_to_end
-        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' && contains(matrix.group.phases, 'remaining') }}
+        if: ${{ success() && env.PEER_SUCCEEDED != 'true' && steps.verify_local_ntp.conclusion == 'success' }}
         timeout-minutes: 90
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
@@ -191,7 +183,7 @@ jobs:
         if: ${{ failure() && (steps.mantle_sdp_end_to_end.conclusion == 'failure' || steps.tip_poll_self_heal_end_to_end.conclusion == 'failure' || steps.end_to_end.conclusion == 'failure') }}
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
-          name: integration-test-artifacts-${{ runner.os }}-${{ matrix.group.name }}-${{ github.sha }}
+          name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
           path: tests/.e2e_artefacts
           if-no-files-found: ignore
@@ -212,15 +204,14 @@ jobs:
       # required result job. A cooperatively stopped lane skips this step.
       - name: Report success
         if: ${{ success() && env.PEER_SUCCEEDED != 'true' }}
-        run: echo "All ${{ matrix.group.name }} E2E tests passed on ${{ matrix.platform.label }}"
+        run: echo "All E2E tests passed on ${{ matrix.platform.label }}"
 
   # This is the stable required check for the E2E suite.
   #
   # It intentionally has no `needs: tests`: on merge_group it starts alongside
-  # the matrix and polls the current workflow run. It succeeds once every group
-  # has passed on either OS, that is once either OS's lane for the group has
-  # completed and its `Report success` step passed. It fails once both lanes of
-  # a group have completed without reporting success.
+  # the matrix and polls the current workflow run. It succeeds as soon as either
+  # OS has completed the entire lane and its `Report success` step passed.
+  # It fails once both lanes have completed without reporting success.
   #
   # On pull requests it succeeds immediately without starting self-hosted jobs.
   e2e-result:
@@ -248,21 +239,11 @@ jobs:
           sparse-checkout: .github/actions/check-any-lane-result
           sparse-checkout-cone-mode: false
 
-      # One check per group of the `tests` matrix.
-      - name: Check E2E result - feature-nodes
+      - name: Check E2E result
         if: ${{ github.event_name == 'merge_group' }}
         uses: ./.github/actions/check-any-lane-result
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          result-name: E2E feature-nodes
-          job-name-prefix: Run end-to-end integration tests [feature-nodes]
-          lane-labels-json: '["self-hosted-linux", "self-hosted-macos"]'
-
-      - name: Check E2E result - remaining
-        if: ${{ github.event_name == 'merge_group' }}
-        uses: ./.github/actions/check-any-lane-result
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          result-name: E2E remaining
-          job-name-prefix: Run end-to-end integration tests [remaining]
+          result-name: E2E
+          job-name-prefix: Run end-to-end integration tests
           lane-labels-json: '["self-hosted-linux", "self-hosted-macos"]'
