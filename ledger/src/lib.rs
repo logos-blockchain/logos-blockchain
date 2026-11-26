@@ -55,11 +55,11 @@ use lb_log_targets::{diagnostic::BLEND_REACHABILITY, ledger};
 use mantle::LedgerState as MantleLedger;
 use rpds::HashTrieMapSync;
 use thiserror::Error;
+pub use update::{PreparedUpdate, VerifiedUpdate};
 
 use crate::{
     config::{EraScheduledConfig, ExecutionMarketConfig, config_for_slot},
     mantle::helpers::MantleOperationVerificationHelper,
-    update::{BatchVerifiedUpdate, PreparedUpdate},
 };
 
 const WINDOW_SIZE: usize = 120;
@@ -191,8 +191,8 @@ where
         Ok(PreparedUpdate::new(id, new_state, events, deferred_proofs))
     }
 
-    /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
-    pub fn commit_update(&mut self, update: BatchVerifiedUpdate<Id>) -> Events {
+    /// Commits the verified update to the ledger.
+    pub fn commit_update(&mut self, update: VerifiedUpdate<Id>) -> Events {
         self.states.insert_mut(update.id, update.state);
         update.events
     }

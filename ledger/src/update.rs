@@ -28,17 +28,35 @@ impl<Id> PreparedUpdate<Id> {
         }
     }
 
-    pub fn verify_batch_proofs(self) -> Result<BatchVerifiedUpdate<Id>, batch::Error> {
-        self.deferred_proofs.verify()?;
-        Ok(BatchVerifiedUpdate {
-            id: self.id,
-            state: self.state,
-            events: self.events,
-        })
+    pub fn verify_batch_proofs(self) -> Result<VerifiedUpdate<Id>, batch::Error> {
+        let (update, deferred_proofs) = self.into_parts();
+        deferred_proofs.verify()?;
+        Ok(update)
+    }
+
+    /// Creates a [`VerifiedUpdate`] by skipping batch proof verification.
+    /// This must be used only in trusted paths.
+    #[must_use]
+    pub fn trust_batch_proofs(self) -> VerifiedUpdate<Id> {
+        let (update, _deferred_proofs) = self.into_parts();
+        update
+    }
+
+    fn into_parts(self) -> (VerifiedUpdate<Id>, DeferredProofs) {
+        let Self {
+            id,
+            state,
+            events,
+            deferred_proofs,
+        } = self;
+        (VerifiedUpdate { id, state, events }, deferred_proofs)
     }
 }
 
-pub struct BatchVerifiedUpdate<Id> {
+/// An update whose deferred proofs were either verified by
+/// [`PreparedUpdate::verify_batch_proofs`] or trusted by
+/// [`PreparedUpdate::trust_batch_proofs`], so it can be committed.
+pub struct VerifiedUpdate<Id> {
     pub id: Id,
     pub state: LedgerState,
     pub events: Events,
@@ -102,6 +120,29 @@ mod tests {
             update.verify_batch_proofs(),
             Err(batch::Error::InvalidZkSignatures)
         ));
+    }
+
+    #[test]
+    fn trust_batch_proofs_skips_the_deferred_proofs() {
+        let state = LedgerState::from_utxos(
+            [utxo()],
+            &config(),
+            GENESIS_POW_REWARD_POOL,
+            &ConsensusExcludedKeys::empty(),
+        );
+        let utxos_root = state.latest_utxos().root();
+        let update = PreparedUpdate::new(
+            ID,
+            state,
+            Events::from(header_event()),
+            std::iter::once(invalid_zk_sig()).collect(),
+        );
+
+        // The invalid proof is not verified, so the update is carried through.
+        let update = update.trust_batch_proofs();
+        assert_eq!(update.id, ID);
+        assert_eq!(update.state.latest_utxos().root(), utxos_root);
+        assert_eq!(update.events.len(), 1);
     }
 
     fn header_event() -> Event {

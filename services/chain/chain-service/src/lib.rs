@@ -35,7 +35,6 @@ use lb_core::{
         traits::{PreverifiedMantleTransaction, SignedMantleTx, StorageSize},
         transactions::states::Preverified,
     },
-    proofs::leader_proof::LeaderProof as _,
     sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::{Branch, EraSchedule, PrunedBlocks, ReorgedBlocks, UncleSlots};
@@ -84,6 +83,7 @@ use crate::{
     },
     states::{RecoveryProgress, RecoveryRecorder},
     sync::block_provider::BlockProvider,
+    verified::{BlockToApply, StoredBlock},
 };
 
 // Limit the number of blocks returned by GetHeaders
@@ -146,7 +146,7 @@ struct InitializedCryptarchia {
 }
 
 struct RecoveryBlocks<Tx> {
-    blocks: Vec<BlockWithVerifiedHeader<Tx>>,
+    blocks: Vec<StoredBlock<Tx>>,
     fell_back_to_lib: bool,
 }
 
@@ -590,14 +590,15 @@ impl Cryptarchia {
 
     /// Apply a block while retaining pruned ledger states until the caller has
     /// observed any canonical transition represented by the result.
-    pub(crate) fn try_apply_block_with_state_retention<Tx>(
+    pub(crate) fn try_apply_block_with_state_retention<Tx, Block>(
         &mut self,
-        block: &BlockWithVerifiedHeader<Tx>,
+        block: &Block,
     ) -> Result<TryApplyBlockOutcome, Error>
     where
         Tx: PreverifiedMantleTransaction + StorageSize + Clone,
+        Block: BlockToApply<Tx>,
     {
-        let header = block.header();
+        let header = block.as_block().header();
         let id = header.id();
         let parent = header.parent();
         let slot = header.slot();
@@ -606,32 +607,12 @@ impl Cryptarchia {
             return Err(Error::AlreadyApplied(id));
         }
 
-        let block_uncle_headers_slots = block.uncle_headers().slots();
-        let leader_proof = header.leader_proof();
+        let block_uncle_headers_slots = block.as_block().uncle_headers().slots();
 
-        // Apply the block to the ledger, and batch-verify ZK proofs.
-        // This ledger update is not finalized yet, and will be committed only
-        // after checking if the block is accepted by the consensus
-        // engine.
-        let update = self
-            .ledger
-            .prepare_update(
-                id,
-                parent,
-                slot,
-                &leader_proof.entropy(),
-                *leader_proof.voucher_cm(),
-                &block_uncle_headers_slots,
-                block.transactions_iter().cloned(),
-            )
-            .map_err(|err| match err {
-                lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
-                    parent,
-                    info: Box::new(self.info()),
-                },
-                err => Error::Ledger(err),
-            })?
-            .verify_batch_proofs()?;
+        // Apply the block to the ledger. This ledger update is not finalized
+        // yet, and will be committed only after checking if the block is
+        // accepted by the consensus engine.
+        let update = block.prepare_verified_update(self)?;
 
         let outcome = self
             .consensus
@@ -1024,7 +1005,7 @@ where
         tip: HeaderId,
         lib: HeaderId,
         storage: StorageApi<Tx>,
-    ) -> Result<Vec<BlockWithVerifiedHeader<Tx>>, Error> {
+    ) -> Result<Vec<StoredBlock<Tx>>, Error> {
         let ids = load_block_ids_from_storage(tip, lib, storage.clone())
             .try_collect::<Vec<_>>()
             .await?;
@@ -1034,8 +1015,10 @@ where
         // LIB. Replay recovery blocks in LIB->tip order, skipping LIB
         // because Cryptarchia is already initialized from it.
         for id in ids.into_iter().rev().skip(1) {
-            let block = BlockWithVerifiedHeader::load_stored(&storage, &id)
+            let block = StoredBlock::load(&storage, &id)
                 .await
+                .ok()
+                .flatten()
                 .ok_or(Error::HeaderIdNotFound(id))?;
             blocks.push(block);
         }
@@ -1177,7 +1160,7 @@ where
         let mut pruned_blocks = PrunedBlocks::new();
         let n_blocks = blocks.len();
         for (i, block) in blocks.into_iter().enumerate() {
-            let block_id = block.header().id();
+            let block_id = block.as_block().header().id();
             let outcome = process_block(
                 &mut cryptarchia,
                 block,
@@ -1240,15 +1223,14 @@ where
         let mut parent = checkpoint_lib;
         let mut slot = checkpoint_branch.slot();
         for id in ids.into_iter().rev().skip(1) {
-            let block = storage
-                .try_get_block(&id)
+            let block = StoredBlock::load(storage, &id)
                 .await
                 .map_err(|error| {
                     Error::Storage(format!("Failed to load finalized block {id}: {error}"))
                 })?
                 .ok_or(Error::HeaderIdNotFound(id))?;
 
-            let header = block.header();
+            let header = block.as_block().header();
             if header.id() != id || header.parent() != parent || header.slot() <= slot {
                 return Err(Error::InvalidBlock(format!(
                     "Unexpected header for finalized block {id}"
@@ -1256,20 +1238,8 @@ where
             }
 
             slot = header.slot();
-            let leader_proof = header.leader_proof();
-            let uncle_slots = block.uncle_headers().slots();
-            let update = cryptarchia
-                .ledger
-                .prepare_update(
-                    id,
-                    parent,
-                    slot,
-                    &leader_proof.entropy(),
-                    *leader_proof.voucher_cm(),
-                    &uncle_slots,
-                    block.transactions_iter().cloned(),
-                )?
-                .verify_batch_proofs()?;
+            let uncle_slots = block.as_block().uncle_headers().slots();
+            let update = block.prepare_verified_update(cryptarchia)?;
 
             cryptarchia.ledger.commit_update(update);
             cryptarchia.ledger.prune_state_at(&parent);
