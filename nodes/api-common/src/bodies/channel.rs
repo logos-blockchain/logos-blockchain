@@ -28,6 +28,7 @@ pub struct ChannelDepositRequestBody {
     /// The key the deposited note is paid to in the channel.
     pub holder_public_key: ZkPublicKey,
     pub metadata: Metadata,
+    /// A wallet-owned key included in `funding_public_keys`.
     pub change_public_key: ZkPublicKey,
     pub funding_public_keys: Vec<ZkPublicKey>,
     pub max_tx_fee: GasCost,
@@ -55,6 +56,7 @@ pub struct ChannelWithdrawRequestBody {
     pub channel_id: ChannelId,
     /// The channel notes to withdraw.
     pub notes: Vec<NoteCommitment>,
+    /// A wallet-owned key included in `funding_public_keys`.
     pub change_public_key: ZkPublicKey,
     pub funding_public_keys: Vec<ZkPublicKey>,
     pub max_tx_fee: GasCost,

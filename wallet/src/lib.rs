@@ -962,6 +962,8 @@ impl<KeyId> Wallet<KeyId> {
         Ok(Some(balance))
     }
 
+    /// Funds a transaction with the wallet's notes and returns change to a
+    /// wallet-owned key from `funding_pks`.
     #[expect(
         clippy::too_many_arguments,
         reason = "thin passthrough to `WalletState::fund_tx` plus the tip"
@@ -981,6 +983,10 @@ impl<KeyId> Wallet<KeyId> {
             .into_iter()
             .map(|pk| *pk.borrow())
             .collect::<Vec<_>>();
+        if !funding_pks.contains(&change_pk) || !self.known_keys.contains_key(&change_pk) {
+            return Err(WalletError::InvalidChangeKey(change_pk));
+        }
+
         let created = self.created_ledger_notes(tx_builder, &funding_pks);
         self.spend_state(tip)?.fund_tx_from(
             tx_builder,
@@ -2023,6 +2029,7 @@ mod tests {
         let note = Note::new(10000, Fr::from(1u64), alice);
         let known = known(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
         let mut wallet = wallet_on_chain(known.clone(), &[note], &[], 40);
+        wallet.add_known_key(alice, 1);
         let context = context(GasPrices::new(1, 1));
         let fund = |wallet: &Wallet<u8>, tip: u8| {
             wallet
@@ -2116,6 +2123,7 @@ mod tests {
         let note = Note::new(50_000, Fr::from(1u64), alice);
         let known = known(&[(note, NoteSetIndex::Ledger, nullifier(1))]);
         let mut wallet = wallet_on_chain(known, &[note], &[], 40);
+        wallet.add_known_key(alice, 1);
         let spend = NoteSetUpdate {
             note_set: NoteSetIndex::Ledger,
             nullifiers: vec![nullifier(1)],
@@ -2145,7 +2153,8 @@ mod tests {
         let alice = pk(1);
         let note = Note::new(50_000, Fr::from(2u64), alice);
         let known_notes = known(&[(note, NoteSetIndex::Ledger, nullifier(2))]);
-        let wallet = wallet_on_chain(known_notes, &[], &[(37, note)], 41);
+        let mut wallet = wallet_on_chain(known_notes, &[], &[(37, note)], 41);
+        wallet.add_known_key(alice, 1);
         let context = context(GasPrices::new(1, 1));
         let fund = |tip: u8| {
             wallet.fund_tx(
@@ -2185,6 +2194,55 @@ mod tests {
                 .unwrap()
                 .pending,
             HashSet::new()
+        );
+    }
+
+    #[test]
+    fn funding_requires_a_wallet_owned_change_key_from_the_funding_keys() {
+        let funding_key = pk(1);
+        let other_wallet_key = pk(2);
+        let recipient_key = pk(3);
+        let input = Note::new(100, Fr::from(1u64), funding_key);
+        let wallet = Wallet::from_genesis(
+            [(funding_key, 1), (other_wallet_key, 2)],
+            known(&[(input, NoteSetIndex::Ledger, nullifier(1))]),
+            block_id(0),
+            &[input],
+            &[],
+        )
+        .unwrap();
+        let payment = Note::new(40, Fr::from(2u64), recipient_key);
+        let builder = MantleTxBuilder::new().add_ledger_output(payment).unwrap();
+        let change_nonce = Fr::from(3u64);
+        let context = context(GasPrices::new(0, 0));
+
+        let fund = |change_key, funding_keys: &[ZkPublicKey]| {
+            wallet.fund_tx(
+                block_id(0),
+                &builder,
+                change_key,
+                change_nonce,
+                funding_keys,
+                &context,
+                &HashSet::new(),
+                0,
+            )
+        };
+
+        assert_eq!(
+            fund(recipient_key, &[funding_key, recipient_key]).unwrap_err(),
+            WalletError::InvalidChangeKey(recipient_key)
+        );
+        assert_eq!(
+            fund(other_wallet_key, &[funding_key]).unwrap_err(),
+            WalletError::InvalidChangeKey(other_wallet_key)
+        );
+
+        let funded = fund(funding_key, &[funding_key]).unwrap();
+        let change = Note::new(60, change_nonce, funding_key);
+        assert_eq!(
+            funding_transfer(funded).outputs,
+            [payment.commitment(), change.commitment()].into()
         );
     }
 

@@ -5,6 +5,7 @@ use lb_core::{
         transactions::builder::TxBuilderError,
     },
 };
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_mmr::MerklePathError;
 use lb_utils::bounded::BoundedError;
 use thiserror::Error;
@@ -15,6 +16,8 @@ pub enum WalletError {
     UnknownBlock(HeaderId),
     #[error("Wallet does not have enough funds, available={available}")]
     InsufficientFunds { available: u64 },
+    #[error("Change key {0:?} must be one of this wallet's funding keys")]
+    InvalidChangeKey(ZkPublicKey),
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
     #[error("Transaction builder error: {0}")]
