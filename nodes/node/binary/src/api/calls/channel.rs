@@ -1,5 +1,5 @@
+use lb_api_common::bodies::channel::{ChannelDepositRequestBody, ChannelDepositResponseBody};
 use lb_core::{
-    era::ForkDigest,
     header::HeaderId,
     mantle::{
         Note, NoteId, Op, OpProof, SignedOps, Value,
@@ -16,7 +16,6 @@ use lb_core::{
         transactions::{MantleTxBuilder, OpProofs, Ops},
     },
 };
-use lb_http_api_common::bodies::channel::{ChannelDepositRequestBody, ChannelDepositResponseBody};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet_service::TipResponse;
 
@@ -94,7 +93,6 @@ fn select_notes_covering(
 /// note and deposits that note.
 pub async fn deposit_amount(
     handle: &Handle,
-    fork_digests: &[ForkDigest],
     tip: Option<HeaderId>,
     channel_id: ChannelId,
     funding_public_key: ZkPublicKey,
@@ -146,7 +144,7 @@ pub async fn deposit_amount(
     // `funding_public_key` owns every input, so one signature over the
     // transaction hash satisfies both op proofs.
     let tx = Ops::new(
-        fork_digest_in_force(handle, fork_digests).await?,
+        fork_digest_in_force(handle).await?,
         [Op::Transfer(transfer), Op::ChannelDeposit(deposit)],
     );
     let signature = wallet

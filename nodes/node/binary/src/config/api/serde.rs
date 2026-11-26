@@ -3,10 +3,11 @@ use core::{
     time::Duration,
 };
 
-use lb_http_api_common::settings::{CorsOrigin, HostName};
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+
+use crate::api::settings::{CorsOrigin, HostName};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]

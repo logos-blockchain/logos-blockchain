@@ -3,7 +3,7 @@ use axum::{
     extract::{State, rejection::JsonRejection},
     response::Response,
 };
-use lb_http_api_common::{
+use lb_api_common::{
     bodies::pow::{PoWClaimRequestBody, PoWClaimResponseBody},
     paths,
 };

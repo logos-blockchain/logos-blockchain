@@ -1,8 +1,23 @@
+use lb_core::mantle::transactions::genesis_tx::ChainId;
 use lb_tracing::filter::envfilter::EnvFilterConfig;
 use lb_tracing_service::{TracingMessage, TracingOpenMetricsError};
 
 use super::{Error, Handle, request};
 use crate::TracingService;
+
+const LOG_TARGET: &str = lb_log_targets::node::api::TRACING;
+
+/// The version and build provenance of the node.
+#[must_use]
+pub fn version() -> lb_version::BuildVersionInfo {
+    lb_version::build_version_info()
+}
+
+/// The chain the node runs on.
+#[must_use]
+pub fn chain_id(handle: &Handle) -> ChainId {
+    handle.chain_id.clone()
+}
 
 pub async fn reload_tracing_filter(handle: &Handle, filter: EnvFilterConfig) -> Result<(), Error> {
     request::<TracingService, _>(handle, |reply_channel| TracingMessage::ReloadFilter {
@@ -10,7 +25,9 @@ pub async fn reload_tracing_filter(handle: &Handle, filter: EnvFilterConfig) -> 
         reply_channel,
     })
     .await?
-    .map_err(Error::internal)
+    .map_err(Error::internal)?;
+    tracing::debug!(target: LOG_TARGET, "Tracing filter reloaded");
+    Ok(())
 }
 
 /// The node's metrics in the `OpenMetrics` text format.

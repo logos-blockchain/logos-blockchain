@@ -1,4 +1,4 @@
-use lb_http_api_common::bodies::pow::{PoWClaimRequestBody, PoWClaimResponseBody};
+use lb_api_common::bodies::pow::{PoWClaimRequestBody, PoWClaimResponseBody};
 use lb_pow_service::{
     AutoClaimSettings, ClaimableRewardsInfo, PoWMiningSettings, PoWStatus,
     api::{ApiError as PoWApiError, PoWServiceApi},

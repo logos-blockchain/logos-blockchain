@@ -10,12 +10,12 @@ use std::{
 };
 
 use futures::{StreamExt as _, stream::FuturesUnordered};
+use lb_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_core::mantle::{
     NoteId, SignedOps, TxHash, Utxo,
     ledger::{MAX_TRANSACTION_INPUTS, verification_mode::StandardMode},
     transactions::{GasPrices, OpProofs, states::Preverified},
 };
-use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount, is_truthy_env};
 use lb_wallet::WalletError;

@@ -3,8 +3,7 @@
 use axum::{Router, routing};
 use http::StatusCode;
 use lb_api_service::Backend;
-use lb_http_api_common::metrics::http_metrics_middleware;
-pub use lb_http_api_common::settings::AxumBackendSettings;
+use overwatch::overwatch::handle::OverwatchHandle;
 use tokio::net::TcpListener;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
@@ -16,10 +15,12 @@ use tracing::Level as TracingLevel;
 use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
+pub use crate::api::settings::AxumBackendSettings;
 use crate::{
     RuntimeServiceId,
     api::{
-        browser_access::restrict_browser_access, calls::Handle, openapi::ApiDoc, routes::api_routes,
+        browser_access::restrict_browser_access, calls::Handle, metrics::http_metrics_middleware,
+        openapi::ApiDoc, routes::api_routes,
     },
 };
 
@@ -45,18 +46,13 @@ impl Backend<RuntimeServiceId> for AxumBackend {
         Ok(Self { settings })
     }
 
-    async fn serve(self, handle: Handle) -> Result<(), Self::Error> {
+    async fn serve(self, handle: OverwatchHandle<RuntimeServiceId>) -> Result<(), Self::Error> {
+        let handle = Handle::new(handle, self.settings.chain_id, self.settings.fork_digests);
         let app = api_routes!(build_router)
             .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
 
         let app = app
-            .with_state(handle.clone())
-            // The chain ID is a constant of the deployment, so it rides along
-            // as a request extension instead of a service round trip.
-            .layer(axum::Extension(self.settings.chain_id.clone()))
-            // Each era's fork digest is a constant of the deployment too; the
-            // era in force comes from the time service.
-            .layer(axum::Extension(self.settings.fork_digests.clone()))
+            .with_state(handle)
             .layer(axum::middleware::from_fn(http_metrics_middleware))
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,
@@ -77,7 +73,7 @@ impl Backend<RuntimeServiceId> for AxumBackend {
 
         #[cfg(feature = "profiling")]
         let app = {
-            let pprof_routes = lb_http_api_common::pprof::create_pprof_router().layer(
+            let pprof_routes = crate::api::pprof::create_pprof_router().layer(
                 TraceLayer::new_for_http()
                     .on_request(DefaultOnRequest::new().level(TracingLevel::TRACE))
                     .on_response(DefaultOnResponse::new().level(TracingLevel::TRACE)),

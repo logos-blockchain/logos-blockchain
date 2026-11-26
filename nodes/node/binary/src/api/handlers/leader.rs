@@ -1,5 +1,5 @@
 use axum::{extract::State, response::Response};
-use lb_http_api_common::{bodies::leader::LeaderClaimResponseBody, paths};
+use lb_api_common::{bodies::leader::LeaderClaimResponseBody, paths};
 
 use crate::api::{
     calls::{Handle, leader},

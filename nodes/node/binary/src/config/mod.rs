@@ -7,7 +7,6 @@ use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, bail, eyre};
 use lb_core::sdp::ProviderId;
 use lb_groth16::fr_from_bytes;
-use lb_http_api_common::settings::{CorsOrigin, HostName};
 use lb_key_management_system_service::{
     backend::preload::KeyId,
     keys::{Key, UnsecuredZkKey, ZkPublicKey},
@@ -31,15 +30,18 @@ pub use crate::config::{
     storage::serde::Config as StorageConfig, time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
 };
-use crate::config::{
-    keystore::Keystore,
-    migrations::{ConfigVersion, VERSION_KEY},
-    network::serde::nat,
-    tracing::serde::{
-        filter::{EnvConfig, Layer},
-        logger::{
-            AppenderType, CompressionType, FileConfig, GelfConfig, RetentionType, RollingConfig,
-            default_compression_threshold, default_max_files,
+use crate::{
+    api::settings::{CorsOrigin, HostName},
+    config::{
+        keystore::Keystore,
+        migrations::{ConfigVersion, VERSION_KEY},
+        network::serde::nat,
+        tracing::serde::{
+            filter::{EnvConfig, Layer},
+            logger::{
+                AppenderType, CompressionType, FileConfig, GelfConfig, RetentionType,
+                RollingConfig, default_compression_threshold, default_max_files,
+            },
         },
     },
 };

@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use lb_common_http_client::CommonHttpClient;
-use lb_http_api_common::bodies::wallet::transfer_funds::{
+use lb_api_common::bodies::wallet::transfer_funds::{
     WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
 };
+use lb_common_http_client::CommonHttpClient;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use reqwest::Url;
 use tokio::sync::mpsc;

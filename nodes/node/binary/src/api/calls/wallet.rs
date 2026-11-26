@@ -1,9 +1,4 @@
-use lb_core::{
-    era::ForkDigest,
-    header::HeaderId,
-    mantle::{OpProof, gas::GasCost, traits::Hashable as _},
-};
-use lb_http_api_common::bodies::wallet::{
+use lb_api_common::bodies::wallet::{
     aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
     balance::WalletBalanceResponseBody,
     claimable_vouchers::{ClaimableVoucherInfoResponseBody, WalletClaimableVouchersResponseBody},
@@ -14,11 +9,16 @@ use lb_http_api_common::bodies::wallet::{
     },
     transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
 };
+use lb_core::{
+    header::HeaderId,
+    mantle::{OpProof, gas::GasCost, traits::Hashable as _},
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet_service::{
     TipResponse,
     api::{WalletApi, WalletApiError},
 };
+use overwatch::services::status::ServiceStatus;
 
 use super::{Error, Handle, mempool, time::fork_digest_in_force};
 use crate::{RuntimeServiceId, WalletService};
@@ -98,6 +98,12 @@ pub async fn claimable_vouchers(
     handle: &Handle,
     tip: Option<HeaderId>,
 ) -> Result<WalletClaimableVouchersResponseBody, Error> {
+    let status = handle.status_watcher::<WalletService>().await?.current();
+    if status != ServiceStatus::Ready {
+        return Err(Error::unavailable(format!(
+            "Wallet service is not ready: {status:?}"
+        )));
+    }
     let TipResponse { tip, response } = wallet_api(handle)
         .await?
         .get_claimable_vouchers(tip)
@@ -164,7 +170,6 @@ pub async fn sign_tx_zk(
 /// leaving every other op for the caller to sign.
 pub async fn fund(
     handle: &Handle,
-    fork_digests: &[ForkDigest],
     request: WalletFundRequestBody,
 ) -> Result<WalletFundResponseBody, Error> {
     let wallet = wallet_api(handle).await?;
@@ -193,7 +198,7 @@ pub async fn fund(
         .collect();
 
     let funded_tx = funded_tx_builder
-        .build(fork_digest_in_force(handle, fork_digests).await?)
+        .build(fork_digest_in_force(handle).await?)
         .map_err(Error::internal)?;
     let transfer_proof = if funding_note_pks.is_empty() {
         None
