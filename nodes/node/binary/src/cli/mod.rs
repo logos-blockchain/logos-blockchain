@@ -301,9 +301,10 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_state(&mut user_config.state, state_args);
     apply_default_log_filter(&mut user_config.tracing);
 
+    // A node follows the testnet release 0.3.1 started unless it is given
+    // another deployment, so `--testnet` only names what happens anyway.
     let deployment_settings = match deployment_args.custom_deployment_path {
-        None if deployment_args.testnet => DeploymentSettings::testnet(),
-        None => DeploymentSettings::default(),
+        None => DeploymentSettings::testnet(),
         Some(path) => deserialize_value_at_path::<DeploymentSettings>(&path, OnUnknownKeys::Fail)?,
     };
 
