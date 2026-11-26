@@ -46,6 +46,6 @@ repos:
         require_serial: true
       - id: cargo-hack-check
         language: script
-        name: cargo hack check
+        name: cargo hack clippy
         entry: ./hooks/cargo-hack.sh
         stages: [manual]

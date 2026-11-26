@@ -115,6 +115,39 @@ fn ntp_tick_stream(client: AsyncNTPClient, settings: &NtpTimeBackendSettings) ->
     ))
 }
 
+/// The time `timestamp` reports, advanced by half its roundtrip, or `None` if
+/// that time can't be represented.
+fn ntp_date(timestamp: &NtpResult) -> Option<OffsetDateTime> {
+    let seconds = Duration::from_secs(timestamp.sec().into());
+    let nanos_fraction =
+        Duration::from_nanos(fraction_to_nanoseconds(timestamp.sec_fraction()).into());
+    let roundtrip = Duration::from_micros(timestamp.roundtrip());
+    let ts_nanos_u128 = (seconds + nanos_fraction + roundtrip / 2).as_nanos();
+
+    let ts_nanos_i128 = match i128::try_from(ts_nanos_u128) {
+        Ok(ts_nanos) => ts_nanos,
+        Err(e) => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Skipping invalid NTP timestamp {ts_nanos_u128} vs. {}: {e}",
+                i128::MAX
+            );
+            return None;
+        }
+    };
+
+    match OffsetDateTime::from_unix_timestamp_nanos(ts_nanos_i128) {
+        Ok(date) => Some(date),
+        Err(e) => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos_i128})"
+            );
+            None
+        }
+    }
+}
+
 /// Stream that updates itself every `interval` from an NTP server.
 pub struct NtpStream {
     /// Update interval stream
@@ -154,44 +187,14 @@ impl NtpStream {
     /// The corrected slot leads the new timer either way:
     /// [`Self::poll_slot_timer`] emits only slots past the last emitted one,
     /// which is what tells the cases apart.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
         let this = self.get_mut();
 
         let Poll::Ready(Some(timestamp)) = this.interval.as_mut().poll_next_unpin(cx) else {
             return;
         };
-
-        let seconds = Duration::from_secs(timestamp.sec().into());
-        let nanos_fraction =
-            Duration::from_nanos(fraction_to_nanoseconds(timestamp.sec_fraction()).into());
-        let roundtrip = Duration::from_micros(timestamp.roundtrip());
-        let ts_nanos_u128 = (seconds + nanos_fraction + roundtrip / 2).as_nanos();
-
-        let ts_nanos_i128 = match i128::try_from(ts_nanos_u128) {
-            Ok(ts_nanos) => ts_nanos,
-            Err(e) => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "Skipping invalid NTP timestamp {ts_nanos_u128} vs. {}: {e}",
-                    i128::MAX
-                );
-                return;
-            }
-        };
-
-        let date = match OffsetDateTime::from_unix_timestamp_nanos(ts_nanos_i128) {
-            Ok(date) => date,
-            Err(e) => {
-                tracing::warn!(
-                    target: LOG_TARGET,
-                    "Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos_i128})"
-                );
-                return;
-            }
+        let Some(date) = ntp_date(&timestamp) else {
+            return;
         };
 
         let current_slot = this.era_schedules.slot_at(date).unwrap_or(Slot::genesis());
@@ -214,7 +217,7 @@ impl NtpStream {
         tracing::trace!(
             target: LOG_TARGET,
             "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
-            roundtrip.as_micros()
+            timestamp.roundtrip()
         );
 
         this.slot_timer = rebased_slot_timer;

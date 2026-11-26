@@ -33,7 +33,9 @@ jobs:
           command: fmt
           args: --all --check
       - name: Install taplo CLI
-        run: cargo install taplo-cli --locked --version 0.10.0
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # Version 2.79.11
+        with:
+          tool: taplo@0.10.0
       - name: Run taplo lint
         run: taplo lint
       - name: Run taplo fmt
@@ -99,36 +101,44 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CARGO_BUILD_WARNINGS: deny
+      # mbx never shares incremental compilations.
+      CARGO_INCREMENTAL: 0
     steps:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Set up Cargo cache
-        uses: ./.github/actions/setup-cargo-cache
+      # Restores the compiler outputs of master's last run, keyed by their inputs rather than by file times, so a fresh
+      # checkout recompiles only the changed crates and their dependents. Pushes to master save; pull requests and the
+      # merge queue only restore.
+      - name: Set up mbx build cache
+        uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd  # Version 1.7.4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: code-check/lints/${{ matrix.os }}
+          version: 1.30.0
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          cache-generation: lints-v1
+
+      - name: Annotate compiler messages
+        run: echo "::add-matcher::.github/matchers/rust.json"
 
       - name: Run cargo clippy on workspace
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clippy
-          args: --locked --workspace --all-targets --all-features
+        run: mbx clippy --locked --workspace --all-targets --all-features
 
-      - name: Update Cargo cache
-        if: success() || failure()
-        uses: ./.github/actions/update-cargo-cache
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: code-check/lints/${{ matrix.os }}
+      - name: Show mbx statistics
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: mbx stats
 
   tests:
     name: Run test suite
+    # Pushes to master only build the tests, so that pull requests find their compilations in the build cache.
     if: >-
       ${{
-        github.event_name == 'pull_request' &&
-        !startsWith(github.event.pull_request.title, '[WIP]') &&
-        !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
+        github.event_name == 'push' || (
+          github.event_name == 'pull_request' &&
+          !startsWith(github.event.pull_request.title, '[WIP]') &&
+          !contains(github.event.pull_request.labels.*.name, 'DO NOT MERGE')
+        )
       }}
     strategy:
       fail-fast: false # all OSes should be tested even if one fails (default: true)
@@ -140,10 +150,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-      # allows `sccache` to cache the workspace crates.
+      # mbx never shares incremental compilations.
       CARGO_INCREMENTAL: 0
       # line tables are enough for backtraces.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      # The runners are disposable, so mbx can keep everything it restores until the job ends.
+      MBX_GC_AUTO: 0
+      # Added to the nextest commands, so that pushes to master build the tests without running them.
+      NEXTEST_BUILD_ONLY: ${{ github.event_name == 'push' && '--no-run' || '' }}
     steps:
       - name: Disable rustup override
         run: rustup override unset || true
@@ -172,12 +186,24 @@ jobs:
             fi
           done
 
-      - name: Run the node binary with the testing feature to check the one-node config files validity
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+      # Restores the compiler outputs of master's last build. Pushes to master save; pull requests only restore.
+      - name: Set up mbx build cache
+        uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd  # Version 1.7.4
         with:
-          command: run
-          args: >-
-            --locked -p logos-blockchain-node --features testing
+          version: 1.30.0
+          github-cache-mode: objects
+          isolate-objects-cache: true
+          cache-generation: tests-v1
+
+      - name: Annotate compiler messages
+        run: echo "::add-matcher::.github/matchers/rust.json"
+
+      # mbx doesn't cache while another rustc wrapper is set, so the build steps clear the one the runner image may set
+      # for sccache.
+      - name: Run the node binary with the testing feature to check the one-node config files validity
+        run: |
+          unset RUSTC_WRAPPER
+          mbx run --locked -p logos-blockchain-node --features testing \
             -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
       - name: Check for a preinstalled cargo-nextest
@@ -197,24 +223,24 @@ jobs:
         with:
           tool: cargo-nextest
 
+      # - Benchmarks take more than six hours and would exceed the job timeout.
+      # - End-to-end integration tests run separately in their dedicated workflow.
       - name: Cargo test all except end-to-end integration tests
         timeout-minutes: 90
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: nextest
-          # - Benchmarks take more than six hours and would exceed the job timeout.
-          # - End-to-end integration tests run separately in their dedicated workflow.
-          args: >-
-            run --workspace --locked --lib --bins --examples --tests --retries 2
-            --all-features --no-fail-fast --exclude logos-blockchain-tests
+        run: |
+          unset RUSTC_WRAPPER
+          mbx nextest run --workspace --locked --lib --bins --examples --tests --retries 2 \
+            --all-features --no-fail-fast --exclude logos-blockchain-tests $NEXTEST_BUILD_ONLY
 
       - name: Run test support unit tests
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        with:
-          command: nextest
-          args: >-
-            run --locked --lib --retries 2 --no-fail-fast
-            -p logos-blockchain-tests
+        run: |
+          unset RUSTC_WRAPPER
+          mbx nextest run --locked --lib --retries 2 --no-fail-fast -p logos-blockchain-tests $NEXTEST_BUILD_ONLY
+
+      - name: Show mbx statistics
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: mbx stats
 
       - name: Clean up build artifacts
         if: success() || failure()
