@@ -166,6 +166,7 @@ lb-pol                             = { default-features = false, package = "logo
 lb-poq                             = { default-features = false, package = "logos-blockchain-poq", path = "./zk/proofs/poq" }
 lb-poseidon2                       = { default-features = false, package = "logos-blockchain-poseidon2", path = "./zk/poseidon2" }
 lb-pow-service                     = { default-features = false, package = "logos-blockchain-pow-service", path = "./services/pow" }
+lb-proofs-error                    = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
 lb-sdp-service                     = { default-features = false, package = "logos-blockchain-sdp-service", path = "./services/sdp" }
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
@@ -183,20 +184,20 @@ lb-wallet                          = { default-features = false, package = "logo
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 logos-blockchain-tests             = { default-features = false, path = "./tests" }
-# When bumping any lbc-* tag, also update the logos-blockchain-circuits flake input tag in flake.nix
+testing-framework-app              = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+testing-framework-runner-k8s       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+testing-framework-tools            = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+
+# When bumping, use the commit of the new release tag, also update the logos-blockchain-circuits flake input tag in flake.nix
 # and run `nix flake lock --update-input logos-blockchain-circuits`.
-lbc-poc-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.7" }
-lbc-pol-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.5.7" }
-lbc-poq-sys                      = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.5.7" }
-lbc-signature-sys                = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", tag = "v0.5.7" }
-lbc-types                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.5.7" }
-lbp-error                        = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
-testing-framework-app            = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
-testing-framework-core           = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
-testing-framework-runner-compose = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
-testing-framework-runner-k8s     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
-testing-framework-runner-local   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
-testing-framework-tools          = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
+lbc-poc-sys       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", rev = "ebf7ddf5b5b625ef4ea7c803171c670beebd05ef" }       #v0.5.7
+lbc-pol-sys       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", rev = "ebf7ddf5b5b625ef4ea7c803171c670beebd05ef" }       #v0.5.7
+lbc-poq-sys       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", rev = "ebf7ddf5b5b625ef4ea7c803171c670beebd05ef" }       #v0.5.7
+lbc-signature-sys = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", rev = "ebf7ddf5b5b625ef4ea7c803171c670beebd05ef" } #v0.5.7
+lbc-types         = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", rev = "ebf7ddf5b5b625ef4ea7c803171c670beebd05ef" }         #v0.5.7
 
 # External
 anyhow                             = { default-features = false, version = "1" }
@@ -283,6 +284,7 @@ reqwest                            = { default-features = false, version = "0.12
 rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
+rustix                             = { default-features = false, version = "1.1" }
 tar                                = { default-features = false, version = "0.4.46" }
 # Must stay in sync with the rust-rapidsnark flake input in flake.nix.
 rust-rapidsnark       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "e91187f8ccb5bbfc7bb00dac88169112428da78f" } # feat/nixify
@@ -464,6 +466,7 @@ tail_expr_drop_order          = { level = "warn" }
 trivial_numeric_casts         = { level = "warn" }
 unit_bindings                 = { level = "warn" }
 unsafe_attr_outside_unsafe    = { level = "warn" }
+unsafe_code                   = { level = "warn" }
 unsafe_op_in_unsafe_fn        = { level = "warn" }
 unstable_features             = { level = "warn" }
 unused_extern_crates          = { level = "warn" }
@@ -481,7 +484,6 @@ missing_debug_implementations          = { level = "allow" }
 missing_docs                           = { level = "allow" }
 trivial_casts                          = { level = "allow" }
 unreachable_pub                        = { level = "allow" }
-unsafe_code                            = { level = "allow" }
 variant_size_differences               = { level = "allow" }
 
 [workspace.lints.cargo]

@@ -16,7 +16,7 @@ runs:
   steps:
     - name: Restore Cargo Hack Keys (main)
       if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
       continue-on-error: true
       with:
         path: ${{ inputs.cache-directory }}
@@ -28,7 +28,7 @@ runs:
     # TODO: Improvement: Restore keys should not be `main` but the branch we're merging into.
     - name: Restore Cargo Hack Keys (PR)
       if: github.event_name == 'pull_request'
-      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
       continue-on-error: true
       with:
         path: ${{ inputs.cache-directory }}
@@ -46,14 +46,14 @@ runs:
 
     - name: Save Cargo Hack Keys (main)
       if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
       with:
         path: ${{ inputs.cache-directory }}
         key: cargo-hack-check/${{ runner.os }}/main/${{ github.sha }}
 
     - name: Save Cargo Hack Keys (PR)
       if: github.event_name == 'pull_request'
-      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # Version 4.2.3
+      uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684  # v4.2.3
       with:
         path: ${{ inputs.cache-directory }}
         key: cargo-hack-check/${{ runner.os }}/pr#${{ github.event.pull_request.number }}/${{ github.sha }}

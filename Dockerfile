@@ -1,18 +1,25 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
+# The syntax directive pins docker/dockerfile 1.27.1.
 
 ARG LC_CORE_VERSION=X.Y.Z
 ARG LB_NODE_VERSION=X.Y.Z
+# SHA-256 of the blockchain_module package of LB_NODE_VERSION, checked before the package is installed.
+ARG LB_MODULE_SHA256
 
 # ===========================
 # BUILD IMAGE
 # ===========================
 
-FROM debian:trixie-slim AS builder
+# Debian 13.7 (debian:trixie-20261104-slim).
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS builder
 
 ARG LC_CORE_VERSION
 ARG LB_NODE_VERSION
+ARG LB_MODULE_SHA256
+
+RUN test -n "$LB_MODULE_SHA256" || { echo "Set LB_MODULE_SHA256 to the SHA-256 of blockchain_module-$LB_NODE_VERSION.lgx." >&2; exit 1; }
 
 ENV LOGOSCTL_CONFIG_DIR=/logos-blockchain/session
 
@@ -31,12 +38,14 @@ RUN dd if=/dev/zero of=logosctl bs=1 count=3 seek=8 conv=notrunc
 
 RUN ./logosctl --appimage-extract && mv squashfs-root ext-logosctl
 
+# The downloaded package must match LB_MODULE_SHA256 before it is installed.
 RUN ./ext-logosctl/AppRun daemon start --detach && \
     ./ext-logosctl/AppRun catalog add \
     https://raw.githubusercontent.com/logos-blockchain/blockchain-modules-release/refs/heads/main/logos-repo.json && \
     ./ext-logosctl/AppRun catalog refresh && \
     ./ext-logosctl/AppRun package download blockchain_module \
     --version "$LB_NODE_VERSION" --output ./ && \
+    echo "$LB_MODULE_SHA256  blockchain_module-${LB_NODE_VERSION}.lgx" | sha256sum -c - && \
     ./ext-logosctl/AppRun install "./blockchain_module-${LB_NODE_VERSION}.lgx" -y && \
     ./ext-logosctl/AppRun daemon stop
 
@@ -44,7 +53,8 @@ RUN ./ext-logosctl/AppRun daemon start --detach && \
 # NODE IMAGE
 # ===========================
 
-FROM debian:trixie-slim
+# Debian 13.7 (debian:trixie-20261104-slim).
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 LABEL maintainer="augustinas@status.im" \
     source="https://github.com/logos-blockchain/logos-blockchain" \
@@ -67,6 +77,15 @@ ENV LOGOSCTL_CONFIG_DIR=/opt/logos-session
 RUN printf 'version: 2\nmodules_dirs:\n  - /opt/modules\n' > /tmp/daemon.yaml && \
     logosctl daemon config set /tmp/daemon.yaml && \
     rm /tmp/daemon.yaml
+
+# The node runs as an unprivileged user with a fixed UID, so volumes can be handed to it by number. It owns
+# the daemon's state.
+RUN groupadd --system --gid 10001 logos && \
+    useradd --system --uid 10001 --gid logos --create-home --home-dir /home/logos --shell /usr/sbin/nologin logos && \
+    chown -R logos:logos /opt/logos-session
+
+USER logos
+WORKDIR /home/logos
 
 EXPOSE 3000 8080 9000 60000
 

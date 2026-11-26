@@ -55,11 +55,10 @@ pub fn run(mut args: InitArgs) -> Result<()> {
     );
     // Nothing is written before every override has been validated.
     if !existing_keystore {
-        write_creating_parent_dirs(
-            &keystore_path,
-            &serde_yaml::to_string(&keystore)?,
-            "keystore",
-        )?;
+        create_parent_dirs(&keystore_path, "keystore")?;
+        keystore
+            .save(&keystore_path)
+            .wrap_err_with(|| format!("writing keystore to {}", keystore_path.display()))?;
     }
     write_creating_parent_dirs(&output, &serde_yaml::to_string(&overrides)?, "user config")?;
 
@@ -69,12 +68,19 @@ pub fn run(mut args: InitArgs) -> Result<()> {
 /// Writes `contents` to `path`, creating any missing parent directories, and
 /// names the offending path if either step fails.
 fn write_creating_parent_dirs(path: &Path, contents: &str, description: &str) -> Result<()> {
+    create_parent_dirs(path, description)?;
+    std::fs::write(path, contents)
+        .wrap_err_with(|| format!("writing {description} to {}", path.display()))
+}
+
+/// Creates any missing parent directories of `path`, and names the offending
+/// directory if that fails.
+fn create_parent_dirs(path: &Path, description: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .wrap_err_with(|| format!("creating {description} directory {}", parent.display()))?;
     }
-    std::fs::write(path, contents)
-        .wrap_err_with(|| format!("writing {description} to {}", path.display()))
+    Ok(())
 }
 
 fn apply(config: &mut UserConfig, args: InitArgs) -> Result<()> {
