@@ -1012,7 +1012,7 @@ pub(crate) fn channel_deposit_sync(
         let tx_builder = match deposit {
             Ok(tx_builder) => tx_builder,
             Err(error) => {
-                api.release_pending_notes(split_builder.nullifiers_consumed().collect())
+                api.release_pending_notes(split_builder.note_set_nullifiers_consumed().collect())
                     .await;
                 return Err(error);
             }

@@ -17,7 +17,7 @@ use lb_mmr::{MerklePath, PushWithPathsError};
 use lb_utils::bounded::BoundedError;
 use lb_zktransfer::{MAX_INPUTS, MAX_OUTPUTS, ZkTransferWitnessBuilder};
 
-use crate::{KnownNotes, WalletError, WalletState};
+use crate::{KnownNotes, NoteId, WalletError, WalletState};
 
 #[derive(Clone, Debug, Default)]
 pub struct WitnessContext {
@@ -255,12 +255,20 @@ fn op_witness(
                 appended.get(&note_set).map_or(&[], Vec::as_slice),
                 opening,
             )?;
-            let inputs = input_paths(state, known, op_index, opening, nullifiers, |commitment| {
-                commitments
-                    .iter()
-                    .position(|buffered| buffered == commitment)
-                    .map(|position| paths[position].clone())
-            })?;
+            let inputs = input_paths(
+                state,
+                known,
+                note_set,
+                op_index,
+                opening,
+                nullifiers,
+                |commitment| {
+                    commitments
+                        .iter()
+                        .position(|buffered| buffered == commitment)
+                        .map(|position| paths[position].clone())
+                },
+            )?;
             (mmr.frontier_root(), inputs)
         }
         Spend::ServiceNote(nullifier) => {
@@ -277,6 +285,7 @@ fn op_witness(
             let inputs = input_paths(
                 state,
                 known,
+                NoteSetIndex::Sdp,
                 op_index,
                 opening,
                 core::slice::from_ref(nullifier),
@@ -332,9 +341,7 @@ fn set_buffer(
         .collect::<Vec<_>>();
     let (mut commitments, mut paths) = (Vec::new(), Vec::new());
     for commitment in &inputs {
-        if let Some(owned) = state.owned_note(commitment)?
-            && owned.note_set == note_set
-        {
+        if let Some(owned) = state.owned_note(note_set, commitment)? {
             commitments.push(*commitment);
             paths.push(owned.path);
         }
@@ -373,6 +380,7 @@ fn push(
 fn input_paths(
     state: &WalletState,
     known: &KnownNotes,
+    note_set: NoteSetIndex,
     op_index: usize,
     opening: &ZkTransferOpening,
     nullifiers: &[NoteNullifier],
@@ -388,7 +396,8 @@ fn input_paths(
         .map(|(note, nullifier)| {
             let commitment = note.commitment();
             let path = path_of(&commitment).ok_or(WalletError::MissingInputPath { op_index })?;
-            if known_nullifier(state, known, &commitment) != Some(*nullifier) {
+            if known_nullifier(state, known, NoteId::new(note_set, commitment)) != Some(*nullifier)
+            {
                 return Err(WalletError::NullifierMismatch { op_index });
             }
             Ok((*note, path))
@@ -398,16 +407,12 @@ fn input_paths(
 
 // The nullifier the wallet derived for the note of `commitment`, from its owned
 // notes or else from the openings it knows, if it holds the note.
-fn known_nullifier(
-    state: &WalletState,
-    known: &KnownNotes,
-    commitment: &NoteCommitment,
-) -> Option<NoteNullifier> {
+fn known_nullifier(state: &WalletState, known: &KnownNotes, id: NoteId) -> Option<NoteNullifier> {
     state
         .notes
-        .get(commitment)
+        .get(&id)
         .map(|owned| owned.nullifier)
-        .or_else(|| known.get(commitment).map(|known_note| known_note.nullifier))
+        .or_else(|| known.get(&id).map(|known_note| known_note.nullifier))
 }
 
 #[cfg(test)]

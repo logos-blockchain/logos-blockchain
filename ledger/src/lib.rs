@@ -21,6 +21,8 @@ pub use cryptarchia::EpochState;
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use gas_and_fees::GasAndFees;
 pub use intent::{Intent, IntentStatus};
+#[cfg(feature = "test-utils")]
+use lb_core::mantle::ops::channel::withdraw::PendingWithdrawals;
 use lb_core::{
     block::BlockNumber,
     crypto::Hash as BlockHash,
@@ -36,10 +38,7 @@ use lb_core::{
         notes::{self, NoteCommitment},
         ops::{
             OpRef, SignedOp,
-            channel::{
-                deposit::DepositExecutionContext,
-                withdraw::{PendingWithdrawals, WithdrawExecutionContext},
-            },
+            channel::{deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext},
             pow::ClaimPoWRewardExecutionContext,
             program::ProgramRegisterExecutionContext,
             sdp::{SDPActiveOp, SDPDeclareOp},

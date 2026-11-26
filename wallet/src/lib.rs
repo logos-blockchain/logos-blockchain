@@ -14,6 +14,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, TxHash, Value,
+        channel::channel_note_set,
         gas::GasOverflow,
         ledger::verification_mode::StandardMode,
         note_set::{CommitmentMmr, NoteSetIndex, NoteSetUpdate},
@@ -98,6 +99,11 @@ pub struct KnownNote {
 }
 
 impl KnownNote {
+    #[must_use]
+    pub fn id(&self) -> NoteId {
+        NoteId::new(self.note_set, self.note.commitment())
+    }
+
     // Whether the note is adopted when its commitment is appended to
     // `note_set`: it is a note of the set, not spent in it yet.
     fn is_adoptable_in(
@@ -113,11 +119,60 @@ impl KnownNote {
     }
 }
 
-/// The notes the wallet knows the openings of, by commitment. A persistent
-/// map, as the wallet's recovery state takes a copy of it at every update.
-pub type KnownNotes = rpds::HashTrieMapSync<NoteCommitment, KnownNote>;
+/// A commitment's membership in one particular note set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct NoteId {
+    pub note_set: NoteSetIndex,
+    pub commitment: NoteCommitment,
+}
 
-pub type NotePaths = rpds::HashTrieMapSync<NoteCommitment, MerklePath>;
+impl Serialize for NoteId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            serializer.collect_str(&format_args!("{}/{}", self.note_set, self.commitment.0))
+        } else {
+            (self.note_set, self.commitment).serialize(serializer)
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NoteId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            use serde::de::Error as _;
+            let value = String::deserialize(deserializer)?;
+            let (set, commitment) = value
+                .split_once('/')
+                .ok_or_else(|| D::Error::custom("invalid note id"))?;
+            Ok(Self::new(
+                set.parse().map_err(D::Error::custom)?,
+                NoteCommitment(
+                    commitment
+                        .parse()
+                        .map_err(|()| D::Error::custom("invalid commitment"))?,
+                ),
+            ))
+        } else {
+            let (set, commitment) = Deserialize::deserialize(deserializer)?;
+            Ok(Self::new(set, commitment))
+        }
+    }
+}
+
+impl NoteId {
+    #[must_use]
+    pub const fn new(note_set: NoteSetIndex, commitment: NoteCommitment) -> Self {
+        Self {
+            note_set,
+            commitment,
+        }
+    }
+}
+
+/// Known openings by note-set membership, shared across recovery snapshots.
+pub type KnownNotes = rpds::HashTrieMapSync<NoteId, KnownNote>;
+
+pub type NotePaths = rpds::HashTrieMapSync<NoteId, MerklePath>;
 
 /// The nullifier of an owned note inserted into its set: the note is spent in
 /// that set.
@@ -137,7 +192,7 @@ pub struct WalletBlock {
     // openings the block reveals, adopted only once registered as known notes
     pub revealed: Vec<(NoteSetIndex, Note)>,
     // the inputs of each channel withdrawal the block posts
-    pub withdrawals: Vec<InputNullifiers>,
+    pub withdrawals: Vec<(NoteSetIndex, InputNullifiers)>,
 }
 
 impl WalletBlock {
@@ -165,7 +220,8 @@ impl WalletBlock {
                 .transactions_iter()
                 .flat_map(MantleTx::op_refs_iter)
                 .filter_map(|op| match op {
-                    OpRef::ChannelWithdraw(withdraw) => Some(withdraw.inputs.clone()),
+                    OpRef::ChannelWithdraw(withdraw) => channel_note_set(withdraw.channel_id)
+                        .map(|set| (set, withdraw.inputs.clone())),
                     _ => None,
                 })
                 .collect(),
@@ -199,7 +255,7 @@ pub fn revealed_notes<'a>(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
     pub commitments: rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
-    pub notes: rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
+    pub notes: rpds::HashTrieMapSync<NoteId, OwnedNote>,
     // C_LEAD snapshot of the current epoch
     pub aged_paths: NotePaths,
     // snapshot the next epoch will use
@@ -212,7 +268,7 @@ pub struct WalletState {
     // The inputs of the channel withdrawals on chain that spend a note of the
     // wallet and wait for their due slot. A withdrawal leaves once one of its
     // inputs is spent: by its release, or by a step, which cancels it.
-    pub withdrawals: rpds::VectorSync<InputNullifiers>,
+    pub withdrawals: rpds::VectorSync<(NoteSetIndex, InputNullifiers)>,
 }
 
 impl WalletState {
@@ -254,10 +310,11 @@ impl WalletState {
     /// its set.
     pub fn owned_note(
         &self,
+        note_set: NoteSetIndex,
         commitment: &NoteCommitment,
     ) -> Result<Option<OwnedNote>, WalletError> {
         self.notes
-            .get(commitment)
+            .get(&NoteId::new(note_set, *commitment))
             .map(|owned| refreshed(&self.commitments, owned))
             .transpose()
     }
@@ -366,13 +423,12 @@ impl WalletState {
         // waiting ones, and the ones the block spends an input of leave.
         let mut withdrawals = self.withdrawals.clone();
         if !block.withdrawals.is_empty() {
-            let owned = notes
-                .values()
-                .map(|owned| owned.nullifier)
-                .collect::<HashSet<_>>();
-            for inputs in &block.withdrawals {
-                if inputs.iter().any(|nullifier| owned.contains(nullifier)) {
-                    withdrawals.push_back_mut(inputs.clone());
+            for (set, inputs) in &block.withdrawals {
+                if notes
+                    .values()
+                    .any(|owned| owned.note_set == *set && inputs.contains(&owned.nullifier))
+                {
+                    withdrawals.push_back_mut((*set, inputs.clone()));
                 }
             }
         }
@@ -380,15 +436,25 @@ impl WalletState {
             let nullified = block
                 .updates
                 .iter()
-                .flat_map(|update| &update.nullifiers)
+                .flat_map(|update| {
+                    update
+                        .nullifiers
+                        .iter()
+                        .map(move |nullifier| (update.note_set, *nullifier))
+                })
                 .collect::<HashSet<_>>();
-            if withdrawals
-                .iter()
-                .any(|inputs| inputs.iter().any(|nullifier| nullified.contains(nullifier)))
-            {
+            if withdrawals.iter().any(|(set, inputs)| {
+                inputs
+                    .iter()
+                    .any(|nullifier| nullified.contains(&(*set, *nullifier)))
+            }) {
                 withdrawals = withdrawals
                     .iter()
-                    .filter(|inputs| !inputs.iter().any(|nullifier| nullified.contains(nullifier)))
+                    .filter(|(set, inputs)| {
+                        !inputs
+                            .iter()
+                            .any(|nullifier| nullified.contains(&(*set, *nullifier)))
+                    })
                     .cloned()
                     .collect();
             }
@@ -408,10 +474,10 @@ impl WalletState {
     // Whether a channel withdrawal on chain waits to spend the note of
     // `nullifier`.
     #[must_use]
-    pub fn is_withdrawing(&self, nullifier: &NoteNullifier) -> bool {
+    pub fn is_withdrawing(&self, note_set: NoteSetIndex, nullifier: &NoteNullifier) -> bool {
         self.withdrawals
             .iter()
-            .any(|inputs| inputs.contains(nullifier))
+            .any(|(set, inputs)| *set == note_set && inputs.contains(nullifier))
     }
 
     /// Funds the transaction so its excess balance is exactly the requested
@@ -462,7 +528,7 @@ impl WalletState {
         // reserved for in flight txs). Service and channel notes are in
         // other sets. The funding names the root of this state.
         let excluded = tx_builder
-            .nullifiers_consumed()
+            .nullifiers_consumed_in(NoteSetIndex::Ledger)
             .chain(excluded.iter().copied())
             .collect::<HashSet<_>>();
         let mut notes = self
@@ -634,12 +700,17 @@ impl WalletState {
         candidates.extend(
             appended
                 .iter()
-                .filter(|commitment| !self.notes.contains_key(commitment))
-                .filter_map(|commitment| known.get(commitment))
+                .filter(|commitment| {
+                    !self
+                        .notes
+                        .contains_key(&NoteId::new(note_set, **commitment))
+                })
+                .filter_map(|commitment| known.get(&NoteId::new(note_set, *commitment)))
                 .filter(|known_note| {
-                    known_note.note_set == note_set
+                    known_note.is_adoptable_in(note_set, &self.spent)
                         && holder_pks.contains(&known_note.note.public_key)
                         && !excluded.contains(&known_note.nullifier)
+                        && !self.is_withdrawing(note_set, &known_note.nullifier)
                 })
                 .map(|known_note| (known_note.note, known_note.nullifier)),
         );
@@ -682,7 +753,8 @@ impl WalletState {
             .notes_owned_in(note_set, pks)
             .into_iter()
             .filter(|owned| {
-                !excluded.contains(&owned.nullifier) && !self.is_withdrawing(&owned.nullifier)
+                !excluded.contains(&owned.nullifier)
+                    && !self.is_withdrawing(note_set, &owned.nullifier)
             })
             .collect::<Vec<_>>();
         // Consume large valued notes first to ensure we converge.
@@ -743,7 +815,7 @@ fn refreshed(
 
 fn current_paths(
     commitments: &rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
-    notes: &rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
+    notes: &rpds::HashTrieMapSync<NoteId, OwnedNote>,
 ) -> Result<NotePaths, WalletError> {
     notes
         .iter()
@@ -759,7 +831,7 @@ fn current_paths(
 // shared with the state of the parent block.
 fn apply_update(
     commitments: &mut rpds::HashTrieMapSync<NoteSetIndex, CommitmentMmr>,
-    notes: &mut rpds::HashTrieMapSync<NoteCommitment, OwnedNote>,
+    notes: &mut rpds::HashTrieMapSync<NoteId, OwnedNote>,
     spent: &mut rpds::HashTrieSetSync<SpentNullifier>,
     known: &KnownNotes,
     update: &NoteSetUpdate,
@@ -782,9 +854,11 @@ fn apply_update(
         // hash for every level of the set. The others take only the hashes of
         // a plain push: a settled path changes at the merge heights alone.
         let adopted = if let Some(known_note) = known
-            .get(commitment)
-            .filter(|known| known.is_adoptable_in(note_set, spent))
-        {
+            .get(&NoteId::new(note_set, *commitment))
+            .filter(|known| {
+                !notes.contains_key(&NoteId::new(note_set, *commitment))
+                    && known.is_adoptable_in(note_set, spent)
+            }) {
             let (next, path) = mmr
                 .push_with_settled_paths(*commitment, &mut paths)
                 .map_err(push_error)?;
@@ -805,7 +879,7 @@ fn apply_update(
             owned.path = path;
         }
         for owned in settled.into_iter().chain(adopted) {
-            notes.insert_mut(owned.note.commitment(), owned);
+            notes.insert_mut(NoteId::new(note_set, owned.note.commitment()), owned);
         }
     }
     commitments.insert_mut(note_set, mmr);
@@ -915,8 +989,7 @@ impl<KeyId> Wallet<KeyId> {
 
     pub fn add_known_notes(&mut self, notes: impl IntoIterator<Item = KnownNote>) {
         for known_note in notes {
-            self.known_notes
-                .insert_mut(known_note.note.commitment(), known_note);
+            self.known_notes.insert_mut(known_note.id(), known_note);
         }
     }
 
@@ -956,7 +1029,9 @@ impl<KeyId> Wallet<KeyId> {
         balance.pending = balance
             .notes
             .keys()
-            .filter(|commitment| !spendable.contains_key(commitment))
+            .filter(|commitment| {
+                !spendable.contains_key(&NoteId::new(NoteSetIndex::Ledger, **commitment))
+            })
             .copied()
             .collect();
         Ok(Some(balance))
@@ -1012,7 +1087,10 @@ impl<KeyId> Wallet<KeyId> {
         tx_builder
             .transfer_outputs()
             .filter(|note| pks.contains(&note.public_key))
-            .filter_map(|note| self.known_notes.get(&note.commitment()))
+            .filter_map(|note| {
+                self.known_notes
+                    .get(&NoteId::new(NoteSetIndex::Ledger, note.commitment()))
+            })
             .filter(|known| known.note_set == NoteSetIndex::Ledger)
             .map(|known| FundingNote {
                 note: known.note,
@@ -1036,6 +1114,7 @@ impl<KeyId> Wallet<KeyId> {
     pub fn spend_state(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
         let mut state = self.wallet_state_at(tip)?;
         let unspent = state.notes.clone();
+        let spent = state.spent.clone();
         let withdrawals = state.withdrawals.clone();
         let mut block = tip;
         for _ in 0..SPEND_ROOT_DEPTH {
@@ -1055,6 +1134,7 @@ impl<KeyId> Wallet<KeyId> {
             .filter(|(commitment, _)| unspent.contains_key(commitment))
             .map(|(commitment, owned)| (*commitment, owned.clone()))
             .collect();
+        state.spent = spent;
         state.withdrawals = withdrawals;
         Ok(state)
     }
@@ -1111,7 +1191,7 @@ impl<KeyId> Wallet<KeyId> {
     /// no block above the LIB appends them again.
     pub fn forget_final_known_notes(&mut self, lib: HeaderId) -> Result<(), WalletError> {
         let lib_state = self.wallet_state_at(lib)?;
-        let final_notes: Vec<NoteCommitment> = self
+        let final_notes: Vec<NoteId> = self
             .known_notes
             .iter()
             .filter(|&(commitment, known)| {
@@ -1189,7 +1269,7 @@ pub(crate) mod test_utils {
             .iter()
             .map(|&(note, note_set, nullifier)| {
                 (
-                    note.commitment(),
+                    NoteId::new(note_set, note.commitment()),
                     KnownNote {
                         note,
                         note_set,
@@ -1287,7 +1367,7 @@ mod tests {
         );
         assert!(
             state
-                .owned_note(&owned.commitment())
+                .owned_note(NoteSetIndex::Ledger, &owned.commitment())
                 .unwrap()
                 .unwrap()
                 .path
@@ -1348,6 +1428,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state.balance(pk(1)).unwrap().balance, 100);
+        assert_eq!(
+            state
+                .owned_note(NoteSetIndex::Ledger, &owned.commitment())
+                .unwrap()
+                .unwrap()
+                .path
+                .leaf_index(),
+            0
+        );
 
         let state = state
             .apply_block(
@@ -1435,6 +1524,254 @@ mod tests {
     }
 
     #[test]
+    fn identical_commitments_are_tracked_per_set_across_spends_and_forks() {
+        let note = Note::new(100, Fr::from(1u64), pk(1));
+        let filler = Note::new(5, Fr::from(2u64), pk(2));
+        let nf = nullifier(1);
+        let known = known(&[
+            (note, NoteSetIndex::Ledger, nf),
+            (note, NoteSetIndex::Sdp, nf),
+        ]);
+        let mut wallet =
+            Wallet::<u8>::from_genesis([], known, block_id(0), &[note], &[filler, note]).unwrap();
+        let genesis = wallet.wallet_state_at(block_id(0)).unwrap();
+        for set in [NoteSetIndex::Ledger, NoteSetIndex::Sdp] {
+            let owned = genesis
+                .owned_note(set, &note.commitment())
+                .unwrap()
+                .unwrap();
+            assert_eq!(owned.nullifier, nf);
+            assert!(
+                owned
+                    .path
+                    .verify::<ZkHasher>(note.commitment().0, genesis.root_of(set))
+            );
+        }
+        let spend = NoteSetUpdate {
+            note_set: NoteSetIndex::Ledger,
+            nullifiers: vec![nf],
+            commitments: vec![],
+        };
+        wallet.apply_block(&block(1, 0, 0, vec![spend])).unwrap();
+        wallet.apply_block(&block(2, 0, 0, vec![])).unwrap();
+        let spent = wallet.wallet_state_at(block_id(1)).unwrap();
+        let fork = wallet.wallet_state_at(block_id(2)).unwrap();
+        assert!(
+            spent
+                .owned_note(NoteSetIndex::Ledger, &note.commitment())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            spent
+                .owned_note(NoteSetIndex::Sdp, &note.commitment())
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(spent.aged_notes().unwrap().len(), 1);
+        assert_eq!(fork.aged_notes().unwrap().len(), 2);
+        assert!(fork.balance(pk(1)).is_some());
+        assert!(spent.balance(pk(1)).is_none());
+    }
+
+    #[test]
+    fn leadership_witness_uses_the_selected_memberships_path_and_nullifiers() {
+        use lb_core::{
+            mantle::{note_set::NoteSets, notes::derive_note_nullifier},
+            proofs::leader_proof::{LeaderWitnessError, pol_wallet_inputs},
+        };
+        use lb_key_management_system_keys::keys::{ZkKey, secured_key::SecuredKey as _};
+        let key = ZkKey::new(Fr::from(7u64));
+        let note = Note::new(100, Fr::from(1u64), key.as_public_key());
+        let filler = Note::new(5, Fr::from(2u64), pk(2));
+        let nf = derive_note_nullifier(&note.commitment(), &key.nullifier_key());
+        let known = known(&[
+            (note, NoteSetIndex::Ledger, nf),
+            (note, NoteSetIndex::Sdp, nf),
+        ]);
+        let wallet =
+            Wallet::<u8>::from_genesis([], known, block_id(0), &[note], &[filler, note]).unwrap();
+        let state = wallet.wallet_state_at(block_id(0)).unwrap();
+        let sets = NoteSets::new();
+        let ledger = sets
+            .ledger()
+            .clone()
+            .execute_adding(&[note.commitment()])
+            .unwrap();
+        let sdp = sets
+            .sdp()
+            .clone()
+            .execute_adding(&[filler.commitment(), note.commitment()])
+            .unwrap();
+        let aged = sets
+            .update_ledger(ledger)
+            .update_sdp(sdp)
+            .end_block(1, 1024)
+            .unwrap();
+        let ledger_path = &state.aged_paths[&NoteId::new(NoteSetIndex::Ledger, note.commitment())];
+        let sdp_path = &state.aged_paths[&NoteId::new(NoteSetIndex::Sdp, note.commitment())];
+        for (set, path) in [
+            (NoteSetIndex::Ledger, ledger_path),
+            (NoteSetIndex::Sdp, sdp_path),
+        ] {
+            assert!(pol_wallet_inputs(&note, set, &nf, path, &aged, &aged).is_ok());
+        }
+        assert_eq!(
+            pol_wallet_inputs(&note, NoteSetIndex::Sdp, &nf, ledger_path, &aged, &aged)
+                .unwrap_err(),
+            LeaderWitnessError::AgedPathMismatch(NoteSetIndex::Sdp)
+        );
+        let spent = aged.ledger().clone().execute_spending(&[nf]).unwrap();
+        let latest = aged
+            .clone()
+            .update_ledger(spent)
+            .end_block(2, 1024)
+            .unwrap();
+        assert_eq!(
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Ledger,
+                &nf,
+                ledger_path,
+                &aged,
+                &latest
+            )
+            .unwrap_err(),
+            LeaderWitnessError::Spent
+        );
+        assert!(pol_wallet_inputs(&note, NoteSetIndex::Sdp, &nf, sdp_path, &aged, &latest).is_ok());
+    }
+
+    #[test]
+    fn channel_memberships_keep_independent_current_and_aged_paths() {
+        use lb_core::mantle::ops::channel::ChannelId;
+        let note = Note::new(100, Fr::from(1u64), pk(1));
+        let nf = nullifier(1);
+        let a = NoteSetIndex::Channel(ChannelId::from([1; 32]));
+        let b = NoteSetIndex::Channel(ChannelId::from([2; 32]));
+        let known = known(&[(note, a, nf), (note, b, nf)]);
+        let mut wallet = Wallet::<u8>::from_genesis([], known, block_id(0), &[], &[]).unwrap();
+        wallet
+            .apply_block(&block(
+                1,
+                0,
+                0,
+                vec![
+                    appended(a, vec![note.commitment()]),
+                    appended(b, vec![commitment(8), note.commitment()]),
+                ],
+            ))
+            .unwrap();
+        wallet.apply_block(&block(2, 1, 1, vec![])).unwrap();
+        wallet.apply_block(&block(3, 2, 2, vec![])).unwrap();
+        let state = wallet.wallet_state_at(block_id(3)).unwrap();
+        for (set, index) in [(a, 0), (b, 1)] {
+            let owned = state.owned_note(set, &note.commitment()).unwrap().unwrap();
+            assert_eq!(owned.path.leaf_index(), index);
+            assert!(
+                owned
+                    .path
+                    .verify::<ZkHasher>(note.commitment().0, state.root_of(set))
+            );
+            let aged = state
+                .aged_paths
+                .get(&NoteId::new(set, note.commitment()))
+                .unwrap();
+            assert_eq!(aged.leaf_index(), index);
+            assert!(aged.verify::<ZkHasher>(note.commitment().0, state.root_of(set)));
+        }
+        wallet
+            .apply_block(&block(
+                4,
+                3,
+                2,
+                vec![NoteSetUpdate {
+                    note_set: a,
+                    nullifiers: vec![nf],
+                    commitments: vec![],
+                }],
+            ))
+            .unwrap();
+        wallet.apply_block(&block(5, 3, 2, vec![])).unwrap();
+        let spent = wallet.wallet_state_at(block_id(4)).unwrap();
+        assert!(spent.owned_note(a, &note.commitment()).unwrap().is_none());
+        assert!(spent.owned_note(b, &note.commitment()).unwrap().is_some());
+        assert_eq!(
+            wallet
+                .wallet_state_at(block_id(5))
+                .unwrap()
+                .aged_notes()
+                .unwrap()
+                .len(),
+            2
+        );
+        wallet.prune_states(block_id(4));
+        let surviving = wallet
+            .wallet_state_at(block_id(4))
+            .unwrap()
+            .owned_note(b, &note.commitment())
+            .unwrap()
+            .unwrap();
+        assert!(
+            surviving
+                .path
+                .verify::<ZkHasher>(note.commitment().0, spent.root_of(b))
+        );
+    }
+
+    #[test]
+    fn spending_another_set_does_not_cancel_a_channel_withdrawal() {
+        let note = Note::new(10, Fr::ONE, pk(1));
+        let nf = nullifier(1);
+        let known = known(&[(note, NoteSetIndex::Ledger, nf), (note, channel_set(), nf)]);
+        let state = WalletState::from_genesis(&known, &[note], &[], 0.into()).unwrap();
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    1,
+                    0,
+                    0,
+                    vec![appended(channel_set(), vec![note.commitment()])],
+                ),
+            )
+            .unwrap();
+        let state = state
+            .apply_block(
+                &known,
+                &WalletBlock {
+                    withdrawals: vec![(channel_set(), [nf].into())],
+                    ..block(2, 1, 0, vec![])
+                },
+            )
+            .unwrap();
+        assert!(state.is_withdrawing(channel_set(), &nf));
+        assert!(!state.is_withdrawing(NoteSetIndex::Ledger, &nf));
+        let state = state
+            .apply_block(
+                &known,
+                &block(
+                    3,
+                    2,
+                    0,
+                    vec![NoteSetUpdate {
+                        note_set: NoteSetIndex::Ledger,
+                        nullifiers: vec![nf],
+                        commitments: vec![],
+                    }],
+                ),
+            )
+            .unwrap();
+        assert!(state.is_withdrawing(channel_set(), &nf));
+        assert!(
+            state
+                .owned_note(channel_set(), &note.commitment())
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn epoch_change_rotates_the_aged_paths() {
         let owned = Note::new(100, Fr::from(1u64), pk(1));
         let known = known(&[(owned, NoteSetIndex::Ledger, nullifier(1))]);
@@ -1449,7 +1786,7 @@ mod tests {
                 .frontier_root()
         };
         let aged_root_is = |state: &WalletState, n: u64| {
-            state.aged_paths[&owned.commitment()]
+            state.aged_paths[&NoteId::new(NoteSetIndex::Ledger, owned.commitment())]
                 .verify::<ZkHasher>(owned.commitment().0, root_at(n))
         };
         let append = |state: &WalletState, id: u8, epoch: u32, v: u64| {
@@ -1544,7 +1881,7 @@ mod tests {
             .frontier_root();
         assert!(
             state
-                .owned_note(&channel_note.commitment())
+                .owned_note(channel_set(), &channel_note.commitment())
                 .unwrap()
                 .unwrap()
                 .path
@@ -1612,18 +1949,18 @@ mod tests {
                 &known,
                 &WalletBlock {
                     withdrawals: vec![
-                        [nullifier(1)].into(),
-                        [nullifier(3), nullifier(9)].into(),
+                        (channel_set(), [nullifier(1)].into()),
+                        (channel_set(), [nullifier(3), nullifier(9)].into()),
                         // of nobody the wallet knows
-                        [nullifier(8)].into(),
+                        (channel_set(), [nullifier(8)].into()),
                     ],
                     ..block(2, 1, 0, vec![])
                 },
             )
             .unwrap();
         assert_eq!(state.withdrawals.len(), 2);
-        assert!(state.is_withdrawing(&nullifier(1)));
-        assert!(!state.is_withdrawing(&nullifier(2)));
+        assert!(state.is_withdrawing(channel_set(), &nullifier(1)));
+        assert!(!state.is_withdrawing(channel_set(), &nullifier(2)));
         assert_eq!(spend(&state, 1), Ok(vec![free]));
         assert_eq!(
             spend(&state, 3),
@@ -1634,8 +1971,8 @@ mod tests {
         let state = state
             .apply_block(&known, &block(3, 2, 0, vec![spent(vec![nullifier(1)])]))
             .unwrap();
-        assert!(!state.is_withdrawing(&nullifier(1)));
-        assert!(state.is_withdrawing(&nullifier(3)));
+        assert!(!state.is_withdrawing(channel_set(), &nullifier(1)));
+        assert!(state.is_withdrawing(channel_set(), &nullifier(3)));
         assert_eq!(
             spend(&state, 3),
             Err(WalletError::InsufficientFunds { available: 2 })
@@ -1898,7 +2235,7 @@ mod tests {
         ];
         wallet.add_known_notes(split_notes);
         for split_note in split_notes {
-            known.insert_mut(split_note.note.commitment(), split_note);
+            known.insert_mut(split_note.id(), split_note);
         }
         // The exact note is spent on, as a deposit or a declaration spends it.
         let paid = Note::new(100, Fr::from(4u64), bob);
@@ -2024,6 +2361,97 @@ mod tests {
     }
 
     #[test]
+    fn sdp_spend_does_not_exclude_the_identical_ledger_note_from_funding() {
+        use lb_core::mantle::{
+            batch::test_utils::batch_verify,
+            notes::derive_note_nullifier,
+            ops::{ZkTransferProof, sdp::SDPWithdrawOp, zk_transfer::defer_zk_transfer},
+        };
+        use lb_key_management_system_keys::keys::{ZkKey, secured_key::SecuredKey as _};
+
+        let key = ZkKey::new(Fr::from(7u64));
+        let alice = key.as_public_key();
+        let note = Note::new(100_000, Fr::from(1u64), alice);
+        let returned = Note::new(note.value, Fr::from(2u64), alice);
+        let nf = derive_note_nullifier(&note.commitment(), &key.nullifier_key());
+        let openings = known(&[
+            (note, NoteSetIndex::Ledger, nf),
+            (note, NoteSetIndex::Sdp, nf),
+        ]);
+        let wallet = Wallet::from_genesis(
+            [(alice, 1)],
+            openings.clone(),
+            block_id(0),
+            &[note],
+            &[note],
+        )
+        .unwrap();
+        let builder = MantleTxBuilder::new()
+            .push_op_with_opening(
+                Op::SDPWithdraw(SDPWithdrawOp {
+                    service_note_nullifier: nf,
+                    outputs: [returned.commitment()].into(),
+                    excess_value: 0,
+                    ..SDPWithdrawOp::sample()
+                }),
+                ZkTransferOpening {
+                    inputs: vec![note],
+                    outputs: vec![returned],
+                },
+            )
+            .unwrap();
+        let funded = wallet
+            .fund_tx(
+                block_id(0),
+                &builder,
+                alice,
+                Fr::from(4u64),
+                [alice],
+                &context(GasPrices::new(1, 1)),
+                &HashSet::new(),
+                0,
+            )
+            .unwrap();
+        assert_eq!(funded.funding_inputs()[0].nullifier, nf);
+        let state = wallet.wallet_state_at(block_id(0)).unwrap();
+        let ops = funded.clone().build(FORK_DIGEST).unwrap();
+        let witnesses = op_witnesses(
+            &state,
+            &openings,
+            &ops,
+            &funded.openings(),
+            &WitnessContext::default(),
+            Fr::from(77u64),
+        )
+        .unwrap();
+        assert_eq!(witnesses.len(), 2);
+        for witness in witnesses {
+            let proof = ZkTransferProof::new(key.sign(&witness.witness).unwrap());
+            let deferred = match &ops[witness.op_index] {
+                Op::SDPWithdraw(withdraw) => defer_zk_transfer(
+                    &proof,
+                    [&withdraw.service_note_nullifier],
+                    &withdraw.outputs,
+                    withdraw.excess_value,
+                    witness.witness.tx_commitment_root(),
+                    Fr::from(77u64),
+                ),
+                Op::Transfer(transfer) => defer_zk_transfer(
+                    &proof,
+                    &transfer.inputs,
+                    &transfer.outputs,
+                    transfer.excess_value,
+                    witness.witness.tx_commitment_root(),
+                    Fr::from(77u64),
+                ),
+                _ => panic!("unexpected funded operation"),
+            }
+            .unwrap();
+            batch_verify(deferred).unwrap();
+        }
+    }
+
+    #[test]
     fn a_spend_survives_a_fork_of_its_tip_block() {
         let alice = pk(1);
         let note = Note::new(10000, Fr::from(1u64), alice);
@@ -2075,7 +2503,7 @@ mod tests {
         let path_at_root = wallet
             .wallet_state_at(block_id(36))
             .unwrap()
-            .owned_note(&note.commitment())
+            .owned_note(NoteSetIndex::Ledger, &note.commitment())
             .unwrap()
             .unwrap()
             .path;
@@ -2146,6 +2574,57 @@ mod tests {
                 .unwrap_err(),
             WalletError::InsufficientFunds { available: 0 }
         );
+    }
+
+    #[test]
+    fn appended_copy_respects_tip_spends_and_note_set_identity() {
+        let alice = pk(1);
+        let note = Note::new(50_000, Fr::from(1u64), alice);
+        let nf = nullifier(1);
+        let openings = known(&[
+            (note, NoteSetIndex::Ledger, nf),
+            (note, NoteSetIndex::Sdp, nf),
+        ]);
+        let mut wallet = Wallet::from_genesis(
+            [(alice, 1)],
+            openings.clone(),
+            block_id(0),
+            &[note],
+            &[note],
+        )
+        .unwrap();
+        wallet
+            .apply_block(&block(
+                1,
+                0,
+                0,
+                vec![NoteSetUpdate {
+                    note_set: NoteSetIndex::Ledger,
+                    nullifiers: vec![nf],
+                    commitments: vec![],
+                }],
+            ))
+            .unwrap();
+        let state = wallet.spend_state(block_id(1)).unwrap();
+        let spend = |note_set| NoteSetSpend {
+            note_set,
+            appended: vec![note.commitment()],
+            outputs: vec![Note::new(note.value, Fr::from(2u64), alice)],
+            excess: 0,
+            change_pk: alice,
+            change_nonce: Fr::from(3u64),
+            holder_pks: vec![alice],
+        };
+        assert_eq!(
+            state
+                .note_set_spend(spend(NoteSetIndex::Ledger), &openings, &HashSet::new())
+                .unwrap_err(),
+            WalletError::InsufficientFunds { available: 0 }
+        );
+        let (inputs, _, _) = state
+            .note_set_spend(spend(NoteSetIndex::Sdp), &openings, &HashSet::new())
+            .unwrap();
+        assert_eq!(inputs.iter().copied().collect::<Vec<_>>(), [nf]);
     }
 
     #[test]

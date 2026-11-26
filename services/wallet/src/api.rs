@@ -93,10 +93,15 @@ where
 /// The notes `after` spends that `before`, the builder it was built from, does
 /// not: the inputs a split or a funding added.
 #[must_use]
-pub fn added_nullifiers(before: &MantleTxBuilder, after: &MantleTxBuilder) -> Vec<NoteNullifier> {
-    let before = before.nullifiers_consumed().collect::<HashSet<_>>();
+pub fn added_nullifiers(
+    before: &MantleTxBuilder,
+    after: &MantleTxBuilder,
+) -> Vec<(NoteSetIndex, NoteNullifier)> {
+    let before = before
+        .note_set_nullifiers_consumed()
+        .collect::<HashSet<_>>();
     after
-        .nullifiers_consumed()
+        .note_set_nullifiers_consumed()
         .filter(|nullifier| !before.contains(nullifier))
         .collect()
 }
@@ -224,6 +229,7 @@ where
     pub async fn owned_note(
         &self,
         tip: Option<HeaderId>,
+        note_set: NoteSetIndex,
         commitment: NoteCommitment,
     ) -> Result<TipResponse<Option<OwnedNote>>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
@@ -231,6 +237,7 @@ where
         self.relay
             .send(WalletMsg::OwnedNote {
                 tip,
+                note_set,
                 commitment,
                 resp_tx,
             })
@@ -349,7 +356,7 @@ where
     /// its own request reserved, since a reservation is keyed by the note
     /// alone. If the release does not reach the wallet, the notes stay
     /// reserved until their reservation expires.
-    pub async fn release_pending_notes(&self, nullifiers: Vec<NoteNullifier>) {
+    pub async fn release_pending_notes(&self, nullifiers: Vec<(NoteSetIndex, NoteNullifier)>) {
         if let Err(err) = self
             .relay
             .send(WalletMsg::ReleasePendingNotes { nullifiers })
@@ -518,6 +525,35 @@ mod tests {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             write!(f, "TestRuntimeServiceId")
         }
+    }
+
+    #[test]
+    fn added_inputs_compare_note_sets_as_well_as_nullifiers() {
+        use lb_core::mantle::{
+            Op,
+            notes::OutputCommitments,
+            ops::{sdp::SDPWithdrawOp, transfer::TransferOp},
+        };
+        let nullifier = NoteNullifier(Fr::from(7u64));
+        let before = MantleTxBuilder::new()
+            .push_op(Op::SDPWithdraw(SDPWithdrawOp {
+                service_note_nullifier: nullifier,
+                ..SDPWithdrawOp::sample()
+            }))
+            .unwrap();
+        let after = before
+            .clone()
+            .push_op(Op::Transfer(TransferOp::new(
+                [nullifier].into(),
+                OutputCommitments::default(),
+                Fr::from(1u64),
+                0,
+            )))
+            .unwrap();
+        assert_eq!(
+            added_nullifiers(&before, &after),
+            vec![(NoteSetIndex::Ledger, nullifier)]
+        );
     }
 
     #[tokio::test]

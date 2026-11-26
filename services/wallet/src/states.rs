@@ -7,6 +7,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Value,
+        note_set::NoteSetIndex,
         notes::{InputNullifiers, NoteNullifier},
         ops::transfer::TransferOp,
         transactions::{
@@ -41,24 +42,24 @@ pub type Wallet = lb_wallet::Wallet<KeyId>;
 /// having no reservation at all.
 #[derive(Debug, Default)]
 struct PendingNotes {
-    notes: HashMap<NoteNullifier, u64>,
+    notes: HashMap<(NoteSetIndex, NoteNullifier), u64>,
 }
 
 impl PendingNotes {
-    fn reserve(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {
-        for nullifier in nullifiers {
+    fn reserve(&mut self, nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>) {
+        for (note_set, nullifier) in nullifiers {
             debug!(
                 target: wallet::SERVICE,
                 ?nullifier,
                 "Reserved pending note"
             );
-            self.notes.insert(nullifier, 0);
+            self.notes.insert((note_set, nullifier), 0);
         }
     }
 
-    fn release(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {
-        for nullifier in nullifiers {
-            if self.notes.remove(&nullifier).is_some() {
+    fn release(&mut self, nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>) {
+        for (note_set, nullifier) in nullifiers {
+            if self.notes.remove(&(note_set, nullifier)).is_some() {
                 debug!(
                     target: wallet::SERVICE,
                     ?nullifier,
@@ -68,8 +69,11 @@ impl PendingNotes {
         }
     }
 
-    fn nullifiers(&self) -> HashSet<NoteNullifier> {
-        self.notes.keys().copied().collect()
+    fn nullifiers(&self, note_set: NoteSetIndex) -> HashSet<NoteNullifier> {
+        self.notes
+            .keys()
+            .filter_map(|(set, nullifier)| (*set == note_set).then_some(*nullifier))
+            .collect()
     }
 
     /// Evict reservations whose LIB-progress age reached the configured limit.
@@ -109,8 +113,24 @@ impl PendingNotes {
     }
 }
 
+// Prevent older commitment-keyed checkpoints from being read as set-aware
+// state. Their memberships may already have been conflated.
+const WALLET_SNAPSHOT_FORMAT: u64 = 0x5345_5457_414c_4c31;
+
+fn snapshot_format<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let format = u64::deserialize(deserializer)?;
+    if format != WALLET_SNAPSHOT_FORMAT {
+        return Err(serde::de::Error::custom(
+            "unsupported wallet checkpoint format",
+        ));
+    }
+    Ok(format)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryState {
+    #[serde(deserialize_with = "snapshot_format")]
+    format: u64,
     /// [`WalletState`] at the last known LIB.
     /// `None` until the first recovery state update.
     lib_wallet_state: Option<(HeaderId, WalletState)>,
@@ -128,6 +148,7 @@ impl overwatch::services::state::ServiceState for RecoveryState {
 
     fn from_settings(_settings: &Self::Settings) -> Result<Self, Self::Error> {
         Ok(Self {
+            format: WALLET_SNAPSHOT_FORMAT,
             lib_wallet_state: None,
         })
     }
@@ -323,11 +344,11 @@ impl<'u> ServiceState<'u> {
             change_nonce,
             funding_pks,
             context,
-            &self.pending_notes.nullifiers(),
+            &self.pending_notes.nullifiers(NoteSetIndex::Ledger),
             priority_fee,
         );
         if funded.is_err() {
-            self.release_pending_notes(tx_builder.nullifiers_consumed());
+            self.release_pending_notes(tx_builder.note_set_nullifiers_consumed());
         }
         funded
     }
@@ -350,8 +371,8 @@ impl<'u> ServiceState<'u> {
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<(TransferOp, ZkTransferOpening), WalletError> {
         let excluded = tx_builder
-            .nullifiers_consumed()
-            .chain(self.pending_notes.nullifiers())
+            .nullifiers_consumed_in(NoteSetIndex::Ledger)
+            .chain(self.pending_notes.nullifiers(NoteSetIndex::Ledger))
             .collect::<HashSet<_>>();
         self.wallet.spend_state(tip)?.exact_note_split(
             value,
@@ -369,22 +390,31 @@ impl<'u> ServiceState<'u> {
         tip: HeaderId,
         spend: NoteSetSpend,
     ) -> Result<(InputNullifiers, ZkTransferOpening, Fr), WalletError> {
+        let note_set = spend.note_set;
         self.wallet.spend_state(tip)?.note_set_spend(
             spend,
             self.wallet.known_notes(),
-            &self.pending_notes.nullifiers(),
+            &self.pending_notes.nullifiers(note_set),
         )
     }
 
-    pub fn is_pending_note(&self, nullifier: &NoteNullifier) -> bool {
-        self.pending_notes.notes.contains_key(nullifier)
+    pub fn is_pending_note(&self, note_set: NoteSetIndex, nullifier: &NoteNullifier) -> bool {
+        self.pending_notes
+            .notes
+            .contains_key(&(note_set, *nullifier))
     }
 
-    pub fn reserve_pending_notes(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {
+    pub fn reserve_pending_notes(
+        &mut self,
+        nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>,
+    ) {
         self.pending_notes.reserve(nullifiers);
     }
 
-    pub fn release_pending_notes(&mut self, nullifiers: impl IntoIterator<Item = NoteNullifier>) {
+    pub fn release_pending_notes(
+        &mut self,
+        nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>,
+    ) {
         self.pending_notes.release(nullifiers);
     }
 
@@ -395,6 +425,7 @@ impl<'u> ServiceState<'u> {
             .expect("WalletState at LIB must exist");
 
         self.updater.update(Some(RecoveryState {
+            format: WALLET_SNAPSHOT_FORMAT,
             lib_wallet_state: Some((self.lib, lib_wallet_state)),
         }));
     }
@@ -421,14 +452,34 @@ mod tests {
     const EXPIRY_BLOCKS: u64 = 4;
 
     #[test]
+    fn older_checkpoint_format_is_rejected() {
+        use lb_binary_codec::bincode::{DeserializeOp as _, SerializeOp as _};
+
+        #[derive(Serialize)]
+        struct PreviousCheckpoint {
+            lib_wallet_state: Option<(HeaderId, WalletState)>,
+        }
+        let old = PreviousCheckpoint {
+            lib_wallet_state: None,
+        }
+        .to_bytes()
+        .unwrap();
+        assert!(RecoveryState::from_bytes(&old).is_err());
+    }
+
+    #[test]
     fn pending_note_does_not_expire_without_lib_progress() {
         let nullifier = NoteNullifier(Fr::ONE);
         let mut pending_notes = PendingNotes::default();
 
-        pending_notes.reserve([nullifier]);
+        pending_notes.reserve([(NoteSetIndex::Ledger, nullifier)]);
         pending_notes.evict_expired(0, EXPIRY_BLOCKS);
 
-        assert!(pending_notes.nullifiers().contains(&nullifier));
+        assert!(
+            pending_notes
+                .nullifiers(NoteSetIndex::Ledger)
+                .contains(&nullifier)
+        );
     }
 
     #[test]
@@ -436,12 +487,20 @@ mod tests {
         let nullifier = NoteNullifier(Fr::ONE);
         let mut pending_notes = PendingNotes::default();
 
-        pending_notes.reserve([nullifier]);
+        pending_notes.reserve([(NoteSetIndex::Ledger, nullifier)]);
         pending_notes.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
-        assert!(pending_notes.nullifiers().contains(&nullifier));
+        assert!(
+            pending_notes
+                .nullifiers(NoteSetIndex::Ledger)
+                .contains(&nullifier)
+        );
 
         pending_notes.evict_expired(1, EXPIRY_BLOCKS);
-        assert!(!pending_notes.nullifiers().contains(&nullifier));
+        assert!(
+            !pending_notes
+                .nullifiers(NoteSetIndex::Ledger)
+                .contains(&nullifier)
+        );
     }
 
     #[test]
@@ -449,10 +508,107 @@ mod tests {
         let nullifier = NoteNullifier(Fr::ONE);
         let mut pending_notes = PendingNotes::default();
 
-        pending_notes.reserve([nullifier]);
-        pending_notes.release([nullifier]);
+        pending_notes.reserve([(NoteSetIndex::Ledger, nullifier)]);
+        pending_notes.release([(NoteSetIndex::Ledger, nullifier)]);
 
-        assert!(pending_notes.nullifiers().is_empty());
+        assert!(pending_notes.nullifiers(NoteSetIndex::Ledger).is_empty());
+    }
+
+    #[test]
+    fn reservations_are_independent_across_note_sets() {
+        let mut pending = PendingNotes::default();
+        let nullifier = NoteNullifier(Fr::ONE);
+        pending.reserve([
+            (NoteSetIndex::Ledger, nullifier),
+            (NoteSetIndex::Sdp, nullifier),
+        ]);
+        pending.release([(NoteSetIndex::Sdp, nullifier)]);
+        assert!(
+            pending
+                .nullifiers(NoteSetIndex::Ledger)
+                .contains(&nullifier)
+        );
+        assert!(!pending.nullifiers(NoteSetIndex::Sdp).contains(&nullifier));
+        pending.reserve([(NoteSetIndex::Sdp, nullifier)]);
+        pending.release([(NoteSetIndex::Ledger, nullifier)]);
+        assert!(pending.nullifiers(NoteSetIndex::Sdp).contains(&nullifier));
+    }
+
+    #[test]
+    fn sdp_reservation_does_not_block_ledger_fee_funding() {
+        use std::sync::Arc;
+
+        use lb_core::mantle::{
+            Op,
+            ops::sdp::SDPWithdrawOp,
+            transactions::{GasPrices, tx_list::ops::OpsGasContext},
+        };
+        use lb_key_management_system_service::keys::ZkKey;
+        use lb_services_utils::overwatch::RecoveryData;
+
+        let key = ZkKey::new(Fr::from(7u64));
+        let ledger = crate::tests::known_note(&key, 100_000, 1);
+        let sdp = KnownNote {
+            note_set: NoteSetIndex::Sdp,
+            ..ledger
+        };
+        let owner = key.to_public_key();
+        let settings = WalletServiceSettings {
+            known_keys: HashMap::from([("owner".into(), owner)]),
+            voucher_master_key_id: "voucher-master".into(),
+            recovery_data: RecoveryData::default(),
+            pending_note_expiry_blocks: 10,
+            fee_margin_percent: DEFAULT_FEE_MARGIN_PERCENT,
+            era_schedule: era_schedule(),
+        };
+        let genesis = HeaderId::from([0; 32]);
+        let (sender, _receiver) = tokio::sync::watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = ServiceState::from_genesis(
+            [(ledger.id(), ledger), (sdp.id(), sdp)]
+                .into_iter()
+                .collect(),
+            0,
+            &settings,
+            genesis,
+            &[ledger.note],
+            &[sdp.note],
+            &updater,
+        )
+        .unwrap();
+        let returned = Note::new(ledger.note.value, Fr::from(2u64), owner);
+        let builder = MantleTxBuilder::new()
+            .push_op_with_opening(
+                Op::SDPWithdraw(SDPWithdrawOp {
+                    service_note_nullifier: ledger.nullifier,
+                    outputs: [returned.commitment()].into(),
+                    excess_value: 0,
+                    ..SDPWithdrawOp::sample()
+                }),
+                ZkTransferOpening {
+                    inputs: vec![ledger.note],
+                    outputs: vec![returned],
+                },
+            )
+            .unwrap();
+        let context = OpsContext {
+            gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1), GAS_PROFILE),
+        };
+
+        state.reserve_pending_notes([(NoteSetIndex::Sdp, ledger.nullifier)]);
+        let funded = state
+            .fund_tx(
+                genesis,
+                &builder,
+                owner,
+                Fr::from(4u64),
+                [owner],
+                &context,
+                0,
+            )
+            .unwrap();
+        assert_eq!(funded.funding_inputs()[0].nullifier, ledger.nullifier);
+        assert!(state.is_pending_note(NoteSetIndex::Sdp, &ledger.nullifier));
     }
 
     #[test]
@@ -461,6 +617,7 @@ mod tests {
 
         use lb_core::mantle::{
             Op,
+            ops::sdp::SDPWithdrawOp,
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         };
         use lb_services_utils::overwatch::RecoveryData;
@@ -490,7 +647,10 @@ mod tests {
 
         let split_input = NoteNullifier(Fr::ONE);
         let in_flight = NoteNullifier(Fr::from(2u64));
-        state.reserve_pending_notes([split_input, in_flight]);
+        state.reserve_pending_notes([
+            (NoteSetIndex::Ledger, split_input),
+            (NoteSetIndex::Ledger, in_flight),
+        ]);
         let tx_builder = MantleTxBuilder::new()
             .push_op(Op::Transfer(TransferOp::new(
                 [split_input].into(),
@@ -516,7 +676,37 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error, WalletError::InsufficientFunds { available: 0 });
-        assert_eq!(state.pending_notes.nullifiers(), HashSet::from([in_flight]));
+        assert_eq!(
+            state.pending_notes.nullifiers(NoteSetIndex::Ledger),
+            HashSet::from([in_flight])
+        );
+
+        let sdp = MantleTxBuilder::new()
+            .push_op(Op::SDPWithdraw(SDPWithdrawOp {
+                service_note_nullifier: in_flight,
+                ..SDPWithdrawOp::sample()
+            }))
+            .unwrap();
+        state.reserve_pending_notes([(NoteSetIndex::Sdp, in_flight)]);
+        assert!(
+            state
+                .fund_tx(
+                    genesis,
+                    &sdp,
+                    funding_pk,
+                    Fr::ONE,
+                    [funding_pk],
+                    &context,
+                    0
+                )
+                .is_err()
+        );
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &in_flight));
+        assert!(!state.is_pending_note(NoteSetIndex::Sdp, &in_flight));
+        assert_eq!(
+            state.pending_notes.nullifiers(NoteSetIndex::Sdp),
+            HashSet::new()
+        );
     }
 
     /// Regression test for the wallet-service crash seen the first time a

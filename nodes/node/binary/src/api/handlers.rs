@@ -29,6 +29,7 @@ use lb_core::{
         Note, Op, TxHash,
         channel::{ChannelState, channel_note_set},
         ledger::verification_mode::StandardMode,
+        note_set::NoteSetIndex,
         notes::NoteNullifier,
         ops::channel::{ChannelId, deposit::DepositOp},
         traits::Hashable,
@@ -122,7 +123,7 @@ async fn check_funded_tx_fee<WalletService, RuntimeServiceId>(
     wallet: &WalletApi<WalletService, RuntimeServiceId>,
     funded: &MantleTxBuilder,
     max_tx_fee: lb_core::mantle::gas::GasCost,
-    reserved: Vec<NoteNullifier>,
+    reserved: Vec<(NoteSetIndex, NoteNullifier)>,
 ) -> Result<(), DynError>
 where
     WalletService: WalletServiceData,
@@ -1237,7 +1238,7 @@ where
         let (holder_note, tx_builder) = match deposit {
             Ok(deposit) => deposit,
             Err(error) => {
-                let split_notes = split_builder.nullifiers_consumed().collect();
+                let split_notes = split_builder.note_set_nullifiers_consumed().collect();
                 wallet.release_pending_notes(split_notes).await;
                 return Err(error);
             }
@@ -1261,7 +1262,7 @@ where
 
         let reserved = added_nullifiers(&tx_builder, &funded_tx_builder)
             .into_iter()
-            .chain(split_builder.nullifiers_consumed())
+            .chain(split_builder.note_set_nullifiers_consumed())
             .collect();
         check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
 

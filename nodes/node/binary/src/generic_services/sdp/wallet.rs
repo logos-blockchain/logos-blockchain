@@ -45,7 +45,7 @@ where
         &self,
         funded: &MantleTxBuilder,
         config: &SdpWalletConfig,
-        reserved: Vec<NoteNullifier>,
+        reserved: Vec<(NoteSetIndex, NoteNullifier)>,
     ) -> Result<(), SdpWalletError> {
         let checked = match funded.tx_fee() {
             Ok(tx_fee) if tx_fee > config.max_tx_fee => Err(SdpWalletError::TxFeeExceedsMaxFee {
@@ -172,7 +172,7 @@ where
     ) -> Result<SignedOps<Preverified, StandardMode>, SdpWalletError> {
         let service_note = self
             .api
-            .owned_note(None, declaration.service_note)
+            .owned_note(None, NoteSetIndex::Sdp, declaration.service_note)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response
@@ -330,7 +330,7 @@ mod tests {
         ));
         assert!(matches!(
             msg_receiver.try_recv(),
-            Ok(WalletMsg::ReleasePendingNotes { nullifiers }) if nullifiers == [nullifier]
+            Ok(WalletMsg::ReleasePendingNotes { nullifiers }) if nullifiers == [(NoteSetIndex::Ledger, nullifier)]
         ));
     }
 }

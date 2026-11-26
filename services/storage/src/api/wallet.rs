@@ -5,9 +5,8 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use lb_binary_codec::bincode::SerializeOp as _;
-use lb_core::mantle::notes::NoteCommitment;
 use lb_groth16::fr_to_bytes;
-use lb_wallet::{KnownNote, KnownNotes};
+use lb_wallet::{KnownNote, KnownNotes, NoteId};
 use overwatch::DynError;
 
 use super::StorageApi;
@@ -15,11 +14,12 @@ use super::StorageApi;
 const OPENINGS: &[u8] = b"wallet/openings/";
 const REWARD_KEY_COUNT: &[u8] = b"wallet/reward_key_count";
 
-fn opening_key(commitment: &NoteCommitment) -> Bytes {
+fn opening_key(id: NoteId) -> Result<Bytes, DynError> {
     let mut key = Vec::with_capacity(OPENINGS.len() + 32);
     key.extend_from_slice(OPENINGS);
-    key.extend_from_slice(&fr_to_bytes(&commitment.0));
-    key.into()
+    key.extend_from_slice(&id.note_set.to_bytes()?);
+    key.extend_from_slice(&fr_to_bytes(&id.commitment.0));
+    Ok(key.into())
 }
 
 impl<Tx> StorageApi<Tx> {
@@ -30,7 +30,7 @@ impl<Tx> StorageApi<Tx> {
         }
         let items = notes
             .iter()
-            .map(|note| Ok((opening_key(&note.note.commitment()), note.to_bytes()?)))
+            .map(|note| Ok((opening_key(note.id())?, note.to_bytes()?)))
             .collect::<Result<HashMap<_, _>, DynError>>()?;
         self.bulk_store_confirmed(items).await
     }
@@ -39,10 +39,7 @@ impl<Tx> StorageApi<Tx> {
         let notes = self
             .load_prefix::<KnownNote>(Bytes::from_static(OPENINGS))
             .await?;
-        Ok(notes
-            .into_iter()
-            .map(|note| (note.note.commitment(), note))
-            .collect())
+        Ok(notes.into_iter().map(|note| (note.id(), note)).collect())
     }
 
     pub async fn store_wallet_reward_key_count(&self, count: u64) -> Result<(), DynError> {
@@ -84,11 +81,34 @@ mod tests {
         worker.await.unwrap();
 
         let (restored, worker) = connect(RocksBackend::new(settings).unwrap());
-        let expected: KnownNotes = notes
-            .into_iter()
-            .map(|note| (note.note.commitment(), note))
-            .collect();
+        let expected: KnownNotes = notes.into_iter().map(|note| (note.id(), note)).collect();
         assert_eq!(restored.load_wallet_known_notes().await.unwrap(), expected);
+        drop(restored);
+        worker.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn identical_commitments_in_different_sets_survive_reopen() {
+        let directory = TempDir::new().unwrap();
+        let settings = settings(&directory);
+        let (storage, worker) = connect(RocksBackend::new(settings.clone()).unwrap());
+        let ledger = known_note(1);
+        let sdp = KnownNote {
+            note_set: NoteSetIndex::Sdp,
+            ..ledger
+        };
+        storage
+            .store_wallet_known_notes(&[ledger, sdp])
+            .await
+            .unwrap();
+        drop(storage);
+        worker.await.unwrap();
+
+        let (restored, worker) = connect(RocksBackend::new(settings).unwrap());
+        assert_eq!(
+            restored.load_wallet_known_notes().await.unwrap(),
+            KnownNotes::from_iter([(ledger.id(), ledger), (sdp.id(), sdp)])
+        );
         drop(restored);
         worker.await.unwrap();
     }
@@ -120,7 +140,7 @@ mod tests {
         storage
             .bulk_store_confirmed(HashMap::from([
                 (
-                    opening_key(&note.note.commitment()),
+                    opening_key(note.id()).unwrap(),
                     Bytes::from_static(b"invalid opening"),
                 ),
                 (
