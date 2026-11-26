@@ -4,9 +4,8 @@ pub(crate) mod test_utils;
 
 use std::collections::HashMap;
 
-pub use lb_core::sdp::SdpEra;
-
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
+pub use lb_core::sdp::SdpEra;
 use lb_core::{
     block::BlockNumber,
     events::{HeaderEvent, TxEvent},
