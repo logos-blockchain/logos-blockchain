@@ -1,4 +1,4 @@
-use std::{fmt::Display, marker::PhantomData};
+use std::{fmt::Display, marker::PhantomData, time::Duration};
 
 use bytes::Bytes;
 use lb_binary_codec::bincode::DeserializeOp as _;
@@ -11,10 +11,14 @@ use lb_services_utils::overwatch::recovery::{
 use overwatch::{
     DynError,
     overwatch::OverwatchHandle,
-    services::{AsServiceId, state::ServiceState},
+    services::{
+        AsServiceId,
+        state::ServiceState,
+        status::{ServiceStatus, StatusWatcher, WaitPolicy},
+    },
 };
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::OnceCell;
+use tokio::{sync::OnceCell, time::timeout};
 
 use crate::{
     StorageService,
@@ -24,6 +28,9 @@ use crate::{
 };
 
 const RECOVERY_PREFIX: &[u8] = b"recovery/";
+
+// Overwatch may already be waiting for this save when it receives the lookup.
+const OVERWATCH_ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[must_use]
 pub fn recovery_key(suffix: &[u8]) -> Bytes {
@@ -47,7 +54,7 @@ fn recovery_data_from_backend(backend: &RocksBackend) -> Result<RecoveryData, Dy
 
 pub struct StorageRecoveryBackend<State, Settings, RuntimeServiceId> {
     overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-    storage: OnceCell<StorageApi>,
+    storage: OnceCell<(StorageApi, StatusWatcher)>,
     state: PhantomData<fn() -> State>,
     settings: PhantomData<fn() -> Settings>,
 }
@@ -109,27 +116,58 @@ where
     }
 
     async fn save_state(&mut self, state: Self::State) -> RecoveryResult<()> {
-        let storage = self
+        let (storage, status) = self
             .storage
             .get_or_try_init(async || {
-                StorageApi::from_overwatch_handle(&self.overwatch_handle)
-                    .await
-                    .map_err(|error| RecoveryError::Backend(error.to_string()))
+                timeout(OVERWATCH_ANSWER_TIMEOUT, async {
+                    tokio::try_join!(
+                        StorageApi::from_overwatch_handle(&self.overwatch_handle),
+                        self.overwatch_handle.status_watcher::<StorageService<RuntimeServiceId>>(),
+                    )
+                })
+                .await
+                .map_err(|_| {
+                    RecoveryError::Backend(format!(
+                        "Overwatch did not supply the storage relay and status within {OVERWATCH_ANSWER_TIMEOUT:?}"
+                    ))
+                })?
+                .map_err(|error| RecoveryError::Backend(error.to_string()))
             })
             .await?;
 
-        storage
-            .store(recovery_key(Settings::RECOVERY_KEY_SUFFIX), state)
-            .await
-            .map_err(|error| RecoveryError::Backend(error.to_string()))
+        let mut status = status.clone();
+
+        // When capacity is available, storage can process the queued save after
+        // it restarts. A stopped service cannot drain a full relay.
+        tokio::select! {
+            biased;
+            result = storage.store(recovery_key(Settings::RECOVERY_KEY_SUFFIX), state) => {
+                result.map_err(|error| RecoveryError::Backend(error.to_string()))
+            }
+            stopped = status.wait_with_policy(ServiceStatus::Stopped, None, WaitPolicy::FailFast) => {
+                match stopped {
+                    Ok(_) => Err(RecoveryError::NotRunning("storage stopped during the recovery save".into())),
+                    Err(error) => Err(RecoveryError::Backend(error.to_string())),
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
+
+    use futures::poll;
+    use overwatch::services::relay::OutboundRelay;
     use serde::{Deserialize, Serialize};
+    use tokio::{
+        runtime::Handle,
+        sync::{mpsc, watch},
+    };
 
     use super::*;
+    use crate::StorageMsg;
 
     type TestBackend = StorageRecoveryBackend<TestState, TestSettings, TestRuntimeServiceId>;
 
@@ -175,6 +213,138 @@ mod tests {
         fn recovery_data(&self) -> &RecoveryData {
             &self.recovery_data
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn recovery_save_times_out_when_overwatch_does_not_answer() {
+        let (commands, requests) = mpsc::channel(2);
+        let overwatch = OverwatchHandle::new(Handle::current(), commands);
+        let settings = TestSettings {
+            recovery_data: RecoveryData::default(),
+        };
+        let mut backend = TestBackend::from_settings(&settings, overwatch);
+        let mut save = pin!(backend.save_state(TestState {
+            value: "snapshot".into(),
+        }));
+
+        assert!(poll!(save.as_mut()).is_pending());
+
+        // Keep the queued lookup requests alive without answering them.
+        let result = timeout(OVERWATCH_ANSWER_TIMEOUT + Duration::from_secs(2), save)
+            .await
+            .expect("the save should give up on the unanswered Overwatch requests");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            matches!(result, Err(RecoveryError::Backend(message)) if message.contains("Overwatch did not supply"))
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_save_cancels_when_storage_stops_with_a_full_relay() {
+        let (commands, _requests) = mpsc::channel(1);
+        let overwatch = OverwatchHandle::new(Handle::current(), commands);
+        let settings = TestSettings {
+            recovery_data: RecoveryData::default(),
+        };
+        let mut backend = TestBackend::from_settings(&settings, overwatch);
+
+        let (sender, mut receiver) = mpsc::channel(1);
+        sender
+            .try_send(StorageMsg::Store {
+                key: Bytes::from_static(b"filler"),
+                value: Bytes::new(),
+            })
+            .unwrap();
+
+        let (status, watcher) = watch::channel(ServiceStatus::Ready);
+        let storage = StorageApi::new(OutboundRelay::new(sender));
+        assert!(
+            backend
+                .storage
+                .set((storage, StatusWatcher::new(watcher)))
+                .is_ok()
+        );
+
+        let result = {
+            let mut save = pin!(backend.save_state(TestState {
+                value: "snapshot".into(),
+            }));
+            assert!(poll!(save.as_mut()).is_pending());
+
+            status.send(ServiceStatus::Stopped).unwrap();
+            timeout(Duration::from_secs(1), save)
+                .await
+                .expect("shutdown should release a save blocked on the full storage relay")
+        };
+        assert!(matches!(result, Err(RecoveryError::NotRunning(_))));
+
+        status.send(ServiceStatus::Failed).unwrap();
+        let result = timeout(
+            Duration::from_secs(1),
+            backend.save_state(TestState {
+                value: "snapshot after failure".into(),
+            }),
+        )
+        .await
+        .expect("the save should return an error when storage has failed");
+        assert!(
+            matches!(result, Err(RecoveryError::Backend(message)) if message.contains("service failed"))
+        );
+
+        assert!(
+            matches!(receiver.try_recv().unwrap(), StorageMsg::Store { key, .. } if key == b"filler"[..])
+        );
+
+        status.send(ServiceStatus::Ready).unwrap();
+        timeout(
+            Duration::from_secs(1),
+            backend.save_state(TestState {
+                value: "next snapshot".into(),
+            }),
+        )
+        .await
+        .expect("the next save should enqueue after storage restarts")
+        .unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            StorageMsg::Store { key, .. } if key == recovery_key(TestSettings::RECOVERY_KEY_SUFFIX)
+        ));
+    }
+
+    #[tokio::test]
+    async fn recovery_save_queues_during_a_storage_restart_when_there_is_room() {
+        let (commands, _requests) = mpsc::channel(1);
+        let overwatch = OverwatchHandle::new(Handle::current(), commands);
+        let settings = TestSettings {
+            recovery_data: RecoveryData::default(),
+        };
+        let mut backend = TestBackend::from_settings(&settings, overwatch);
+
+        let (sender, mut receiver) = mpsc::channel(1);
+        let (status, watcher) = watch::channel(ServiceStatus::Stopped);
+        let storage = StorageApi::new(OutboundRelay::new(sender));
+        assert!(
+            backend
+                .storage
+                .set((storage, StatusWatcher::new(watcher)))
+                .is_ok()
+        );
+
+        let snapshot = TestState {
+            value: "snapshot while stopped".into(),
+        };
+        timeout(Duration::from_secs(1), backend.save_state(snapshot.clone()))
+            .await
+            .expect("the save should have room to enqueue")
+            .unwrap();
+
+        status.send(ServiceStatus::Ready).unwrap();
+        let StorageMsg::Store { key, value } = receiver.try_recv().unwrap() else {
+            panic!("expected the queued snapshot");
+        };
+
+        assert_eq!(key, recovery_key(TestSettings::RECOVERY_KEY_SUFFIX));
+        assert_eq!(TestState::from_bytes(&value).unwrap(), snapshot);
     }
 
     #[test]
