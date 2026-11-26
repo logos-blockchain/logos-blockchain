@@ -75,6 +75,9 @@ jobs:
           # A manual run warms the cache for the next one on the same branch, so changes can be tried before merging.
           save-on-workflow-dispatch: true
 
+      - name: Annotate compiler messages
+        run: echo "::add-matcher::.github/matchers/rust.json"
+
       # mbx doesn't cache while another rustc wrapper is set, so this clears the one the runner image may set for
       # sccache.
       - name: Run Clippy on every feature combination
@@ -138,6 +141,9 @@ jobs:
           isolate-objects-cache: true
           cache-generation: release-binaries-v1
           save-on-workflow-dispatch: true
+
+      - name: Annotate compiler messages
+        run: echo "::add-matcher::.github/matchers/rust.json"
 
       - name: Build every binary with the release profile
         run: |
