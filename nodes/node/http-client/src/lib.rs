@@ -494,10 +494,21 @@ impl CommonHttpClient {
     }
 
     /// Get what a transaction must fit in the era of the node's current slot.
-    pub async fn limits(&self, base_url: Url) -> Result<LimitsResponseBody, Error> {
-        let request_url = base_url
+    /// What a transaction must fit in the era of `slot`, or of the node's
+    /// current slot.
+    pub async fn limits(
+        &self,
+        base_url: Url,
+        slot: Option<Slot>,
+    ) -> Result<LimitsResponseBody, Error> {
+        let mut request_url = base_url
             .join(MANTLE_LIMITS.trim_start_matches('/'))
             .map_err(Error::Url)?;
+        if let Some(slot) = slot {
+            request_url
+                .query_pairs_mut()
+                .append_pair("slot", &u64::from(slot).to_string());
+        }
         self.get::<(), LimitsResponseBody>(request_url, None).await
     }
 

@@ -12,7 +12,7 @@ use std::{
 
 use cucumber::{given, then, when};
 use lb_core::header::HeaderId;
-use lb_node::config::DeploymentSettings;
+use lb_node::config::{DeploymentSettings, deployment::era::ruleset::EraRuleset};
 use lb_testing_framework::{NodeHttpClient, configs::deployment::EraBoundarySchedule};
 use tokio::time::{Instant, sleep, timeout_at};
 use tracing::info;
@@ -654,6 +654,98 @@ async fn verify_target_era_fork_digest(world: &mut CucumberWorld, seconds: u64) 
         }
         sleep(Duration::from_secs(1)).await;
     }
+}
+
+/// The limits of the target era, from the deployment: what the limits API
+/// must answer for its slots.
+fn target_era_limits(
+    deployment: &DeploymentSettings,
+    schedule: EraBoundarySchedule,
+) -> Result<(u16, u32, u32), StepError> {
+    let target_index = usize::try_from(schedule.target_era())
+        .map_err(|error| failure(format!("Invalid target era: {error}")))?;
+    let target = deployment
+        .era_schedule()
+        .iter()
+        .nth(target_index)
+        .ok_or_else(|| failure("Deployment is missing the target era"))?;
+    let EraRuleset::V1(parameters) = &target.parameters.ruleset;
+    let cryptarchia = &parameters.cryptarchia;
+    Ok((
+        cryptarchia.max_transactions.get(),
+        cryptarchia.max_transactions_size,
+        cryptarchia.max_op_data_size(),
+    ))
+}
+
+/// Every node answers the limits of the target era: for its first slot when
+/// asked by slot, and as the limits of the current slot once in the era.
+#[then(expr = "all nodes report the target-era limits")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step arguments require &mut World"
+)]
+async fn verify_target_era_limits(world: &mut CucumberWorld) -> StepResult {
+    let mut names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    if names.is_empty() {
+        return Err(failure("No running nodes"));
+    }
+    let schedule = world
+        .startup
+        .era_boundary_schedule
+        .ok_or_else(|| failure("No era-boundary test schedule configured"))?;
+    for name in &names {
+        let deployment = deployment_for_node(world, name)?;
+        let proof = era_proof(&deployment, schedule)?;
+        let expected = target_era_limits(&deployment, schedule)?;
+        let client = world.resolve_node_http_client(name)?;
+        let by_slot = client
+            .limits(Some(proof.boundary_slot.into()))
+            .await
+            .map_err(|error| failure(format!("Node `{name}` limits query failed: {error}")))?;
+        let current = client
+            .limits(None)
+            .await
+            .map_err(|error| failure(format!("Node `{name}` limits query failed: {error}")))?;
+        for (which, limits) in [
+            ("the boundary slot", &by_slot),
+            ("the current slot", &current),
+        ] {
+            let observed = (
+                limits.max_transactions,
+                limits.max_transactions_size,
+                limits.max_op_data_size,
+            );
+            if observed != expected {
+                return Err(failure(format!(
+                    "Node `{name}` reports limits {observed:?} for {which}, expected the target \
+                     era's {expected:?}"
+                )));
+            }
+        }
+        if by_slot.slot != proof.boundary_slot || current.slot < proof.boundary_slot {
+            return Err(failure(format!(
+                "Node `{name}` reports limits for slots {} and {}, expected the boundary slot {} \
+                 and one at or after it",
+                by_slot.slot, current.slot, proof.boundary_slot
+            )));
+        }
+        record(
+            world,
+            "target_era_limits_observed",
+            &serde_json::json!({
+                "node": name,
+                "target_era": proof.target_era,
+                "boundary_slot": proof.boundary_slot,
+                "max_transactions": by_slot.max_transactions,
+                "max_transactions_size": by_slot.max_transactions_size,
+                "max_op_data_size": by_slot.max_op_data_size,
+                "source": "node_mantle_limits_http_api",
+            }),
+        )?;
+    }
+    Ok(())
 }
 
 #[when(expr = "I prepare node {string} to join with fresh state from node {string}")]
