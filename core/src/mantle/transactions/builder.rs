@@ -323,6 +323,7 @@ impl MantleTxBuilder {
 
     /// Returns all nullifiers spent by this transaction, plus the funding
     /// inputs that will be appended as a transfer during build.
+    #[cfg(test)]
     pub fn nullifiers_consumed(&self) -> impl Iterator<Item = NoteNullifier> {
         self.ops
             .iter()
