@@ -145,6 +145,7 @@ pub fn run_node_from_config(
 
     let eras = config.deployment.era_schedule();
 
+    report_unused_state(&config.user);
     let storage_config = StorageConfig {
         user: config.user.storage,
     }
@@ -250,6 +251,25 @@ pub fn run_node_from_config(
     )
     .map_err(|e| eyre!("Error encountered: {}", e))?;
     Ok(app)
+}
+
+/// Tells of the DBs earlier releases left under the state folder. This build
+/// does not read them: it syncs again into the DB of its own state version.
+/// They are left in place, for a node going back to the release it was on.
+fn report_unused_state(config: &UserConfig) {
+    for earlier_db in config
+        .storage
+        .backend
+        .earlier_db_paths(&config.state.base_folder)
+    {
+        if earlier_db.exists() {
+            eprintln!(
+                "The state at {} was written by an earlier release and is not used; it can be \
+                 removed.",
+                earlier_db.display()
+            );
+        }
+    }
 }
 
 pub async fn get_services_to_start(

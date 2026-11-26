@@ -1,12 +1,27 @@
 use std::path::{Path, PathBuf};
 
+use lb_node::config::storage::serde::RocksDbSettings;
 use testing_framework_core::scenario::{DynError, NodeStateSource, SnapshotStore};
 
-const NODE_STATE_SUBDIRS: [&str; 1] = ["db"];
+/// The DB folder name the harness configures its nodes with, which a node
+/// suffixes with the version of the state it persists.
+pub const NODE_DB_FOLDER: &str = "db";
+
+/// The subdirectory of a node runtime directory its DB is in.
+#[must_use]
+pub fn node_db_subdir() -> String {
+    RocksDbSettings {
+        folder_name: NODE_DB_FOLDER.to_owned(),
+        ..RocksDbSettings::default()
+    }
+    .db_path(Path::new(""))
+    .to_string_lossy()
+    .into_owned()
+}
 
 /// Snapshot store for Logos node local state.
 ///
-/// Logos node state is represented by the `db` subdirectory under a node
+/// Logos node state is represented by the DB subdirectory under a node
 /// runtime directory. This wrapper fixes that application-specific state shape
 /// while delegating the generic snapshot layout to [`SnapshotStore`].
 #[derive(Clone, Debug)]
@@ -34,19 +49,19 @@ impl NodeStateSnapshotStore {
         runtime_dir: &Path,
     ) -> Result<String, DynError> {
         self.store
-            .save_node_dirs(snapshot_name, node_name, runtime_dir, &NODE_STATE_SUBDIRS)
+            .save_node_dirs(snapshot_name, node_name, runtime_dir, &[&node_db_subdir()])
     }
 
     /// Restore node state from `source` into an existing runtime directory.
     ///
-    /// This clears and replaces only the `db` subdirectory.
+    /// This clears and replaces only the DB subdirectory.
     pub fn restore_node(
         &self,
         source: &NodeStateSource,
         runtime_dir: &Path,
     ) -> Result<(), DynError> {
         self.store
-            .restore_node_dirs(source, runtime_dir, &NODE_STATE_SUBDIRS)
+            .restore_node_dirs(source, runtime_dir, &[&node_db_subdir()])
     }
 
     /// Restore one named node from a named snapshot into an existing runtime

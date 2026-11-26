@@ -229,9 +229,7 @@ fn recovery_storage_settings(node_info: &NodeInfo) -> Result<RocksBackendSetting
     let config = user_config_from_node_yaml(&node_info.runtime_dir.join(USER_CONFIG_FILE))?;
 
     Ok(RocksBackendSettings {
-        db_path: node_info
-            .runtime_dir
-            .join(&config.storage.backend.folder_name),
+        db_path: config.storage.backend.db_path(&node_info.runtime_dir),
         read_only: true,
         column_family: config.storage.backend.column_family,
     })

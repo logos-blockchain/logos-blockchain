@@ -60,7 +60,7 @@ pub use scenario::{
     DeploymentPlan, LbcClusterBackend, LbcEnv, LbcK8sManualCluster, LbcManualCluster,
     LbcNodeConfig, LbcScenario, NodePlan, ScenarioBuilder, ScenarioBuilderExt,
 };
-pub use snapshot::NodeStateSnapshotStore;
+pub use snapshot::{NodeStateSnapshotStore, node_db_subdir};
 pub use testing_framework_app::{
     AppHost, AppHostDeployError, AppHostDeployer, AppHostEnv, AppRunContextExt,
 };

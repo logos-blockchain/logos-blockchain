@@ -21,7 +21,7 @@ use lb_storage_service::{
 };
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcManualCluster, LbcNodeConfig, NodeHttpClient,
-    TopologyConfig as TfTopologyConfig, USER_CONFIG_FILE, ensure_node_binary_built,
+    TopologyConfig as TfTopologyConfig, USER_CONFIG_FILE, ensure_node_binary_built, node_db_subdir,
 };
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
@@ -530,7 +530,7 @@ fn recovery_database(scenario_dir: &Path) -> RocksBackendSettings {
     let db_path = scenario_dir
         .read_dir()
         .unwrap()
-        .map(|entry| entry.unwrap().path().join("db"))
+        .map(|entry| entry.unwrap().path().join(node_db_subdir()))
         .find(|candidate| candidate.is_dir())
         .expect("local node runtime directory should contain its RocksDB database");
 

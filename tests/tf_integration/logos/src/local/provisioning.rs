@@ -48,6 +48,7 @@ use crate::{
         unregister_system_monitor_output_file,
     },
     env as tf_env,
+    snapshot::NODE_DB_FOLDER,
 };
 
 const LOGS_PREFIX: &str = "__logs";
@@ -181,7 +182,7 @@ impl LocalDeployerEnv for LbcEnv {
         }
 
         config.user.state.base_folder = dir.to_path_buf();
-        "db".clone_into(&mut config.user.storage.backend.folder_name);
+        NODE_DB_FOLDER.clone_into(&mut config.user.storage.backend.folder_name);
 
         if let config::tracing::serde::console::Layer::Console(console) =
             &mut config.user.tracing.console
