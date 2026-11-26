@@ -150,7 +150,8 @@ impl Keystore {
 
     pub fn set(&mut self, name: impl Into<KeyTitle>, key: Key) {
         let key_name = name.into();
-        self.public_keys.insert(key_name.clone(), key_id(&key));
+        self.public_keys
+            .insert(key_name.clone(), key_id_for_preload_backend(&key));
         self.secret_keys.insert(key_name, key);
     }
 
@@ -158,7 +159,7 @@ impl Keystore {
     pub fn get(&self, name: impl Into<KeyTitle>) -> Option<(KeyId, &Key)> {
         self.secret_keys
             .get_key_value(&name.into())
-            .map(|(_, v)| (key_id(v), v))
+            .map(|(_, v)| (key_id_for_preload_backend(v), v))
     }
 
     fn get_required(&self, title: &str) -> Result<(KeyId, &Key), KeystoreError> {
@@ -171,7 +172,9 @@ impl Keystore {
     }
 
     pub fn get_all(&self) -> impl Iterator<Item = (KeyId, &Key)> {
-        self.secret_keys.values().map(|key| (key_id(key), key))
+        self.secret_keys
+            .values()
+            .map(|key| (key_id_for_preload_backend(key), key))
     }
 
     pub fn get_ed25519(
@@ -199,7 +202,11 @@ impl Keystore {
             .ok_or_else(|| KeystoreError::NotFound(title.clone()))?;
 
         match generic_key {
-            Key::Zk(inner_key) => Ok((id, inner_key.clone().into_unsecured())),
+            Key::Zk(inner_key) => inner_key
+                .clone()
+                .into_unsecured()
+                .map(|key| (id, key))
+                .ok_or(KeystoreError::ZkExpected(title)),
             Key::Ed25519(_) => Err(KeystoreError::ZkExpected(title)),
         }
     }
@@ -209,9 +216,11 @@ impl Keystore {
             .values()
             .filter_map(|generic_key| match generic_key {
                 Key::Zk(inner_key) => {
-                    let id = key_id(generic_key);
-                    let unsecured = inner_key.clone().into_unsecured();
-                    Some((id, unsecured))
+                    let id = key_id_for_preload_backend(generic_key);
+                    inner_key
+                        .clone()
+                        .into_unsecured()
+                        .map(|unsecured| (id, unsecured))
                 }
                 Key::Ed25519(_) => None,
             })
@@ -223,22 +232,33 @@ impl Keystore {
         let unsecured = secure_key.clone().into_unsecured();
 
         self.set(title.clone(), Key::Ed25519(secure_key));
-        (key_id(&self.secret_keys[&title]), unsecured)
+        (
+            key_id_for_preload_backend(&self.secret_keys[&title]),
+            unsecured,
+        )
     }
 
     pub fn generate_zk(&mut self, title: impl Into<KeyTitle>) -> (KeyId, UnsecuredZkKey) {
         let title = title.into();
         let secure_key = generate_zk_key_from_random_bytes();
-        let unsecured = secure_key.clone().into_unsecured();
+        let unsecured = secure_key
+            .clone()
+            .into_unsecured()
+            .expect("generated ZK keys are spending credentials");
 
         self.set(title.clone(), Key::Zk(secure_key));
-        (key_id(&self.secret_keys[&title]), unsecured)
+        (
+            key_id_for_preload_backend(&self.secret_keys[&title]),
+            unsecured,
+        )
     }
 
     pub fn remove(&mut self, title: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
         let title = title.into();
         self.public_keys.remove(&title);
-        self.secret_keys.remove(&title).map(|v| (key_id(&v), v))
+        self.secret_keys
+            .remove(&title)
+            .map(|v| (key_id_for_preload_backend(&v), v))
     }
 }
 
@@ -268,12 +288,18 @@ fn nested(path: &str, value: Value) -> Value {
     })
 }
 
-fn key_id(key: &Key) -> KeyId {
+/// Derives the identifier used when generating a preload KMS configuration.
+#[must_use]
+pub fn key_id_for_preload_backend(key: &Key) -> KeyId {
     let key_id_bytes = match key {
         Key::Ed25519(ed25519_secret_key) => ed25519_secret_key.as_public_key().to_bytes(),
         Key::Zk(zk_secret_key) => fr_to_bytes(zk_secret_key.as_public_key().as_fr()),
     };
-    hex::encode(key_id_bytes)
+    let encoded = hex::encode(key_id_bytes);
+    match key {
+        Key::Zk(key) if !key.is_spending_key() => format!("zk-direct:{encoded}"),
+        _ => encoded,
+    }
 }
 
 fn generate_zk_key_from_random_bytes() -> ZkKey {

@@ -711,6 +711,7 @@ pub const fn update_cryptarchia(
 /// wins. Run on the final config, so that it covers the file, the keystore, the
 /// CLI argument and the environment variable alike.
 pub fn check_leader_funding_key(user_config: &UserConfig) -> Result<()> {
+    check_wallet_spending_keys(user_config)?;
     let funding_pk = user_config.cryptarchia.leader.wallet.funding_pk;
     if user_config
         .wallet
@@ -727,6 +728,28 @@ pub fn check_leader_funding_key(user_config: &UserConfig) -> Result<()> {
          `--cryptarchia-funding-pk` or `CRYPTARCHIA_FUNDING_PK`) is not in `wallet.known_keys`: \
          leader rewards are paid to it, and the node would lose every slot it wins"
     ))
+}
+
+/// Checks that each wallet spending key names the matching KMS credential.
+pub fn check_wallet_spending_keys(user_config: &UserConfig) -> Result<()> {
+    for (key_id, expected_public_key) in &user_config.wallet.known_keys {
+        match user_config.kms.backend.keys.get(key_id) {
+            None => bail!("wallet.known_keys references missing KMS credential '{key_id}'"),
+            Some(Key::Ed25519(_)) => {
+                bail!("wallet.known_keys references non-ZK credential '{key_id}'")
+            }
+            Some(Key::Zk(key)) if !key.is_spending_key() => {
+                bail!(
+                    "wallet.known_keys references direct credential '{key_id}', which cannot spend"
+                );
+            }
+            Some(Key::Zk(key)) if key.to_public_key() != *expected_public_key => {
+                bail!("wallet.known_keys public key does not match KMS credential '{key_id}'");
+            }
+            Some(Key::Zk(_)) => {}
+        }
+    }
+    Ok(())
 }
 
 /// Refuses a `PoW` auto-claim target that is not a key of the config's wallet.

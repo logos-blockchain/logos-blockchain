@@ -40,6 +40,11 @@ impl SecureKeyOperator for DeriveNullifier {
     type Error = KeyError;
 
     async fn execute(self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
+        if !key.is_spending_key() {
+            return Err(KeyError::UnsupportedKey(
+                "Spending nullifier derivation requires a spending key".into(),
+            ));
+        }
         let Self {
             commitment,
             result_channel,
@@ -73,5 +78,18 @@ mod tests {
             receiver.await.unwrap(),
             derive_note_nullifier(&commitment, &key.nullifier_key())
         );
+    }
+
+    #[tokio::test]
+    async fn spending_nullifier_operator_rejects_direct_credentials() {
+        let secret = Fr::from(7u64);
+        let key = ZkKey::from_direct_secret(secret);
+        let commitment = NoteCommitment(Fr::from(3u64));
+        let (sender, receiver) = oneshot::channel();
+        assert!(matches!(
+            key.execute(DeriveNullifier::new(commitment, sender)).await,
+            Err(KeyError::UnsupportedKey(_))
+        ));
+        assert!(receiver.await.is_err());
     }
 }

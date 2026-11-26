@@ -616,7 +616,8 @@ mod tests {
             .into_iter()
             .map(|config| RunConfig {
                 deployment: deployment.clone(),
-                user: create_node_user_config(config),
+                user: create_node_user_config(config)
+                    .expect("generated spending keys should be valid"),
             })
             .collect()
     }

@@ -175,8 +175,10 @@ fn rederive_note_public_keys(config: &mut Value, keystore: Option<&Keystore>) ->
         .values()
         .chain(keystore.into_iter().flat_map(Keystore::secret_keys))
         .filter_map(|key| match key {
-            Key::Zk(key) => Some((kdf_public_key(key.as_fr()), key.to_public_key())),
-            Key::Ed25519(_) => None,
+            Key::Zk(key) if key.is_spending_key() => {
+                Some((kdf_public_key(key.as_fr()), key.to_public_key()))
+            }
+            _ => None,
         })
         .map(|(old, new)| Ok((to_value(old)?, to_value(new)?)))
         .collect::<Result<HashMap<_, _>>>()?;
@@ -284,12 +286,33 @@ fn drop_built_in_log_filter(config: &mut Value) {
 
 #[cfg(test)]
 mod tests {
+    use lb_key_management_system_service::keys::ZkKey;
     use serde_yaml::value::{Tag, TaggedValue};
 
     use super::*;
 
     fn yaml(yaml: &str) -> Value {
         serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn direct_credentials_do_not_override_spending_key_rederivation() {
+        let spending = ZkKey::new(73u64.into());
+        let direct = ZkKey::from_direct_secret(*spending.as_fr());
+        let old_public_key = kdf_public_key(spending.as_fr());
+        assert_eq!(direct.to_public_key(), old_public_key);
+        let keys = HashMap::from([("spending".to_owned(), Key::Zk(spending.clone()))]);
+        let mut store = yaml("public_keys: {}\nsecret_keys: {}\nWARNING: test\n");
+        store["secret_keys"] = to_value(HashMap::from([("direct", Key::Zk(direct))])).unwrap();
+        let store: Keystore = serde_yaml::from_value(store).unwrap();
+        let mut config = yaml("kms: {backend: {keys: {}}}\nwallet: {funding: null}\n");
+        config["kms"]["backend"]["keys"] = to_value(keys).unwrap();
+        config["wallet"]["funding"] = to_value(old_public_key).unwrap();
+        rederive_note_public_keys(&mut config, Some(&store)).unwrap();
+        assert_eq!(
+            config["wallet"]["funding"],
+            to_value(spending.to_public_key()).unwrap()
+        );
     }
 
     #[test]

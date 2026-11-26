@@ -34,7 +34,7 @@ use lb_core::{
     sdp::ServiceParameters,
 };
 use lb_cryptarchia_engine::EpochConfig;
-use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Field as _};
+use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Field as _, fr_to_bytes};
 use lb_key_management_system_service::{
     KMSService, keys::UnverifiedEd25519PublicKey, message::KMSMessage,
 };
@@ -598,6 +598,145 @@ async fn reward_keys_wait_for_the_saved_count_and_are_registered_again_on_startu
     .unwrap();
     assert_eq!(restored.reward_key_count(), 3);
     assert_eq!(restored.wallet().known_keys(), &expected_keys);
+}
+
+#[tokio::test]
+// Keep this regression when direct credentials gain nullifier derivation:
+// deriving a nullifier alone must not establish reward-key spending authority.
+async fn existing_reward_key_must_match_and_have_spending_authority() {
+    use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
+
+    let master = ZkKey::new(7u64.into());
+    let (output, derived) = oneshot::channel();
+    master
+        .execute(UnsafeVoucherOperator::new(Fr::from(0u64), output))
+        .await
+        .unwrap();
+    let reward = ZkKey::new(derived.await.unwrap());
+    let public_key = reward.to_public_key();
+    let key_id = hex::encode(fr_to_bytes(public_key.as_fr()));
+    let direct = ZkKey::from_direct_secret(reward.nullifier_key());
+    assert_eq!(direct.to_public_key(), public_key);
+
+    for (existing, accepted) in [
+        (direct, false),
+        (ZkKey::new(19u64.into()), false),
+        (reward.clone(), true),
+    ] {
+        let mut backend = KmsBackend::new(PreloadKMSBackendSettings {
+            keys: HashMap::from([
+                ("voucher-master".into(), Key::Zk(master.clone())),
+                (key_id.clone(), Key::Zk(existing)),
+            ]),
+        });
+        let (sender, mut receiver) = mpsc::channel(4);
+        tokio::spawn(async move {
+            while let Some(message) = receiver.recv().await {
+                match message {
+                    KMSMessage::Execute {
+                        key_id,
+                        operator,
+                        reply_channel,
+                    } => {
+                        drop(reply_channel.send(backend.execute(&key_id, operator).await));
+                    }
+                    KMSMessage::PublicKey {
+                        key_id,
+                        reply_channel,
+                    } => {
+                        drop(reply_channel.send(backend.public_key(&key_id)));
+                    }
+                    KMSMessage::Register {
+                        key_id,
+                        key_type,
+                        reply_channel,
+                    } => {
+                        let result = backend
+                            .register(&key_id, key_type)
+                            .and_then(|()| backend.public_key(&key_id).map(|key| (key_id, key)));
+                        drop(reply_channel.send(result));
+                    }
+                    _ => panic!("unexpected KMS request"),
+                }
+            }
+        });
+        let kms = KmsServiceApi::<TestKms, TestRuntimeServiceId>::new(OutboundRelay::new(sender));
+        let settings = wallet_settings(master.to_public_key());
+        let (sender, _) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(sender));
+        let mut state = wallet_state(&settings, &[], &updater);
+        let result =
+            TestWallet::register_reward_key(&mut state, "voucher-master".into(), 0, &kms).await;
+        assert_eq!(result.is_ok(), accepted);
+        assert_eq!(
+            state.wallet().known_keys().contains_key(&public_key),
+            accepted
+        );
+    }
+}
+
+#[tokio::test]
+async fn funding_proof_uses_the_configured_spending_key_identifier() {
+    use lb_key_management_system_service::{
+        backend::preload::PreloadKMSBackendSettings, message::KMSSigningStrategy,
+    };
+    use lb_wallet::transaction::step_witness;
+
+    let key = ZkKey::new(7u64.into());
+    let note = known_note(&key, 100, 1);
+    let mut settings = wallet_settings(key.to_public_key());
+    settings.known_keys = HashMap::from([("explicit-spending-id".into(), key.to_public_key())]);
+    let updater = updater();
+    let state = wallet_state(&settings, &[note], &updater);
+    let witness = step_witness(
+        &state.wallet().spend_state(tip()).unwrap(),
+        state.wallet().known_notes(),
+        NoteSetIndex::Ledger,
+        &[],
+        &[note.nullifier],
+        &ZkTransferOpening {
+            inputs: vec![note.note],
+            outputs: vec![Note::new(100, Fr::from(2u64), key.to_public_key())],
+        },
+        Fr::ONE,
+    )
+    .unwrap();
+    let backend = KmsBackend::new(PreloadKMSBackendSettings {
+        keys: HashMap::from([("explicit-spending-id".into(), Key::Zk(key))]),
+    });
+    let (sender, mut receiver) = mpsc::channel(1);
+    let kms = KmsServiceApi::<TestKms, TestRuntimeServiceId>::new(OutboundRelay::new(sender));
+    let signer = TestSigner::new(kms).with_known_keys(state.wallet().known_keys());
+    let (resp_tx, response) = oneshot::channel();
+    let proving = TestWallet::funding_proof(
+        (
+            MantleTxBuilder::new().build(fork_digest()).unwrap(),
+            Some(witness),
+        ),
+        tip(),
+        Vec::new(),
+        None,
+        ReservationHandoff::new(),
+        &signer,
+        resp_tx,
+    );
+    let serve = async {
+        let KMSMessage::Sign {
+            signing_strategy: KMSSigningStrategy::Multi(key_ids),
+            payload,
+            reply_channel,
+        } = receiver.recv().await.unwrap()
+        else {
+            panic!("expected a multi-key signing request");
+        };
+        assert_eq!(key_ids, ["explicit-spending-id"]);
+        reply_channel
+            .send(backend.sign_multiple(&key_ids, payload))
+            .unwrap();
+    };
+    let (completion, ()) = tokio::join!(proving, serve);
+    completion.deliver();
+    assert!(response.await.unwrap().unwrap().response.proof.is_some());
 }
 
 // Storage acknowledgements and recovery assertions.

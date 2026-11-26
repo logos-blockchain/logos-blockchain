@@ -32,12 +32,64 @@ pub fn derive_kms_enum_key(input: proc_macro::TokenStream) -> proc_macro::TokenS
     let key_enum_impl_secured_key =
         build_key_enum_impl_secured_key(&input.ident, key_enum_variants);
     let operators_enum = build_operators_enum(&input.ident, key_enum_variants);
+    let multi_operators_enum = build_multi_operators_enum(&input.ident, key_enum_variants);
     quote! {
         #encoding_enums
         #operators_enum
+        #multi_operators_enum
         #key_enum_impl_secured_key
     }
     .into()
+}
+
+fn build_multi_operators_enum(base: &Ident, variants: &Punctuated<Variant, Comma>) -> TokenStream {
+    let name = Ident::new(&format!("{base}MultiOperators"), Span::call_site());
+    let definitions = variants.iter().map(|variant| {
+        let ident = &variant.ident;
+        let ty = &get_wrapped_key_as_ref(variant).ty;
+        let cfg = get_cfg_attributes(&variant.attrs);
+        quote! { #(#cfg)* #ident(crate::keys::secured_key::BoxedSecureMultiKeyOperator<#ty>) }
+    });
+    let count_arms = variants.iter().map(|variant| {
+        let ident = &variant.ident;
+        let cfg = get_cfg_attributes(&variant.attrs);
+        quote! { #(#cfg)* Self::#ident(operator) => operator.validate_key_count(count) }
+    });
+    let execute_arms = variants.iter().map(|variant| {
+        let ident = &variant.ident;
+        let cfg = get_cfg_attributes(&variant.attrs);
+        quote! {
+            #(#cfg)*
+            Self::#ident(operator) => {
+                let mut selected = Vec::with_capacity(keys.len());
+                for key in keys {
+                    match key {
+                        #base::#ident(key) => selected.push(key),
+                        _ => return Err(crate::keys::errors::KeyError::UnsupportedKey(
+                            format!("Operator requires {} keys", stringify!(#ident)),
+                        )),
+                    }
+                }
+                operator.validate_key_count(selected.len())?;
+                operator.execute(&selected).await
+            }
+        }
+    });
+    quote! {
+        #[derive(Debug)]
+        pub enum #name { #(#definitions),* }
+        #[async_trait::async_trait]
+        impl crate::keys::secured_key::SecureMultiKeyOperator for #name {
+            type Key = #base;
+            type Error = crate::keys::errors::KeyError;
+            fn validate_key_count(&self, count: usize) -> Result<(), Self::Error> {
+                match self { #(#count_arms),* }
+            }
+            async fn execute(self: Box<Self>, keys: &[&Self::Key]) -> Result<(), Self::Error> {
+                match *self { #(#execute_arms),* }
+            }
+        }
+    }
 }
 
 /// Validate each variant must have exactly one unnamed field (the key type).

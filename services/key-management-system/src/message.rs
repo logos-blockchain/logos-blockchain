@@ -40,4 +40,9 @@ where
         operator: Backend::KeyOperations,
         reply_channel: oneshot::Sender<Result<(), Backend::Error>>,
     },
+    ExecuteMultiple {
+        key_ids: Vec<Backend::KeyId>,
+        operator: Backend::MultiKeyOperations,
+        reply_channel: oneshot::Sender<Result<(), Backend::Error>>,
+    },
 }

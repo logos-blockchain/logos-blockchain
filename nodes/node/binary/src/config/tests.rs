@@ -5,7 +5,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Ed25519Key, Key, ZkKey, ZkPublicKey};
 use lb_services_utils::overwatch::RecoveryData;
 use lb_tracing::logging::local::TextKind;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_from_value, deserialize_value_at_path};
@@ -15,12 +15,12 @@ use crate::{
     UserConfig,
     cli::{CliArgs, InitArgs, build_run_config_from_env},
     config::{
-        DeploymentSettings, RequiredValues as ConfigRequiredValues,
+        DeploymentSettings, RequiredValues as ConfigRequiredValues, RunConfig,
         blend::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
         },
-        check_leader_funding_key, check_pow_claim_targets,
+        check_leader_funding_key, check_pow_claim_targets, check_wallet_spending_keys,
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
@@ -50,12 +50,32 @@ use crate::{
             serde::{Config as WalletConfig, RequiredValues as WalletRequiredValues},
         },
     },
+    run_node_from_config,
 };
 
 const BLEND_RECOVERY_MARKER: &[u8] = b"recovery/test/blend";
 const MEMPOOL_RECOVERY_MARKER: &[u8] = b"recovery/test/mempool";
 const SDP_RECOVERY_MARKER: &[u8] = b"recovery/test/sdp";
 const WALLET_RECOVERY_MARKER: &[u8] = b"recovery/test/wallet";
+
+#[test]
+fn keystore_keeps_direct_credentials_distinct_from_spending_keys() {
+    let spending = ZkKey::new(17u64.into());
+    let direct = ZkKey::from_direct_secret(spending.nullifier_key());
+    assert_eq!(spending.to_public_key(), direct.to_public_key());
+    let mut store = Keystore::default();
+    store.set("test-spending", Key::Zk(spending));
+    store.set("test-direct", Key::Zk(direct));
+    let (spending_id, _) = store.get("test-spending").unwrap();
+    let (direct_id, _) = store.get("test-direct").unwrap();
+    assert_ne!(spending_id, direct_id);
+    assert!(store.get_zk("test-direct").is_err());
+    assert!(store.get_zk("test-spending").is_ok());
+    let config = store.config_values().unwrap();
+    let keys = config["kms"]["backend"]["keys"].as_mapping().unwrap();
+    assert!(keys.contains_key(serde_yaml::Value::String(spending_id)));
+    assert!(keys.contains_key(serde_yaml::Value::String(direct_id)));
+}
 
 fn recovery_data_fixture() -> RecoveryData {
     RecoveryData::new(HashMap::from([
@@ -148,16 +168,18 @@ fn parse_config_path() {
 
 /// Builds a minimal, valid [`UserConfig`] for override tests.
 fn minimal_user_config() -> UserConfig {
+    let key = ZkKey::new(19u64.into());
+    let public_key = key.to_public_key();
     let mut config = UserConfig::with_required_values(ConfigRequiredValues {
         blend: BlendConfig::with_required_values(BlendRequiredValues {
             non_ephemeral_signing_key_id: "non_ephemeral_signing_key_id".into(),
             secret_key_kms_id: "secret_key_kms_id".into(),
         }),
         cryptarchia: CryptarchiaConfig::with_required_values(CryptarchiaRequiredValues {
-            funding_pk: ZkPublicKey::zero(),
+            funding_pk: public_key,
         }),
         sdp: SdpConfig::with_required_values(SdpRequiredValues {
-            funding_pk: ZkPublicKey::zero(),
+            funding_pk: public_key,
         }),
         wallet: WalletConfig::with_required_values(WalletRequiredValues {
             voucher_master_key_id: "voucher_master_key_id".into(),
@@ -166,7 +188,12 @@ fn minimal_user_config() -> UserConfig {
     config
         .wallet
         .known_keys
-        .insert("funding_key_id".into(), ZkPublicKey::zero());
+        .insert("funding_key_id".into(), public_key);
+    config
+        .kms
+        .backend
+        .keys
+        .insert("funding_key_id".into(), Key::Zk(key));
     config
 }
 
@@ -178,15 +205,105 @@ fn a_leader_funding_key_the_wallet_does_not_track_is_refused() {
     config.wallet.known_keys.clear();
     let error = check_leader_funding_key(&config).unwrap_err().to_string();
     assert!(error.contains("wallet.known_keys"), "{error}");
-    // in the hex encoding the config and the CLI use
-    assert!(error.contains(&"0".repeat(64)), "{error}");
+    assert!(
+        error.contains(
+            serde_yaml::to_string(&config.cryptarchia.leader.wallet.funding_pk)
+                .unwrap()
+                .trim()
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn wallet_known_keys_must_resolve_to_the_matching_spending_credential() {
+    let config = minimal_user_config();
+    assert!(check_wallet_spending_keys(&config).is_ok());
+
+    let mut invalid = config.clone();
+    invalid.kms.backend.keys.remove("funding_key_id");
+    let error = check_wallet_spending_keys(&invalid)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("funding_key_id") && error.contains("missing"),
+        "{error}"
+    );
+
+    let mut invalid = config.clone();
+    invalid.kms.backend.keys.insert(
+        "funding_key_id".into(),
+        Key::Ed25519(Ed25519Key::from_bytes(&[7; 32])),
+    );
+    let error = check_wallet_spending_keys(&invalid)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("funding_key_id") && error.contains("non-ZK"),
+        "{error}"
+    );
+
+    let mut invalid = config;
+    invalid
+        .kms
+        .backend
+        .keys
+        .insert("funding_key_id".into(), Key::Zk(ZkKey::new(29u64.into())));
+    let error = check_wallet_spending_keys(&invalid)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("funding_key_id") && error.contains("does not match"),
+        "{error}"
+    );
+}
+
+#[test]
+fn direct_credentials_are_rejected_as_explicit_wallet_spending_keys_before_startup() {
+    let spending = ZkKey::new(73u64.into());
+    let direct = ZkKey::from_direct_secret(spending.nullifier_key());
+    let mut config = minimal_user_config();
+    config
+        .kms
+        .backend
+        .keys
+        .insert("spending".into(), Key::Zk(spending.clone()));
+    config
+        .kms
+        .backend
+        .keys
+        .insert("direct".into(), Key::Zk(direct.clone()));
+    config
+        .wallet
+        .known_keys
+        .insert("spending".into(), spending.to_public_key());
+    assert!(check_wallet_spending_keys(&config).is_ok());
+
+    config
+        .wallet
+        .known_keys
+        .insert("direct".into(), direct.to_public_key());
+    let error = check_leader_funding_key(&config).unwrap_err().to_string();
+    assert!(
+        error.contains("direct") && error.contains("cannot spend"),
+        "{error}"
+    );
+    let run_config = RunConfig {
+        user: config,
+        deployment: DeploymentSettings::default(),
+    };
+    let Err(error) = run_node_from_config(run_config, None) else {
+        panic!("node must reject the direct spending credential before startup");
+    };
+    assert!(error.to_string().contains("cannot spend"));
 }
 
 #[test]
 fn a_pow_claim_target_the_wallet_does_not_track_is_refused() {
     let mut config = minimal_user_config();
+    let public_key = config.cryptarchia.leader.wallet.funding_pk;
     config.pow.auto_claim.targets = vec![ClaimTarget {
-        public_key: ZkPublicKey::zero(),
+        public_key,
         threshold: 1,
     }];
     assert!(check_pow_claim_targets(&config).is_ok());
@@ -194,7 +311,10 @@ fn a_pow_claim_target_the_wallet_does_not_track_is_refused() {
     config.wallet.known_keys.clear();
     let error = check_pow_claim_targets(&config).unwrap_err().to_string();
     assert!(error.contains("pow.auto_claim.targets"), "{error}");
-    assert!(error.contains(&"0".repeat(64)), "{error}");
+    assert!(
+        error.contains(serde_yaml::to_string(&public_key).unwrap().trim()),
+        "{error}"
+    );
 }
 
 /// Environment variables applied on top of the YAML config must reach the

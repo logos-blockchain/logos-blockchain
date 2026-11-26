@@ -4820,6 +4820,7 @@ version = "0.0.0"
 dependencies = [
  "arbitrary-int",
  "async-trait",
+ "bincode",
  "bip39",
  "blake2",
  "bytes",
@@ -4882,6 +4883,7 @@ dependencies = [
  "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
  "logos-blockchain-utils",
+ "logos-blockchain-zktransfer",
  "num-bigint",
  "overwatch",
  "rand 0.8.8",
