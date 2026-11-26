@@ -17,12 +17,13 @@ use reqwest::StatusCode;
 use serial_test::serial;
 use tokio::{net::TcpListener, sync::mpsc, time::sleep};
 
-const FAUCET_FUNDS: u64 = 10_000 * UNITS_PER_LGO;
+const FAUCET_FUNDS: u64 = 100_000 * UNITS_PER_LGO;
 const DRIP_AMOUNT: u64 = 50 * UNITS_PER_LGO;
-/// Upper bound on the combined gas fees of the two drip transfers. Each drip
-/// costs 244 at genesis gas prices; the generous margin keeps the test stable
-/// if gas constants or prices change.
-const MAX_TOTAL_FEES: u64 = 2000 * UNITS_PER_LGO;
+/// Each transfer spends one note and creates the recipient and change notes.
+/// At genesis prices the proof and spend cost about 6,100 LGO per transfer,
+/// plus the signed transaction's storage charge. This combined bound leaves
+/// headroom for gas-price movement while remaining well below the faucet funds.
+const MAX_TOTAL_FEES: u64 = 20_000 * UNITS_PER_LGO;
 const DRIP_QUEUE_CAPACITY: usize = 16;
 const COOLDOWN: Duration = Duration::from_hours(1);
 /// Leaves room for the faucet to resubmit a dropped drip after its two minute

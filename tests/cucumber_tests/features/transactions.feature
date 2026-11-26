@@ -229,16 +229,16 @@ Feature: Transactions
   Scenario: Continuous transactions next wallet with coin split
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 100000       |
-      | 2             | 2           | 100000       |
+      | 1             | 3           | 200000       |
+      | 2             | 3           | 200000       |
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
-    And I perform 2 coin split transactions for each user wallet with 6 outputs of 10000 LGO each
-    And I verify each wallet has minimum 12 outputs "available" in 300 seconds
+    And I perform 3 coin split transactions for each user wallet with 6 outputs of 20000 LGO each
+    And I verify each wallet has minimum 18 outputs "available" in 300 seconds
     And I perform 3 stress continuous cycles with 12 transactions of 1000 LGO to the next user wallet with 0 epochs headroom
     Then I stop all nodes
 
