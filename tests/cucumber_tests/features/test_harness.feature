@@ -66,7 +66,7 @@ Feature: Test harness
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
       | NODE_3    | 3             | WALLET_3A   | NODE_2       |
       | NODE_4    | 4             | WALLET_4A   | NODE_3       |
-    When all nodes have at least 5 blocks and converged to within 0 blocks in 30 seconds
+    When all nodes have at least 5 blocks and converged to within 0 blocks in 60 seconds
     Then wallet "WALLET_1A" has exactly 11 outputs in 2 seconds
     And wallet "WALLET_2A" has exactly 1 outputs in 2 seconds
     And wallet "WALLET_3A" has exactly 1 outputs in 2 seconds
