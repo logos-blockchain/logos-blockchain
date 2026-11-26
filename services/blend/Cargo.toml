@@ -36,6 +36,7 @@ lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
+lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["dns"], workspace = true }
 libp2p-stream                    = { workspace = true }
 overwatch                        = { workspace = true }

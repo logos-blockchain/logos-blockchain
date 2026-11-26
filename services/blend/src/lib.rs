@@ -16,15 +16,19 @@ use lb_core::{
     mantle::Value,
     sdp::{Locator, ProviderId, ServiceType},
 };
+use lb_groth16::fr_to_bytes;
 use lb_key_management_system_service::{
     api::KmsServiceApi,
     keys::{Ed25519PublicKey, PublicKeyEncoding, ZkPublicKey},
 };
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
-use lb_sdp_service::{DeclarationRequest, SdpMessage, SdpServiceApi, SdpSubmission};
+use lb_sdp_service::{
+    DeclarationRequest, SdpMessage, SdpServiceApi, SdpSubmission, api::Error as SdpError,
+};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
+use lb_wallet_service::api::{WalletApi, WalletServiceData};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -78,17 +82,37 @@ mod test_utils;
 
 const LOG_TARGET: &str = blend::service::ROOT;
 
-pub struct BlendService<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId>
-where
+pub struct BlendService<
+    CoreService,
+    EdgeService,
+    BroadcastService,
+    SdpService,
+    WalletService,
+    RuntimeServiceId,
+> where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(CoreService, EdgeService, BroadcastService, SdpService)>,
+    _phantom: PhantomData<(
+        CoreService,
+        EdgeService,
+        BroadcastService,
+        SdpService,
+        WalletService,
+    )>,
 }
 
-impl<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId> ServiceData
-    for BlendService<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId>
+impl<CoreService, EdgeService, BroadcastService, SdpService, WalletService, RuntimeServiceId>
+    ServiceData
+    for BlendService<
+        CoreService,
+        EdgeService,
+        BroadcastService,
+        SdpService,
+        WalletService,
+        RuntimeServiceId,
+    >
 where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
@@ -104,9 +128,16 @@ where
     reason = "One linear bootstrap, then the mode loop."
 )]
 #[async_trait]
-impl<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId>
+impl<CoreService, EdgeService, BroadcastService, SdpService, WalletService, RuntimeServiceId>
     ServiceCore<RuntimeServiceId>
-    for BlendService<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId>
+    for BlendService<
+        CoreService,
+        EdgeService,
+        BroadcastService,
+        SdpService,
+        WalletService,
+        RuntimeServiceId,
+    >
 where
     CoreService: ServiceData<Message = ServiceMessage<CoreService::NodeId>>
         + CoreServiceComponents<
@@ -130,6 +161,7 @@ where
         > + Send
         + 'static,
     SdpService: ServiceData<Message = SdpMessage> + Send,
+    WalletService: WalletServiceData + Send,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
@@ -147,6 +179,7 @@ where
         > + AsServiceId<MempoolOfService<CoreService, RuntimeServiceId>>
         + AsServiceId<ChainNetworkOfService<CoreService, RuntimeServiceId>>
         + AsServiceId<SdpService>
+        + AsServiceId<WalletService>
         + Debug
         + Display
         + Clone
@@ -195,6 +228,9 @@ where
 
         let sdp_service_api =
             SdpServiceApi::<SdpService>::from_overwatch_handle(overwatch_handle).await;
+        let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(
+            overwatch_handle.relay::<WalletService>().await?,
+        );
 
         let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
@@ -318,6 +354,7 @@ where
                             if declarations.is_empty() {
                                 let declaration = submit_blend_sdp_declaration(
                                     &sdp_service_api,
+                                    &wallet_api,
                                     locator,
                                     amount,
                                     non_ephemeral_signing_key_public,
@@ -332,7 +369,7 @@ where
                             } else {
                                 // SDP takes declarations one at a time anyway: one more
                                 // would only wait in line.
-                                let busy = lb_sdp_service::api::Error::Other("a declaration is already under way".into());
+                                let busy = SdpError::Other("a declaration is already under way".into());
                                 reply.send(Err(busy)).unwrap_or_else(|e| {
                                     debug!(target: LOG_TARGET, "Failed to send JoinAsCore reply: {e:?}");
                                 });
@@ -371,17 +408,35 @@ where
     }
 }
 
-async fn submit_blend_sdp_declaration<SdpService>(
+async fn submit_blend_sdp_declaration<SdpService, WalletService, RuntimeServiceId>(
     sdp_service_api: &SdpServiceApi<SdpService>,
+    wallet_api: &WalletApi<WalletService, RuntimeServiceId>,
     locator: Locator,
     amount: Value,
     non_ephemeral_signing_key_public: Ed25519PublicKey,
     zk_id: ZkPublicKey,
     note_pk: ZkPublicKey,
-) -> Result<SdpSubmission, lb_sdp_service::api::Error>
+) -> Result<SdpSubmission, SdpError>
 where
     SdpService: ServiceData<Message = SdpMessage>,
+    WalletService: WalletServiceData,
+    RuntimeServiceId: AsServiceId<WalletService> + Debug + Display + Sync,
 {
+    let known_addresses = wallet_api
+        .get_known_addresses()
+        .await
+        .map_err(DynError::from)?;
+    if !known_addresses.contains(&note_pk) {
+        let key = hex::encode(fr_to_bytes(note_pk.as_fr()));
+        return Err(SdpError::Other(
+            format!(
+                "Blend note key {key} is missing from the node wallet. Add it to \
+                 `wallet.known_keys` before joining as core."
+            )
+            .into(),
+        ));
+    }
+
     tracing::info!(
         target: LOG_TARGET,
         "Submitting Blend service declaration to SDP with locator {locator:?} and stake {amount}",
@@ -399,4 +454,116 @@ where
         amount,
     };
     sdp_service_api.post_declaration(sdp_declaration).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::{self, Formatter};
+
+    use lb_groth16::Fr;
+    use lb_wallet_service::{WalletMsg, WalletService};
+    use overwatch::services::relay::OutboundRelay;
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestRuntime;
+
+    impl Display for TestRuntime {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            f.write_str("TestRuntime")
+        }
+    }
+
+    type TestWallet = WalletService<(), (), (), (), TestRuntime>;
+
+    impl AsServiceId<TestWallet> for TestRuntime {
+        const SERVICE_ID: Self = Self;
+    }
+
+    struct TestSdp;
+
+    impl ServiceData for TestSdp {
+        type Settings = ();
+        type State = NoState<Self::Settings>;
+        type StateOperator = NoOperator<Self::State>;
+        type Message = SdpMessage;
+    }
+
+    #[tokio::test]
+    async fn blend_join_requires_the_wallet_to_track_the_note_key() {
+        let tracked_key = ZkPublicKey::new(Fr::from(1u64));
+        let untracked_key = ZkPublicKey::new(Fr::from(2u64));
+        let zk_id = ZkPublicKey::new(Fr::from(3u64));
+        let provider_key = Ed25519PublicKey::from_bytes(&[10; 32]).unwrap();
+        let locator: Locator = "/ip4/127.0.0.1/udp/3000".parse().unwrap();
+
+        let (wallet_sender, mut wallet_receiver) = mpsc::channel(1);
+        let wallet_api =
+            WalletApi::<TestWallet, TestRuntime>::new(OutboundRelay::new(wallet_sender));
+        let wallet_task = tokio::spawn(async move {
+            while let Some(WalletMsg::GetKnownAddresses { resp_tx }) = wallet_receiver.recv().await
+            {
+                resp_tx.send(Ok(vec![tracked_key])).unwrap();
+            }
+        });
+
+        let (sdp_sender, mut sdp_receiver) = mpsc::channel(1);
+        let sdp_api = SdpServiceApi::<TestSdp>::new(OutboundRelay::new(sdp_sender));
+        let sdp_task = tokio::spawn(async move {
+            let Some(SdpMessage::PostDeclaration {
+                declaration,
+                reply_channel,
+            }) = sdp_receiver.recv().await
+            else {
+                panic!("expected a declaration");
+            };
+            let submission = SdpSubmission {
+                declaration_id: declaration.id(),
+                tx_id: None,
+            };
+            reply_channel.send(Ok(submission)).unwrap();
+
+            declaration
+        });
+
+        let error = submit_blend_sdp_declaration(
+            &sdp_api,
+            &wallet_api,
+            locator.clone(),
+            1_000,
+            provider_key,
+            zk_id,
+            untracked_key,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains(&hex::encode(fr_to_bytes(untracked_key.as_fr())))
+        );
+
+        let submission = submit_blend_sdp_declaration(
+            &sdp_api,
+            &wallet_api,
+            locator,
+            1_000,
+            provider_key,
+            zk_id,
+            tracked_key,
+        )
+        .await
+        .unwrap();
+
+        let declaration = sdp_task.await.unwrap();
+        assert_eq!(declaration.note_pk, tracked_key);
+        assert_eq!(declaration.note_stake_pk, tracked_key);
+        assert_eq!(submission.declaration_id, declaration.id());
+
+        drop(wallet_api);
+        wallet_task.await.unwrap();
+    }
 }
