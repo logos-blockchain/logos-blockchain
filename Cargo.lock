@@ -4322,6 +4322,7 @@ dependencies = [
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "logos-blockchain-wallet-service",
  "overwatch",
  "rand 0.8.8",
  "rand_chacha 0.3.1",
@@ -4508,8 +4509,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-build"
-version = "0.8.0-rc.2"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.2#754538c0f2ebe66587021bbf551e6a2f605a4aa1"
+version = "0.8.0-rc.1+putxos.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -4520,16 +4521,16 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-common"
-version = "0.8.0-rc.2"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.2#754538c0f2ebe66587021bbf551e6a2f605a4aa1"
+version = "0.8.0-rc.1+putxos.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
-version = "0.8.0-rc.2"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.2#754538c0f2ebe66587021bbf551e6a2f605a4aa1"
+version = "0.8.0-rc.1+putxos.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4538,8 +4539,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
-version = "0.8.0-rc.2"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.2#754538c0f2ebe66587021bbf551e6a2f605a4aa1"
+version = "0.8.0-rc.1+putxos.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4548,8 +4549,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-program-spend-sys"
-version = "0.8.0-rc.2"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.2#754538c0f2ebe66587021bbf551e6a2f605a4aa1"
+version = "0.8.0-rc.1+putxos.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4565,8 +4566,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-transfer-sys"
-version = "0.8.0-rc.2"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.2#754538c0f2ebe66587021bbf551e6a2f605a4aa1"
+version = "0.8.0-rc.1+putxos.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4575,8 +4576,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-types"
-version = "0.8.0-rc.2"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.2#754538c0f2ebe66587021bbf551e6a2f605a4aa1"
+version = "0.8.0-rc.1+putxos.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
 dependencies = [
  "bytes",
  "libc",

@@ -166,6 +166,10 @@ impl Keystore {
             .ok_or_else(|| KeystoreError::NotFound(title.into()))
     }
 
+    pub fn secret_keys(&self) -> impl Iterator<Item = &Key> {
+        self.secret_keys.values()
+    }
+
     pub fn get_all(&self) -> impl Iterator<Item = (KeyId, &Key)> {
         self.secret_keys.values().map(|key| (key_id(key), key))
     }

@@ -465,8 +465,9 @@ mod tests {
         };
         use lb_services_utils::overwatch::RecoveryData;
 
+        let funding_pk = ZkPublicKey::new(Fr::ONE);
         let settings = WalletServiceSettings {
-            known_keys: HashMap::new(),
+            known_keys: HashMap::from([("funding".into(), funding_pk)]),
             voucher_master_key_id: "voucher-master".into(),
             recovery_data: RecoveryData::default(),
             pending_note_expiry_blocks: 10,
@@ -498,12 +499,11 @@ mod tests {
                 0,
             )))
             .unwrap();
-        let funding_pk = ZkPublicKey::new(Fr::ONE);
         let context = OpsContext {
             gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1), GAS_PROFILE),
         };
 
-        state
+        let error = state
             .fund_tx(
                 genesis,
                 &tx_builder,
@@ -515,6 +515,7 @@ mod tests {
             )
             .unwrap_err();
 
+        assert_eq!(error, WalletError::InsufficientFunds { available: 0 });
         assert_eq!(state.pending_notes.nullifiers(), HashSet::from([in_flight]));
     }
 
