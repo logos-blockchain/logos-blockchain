@@ -127,6 +127,7 @@ pub mod transfer_funds {
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
         pub tip: Option<HeaderId>,
+        /// A wallet-owned key included in `funding_public_keys`.
         pub change_public_key: ZkPublicKey,
         pub funding_public_keys: Vec<ZkPublicKey>,
         pub recipient_public_key: ZkPublicKey,
@@ -164,6 +165,7 @@ pub mod fund {
     pub struct WalletFundRequestBody {
         pub tip: Option<HeaderId>,
         pub tx_builder: MantleTxBuilder,
+        /// A wallet-owned key included in `funding_public_keys`.
         pub change_public_key: ZkPublicKey,
         pub funding_public_keys: Vec<ZkPublicKey>,
         /// Absolute hard cap on the final funded transaction fee. The priority
