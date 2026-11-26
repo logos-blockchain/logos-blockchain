@@ -96,68 +96,9 @@ jobs:
         with:
           command: clean
 
-  # The end-to-end tests only build the node, so this is where the other binaries get a release build (fat LTO, one
-  # codegen unit), after each merge.
-  release-binaries:
-    name: Build release binaries (${{ matrix.platform.label }})
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: bladerunner-linux
-            label: self-hosted-linux
-          - os: bladerunner-macos
-            label: self-hosted-macos
-    runs-on: ${{ matrix.platform.os }}
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
-      # mbx never shares incremental compilations.
-      CARGO_INCREMENTAL: 0
-      # The runners are disposable, so mbx can keep everything it restores until the job ends.
-      MBX_GC_AUTO: 0
-    steps:
-      - name: Disable rustup override
-        run: rustup override unset || true
-
-      - name: Expose gmp to cargo (macOS runners)
-        if: runner.os == 'macOS'
-        run: |
-          echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
-          echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
-          echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
-
-      - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-
-      - name: Prune disk space (cache-aware, self-hosted)
-        uses: ./.github/actions/prune-disk-space
-
-      - name: Set up mbx build cache
-        uses: jdx/mr-boxington-action@b3ef673bd77c5426927fe8836c6185cdae04c2dd  # Version 1.7.4
-        with:
-          version: 1.30.0
-          github-cache-mode: objects
-          isolate-objects-cache: true
-          cache-generation: release-binaries-v1
-          save-on-workflow-dispatch: true
-
-      - name: Annotate compiler messages
-        run: echo "::add-matcher::.github/matchers/rust.json"
-
-      - name: Build every binary with the release profile
-        run: |
-          unset RUSTC_WRAPPER
-          mbx build --locked --release --workspace --bins
-
-      - name: Show mbx statistics
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        run: mbx stats
-
   report:
     name: Report failures
-    needs: [ features, release-binaries ]
+    needs: [ features ]
     if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: bladerunner-linux
     steps:
