@@ -651,6 +651,7 @@ async fn split_with_storage_result(
     let (resp_tx, mut response) = oneshot::channel();
     let mut handle = Box::pin(TestWallet::handle_wallet_message(
         WalletMsg::PrepareExactNote {
+            handoff: ReservationHandoff::new(),
             tip: Some(HeaderId::from([0; 32])),
             tx_builder: MantleTxBuilder::new(),
             value: 25,
@@ -1188,7 +1189,11 @@ async fn signings_past_the_limit_wait_for_a_permit() {
         handle(msg, &mut state, &chain, &signer, &signings).await;
     }
     // The service loop's part.
-    let _polling = tokio::spawn(async move { while signings.next().await.is_some() {} });
+    let _polling = tokio::spawn(async move {
+        while let Some(completion) = signings.next().await {
+            completion.deliver();
+        }
+    });
 
     let mut requests = Vec::new();
     for _ in 0..MAX_CONCURRENT_SIGNINGS {
@@ -1207,11 +1212,72 @@ async fn a_failed_signing_gives_its_reservations_back() {
     let (signer, _unserved_kms) = signer();
     let (resp_tx, response) = oneshot::channel();
 
-    let unused =
-        TestWallet::signing(unsignable_job(), tip(), funded_notes(), &signer, resp_tx).await;
+    let unused = TestWallet::signing(
+        unsignable_job(),
+        tip(),
+        funded_notes(),
+        None,
+        ReservationHandoff::new(),
+        &signer,
+        resp_tx,
+    )
+    .await
+    .deliver();
 
     assert!(response.await.unwrap().is_err());
-    assert_eq!(unused, funded_notes());
+    assert!(
+        matches!(unused, Some(PendingRelease::Transaction(job, false, _)) if job == funded_notes())
+    );
+}
+
+#[tokio::test]
+async fn proving_returns_claim_for_inputs_acquired_by_the_job() {
+    let first = NoteNullifier(Fr::ONE);
+    let second = NoteNullifier(Fr::from(2u64));
+    let builder = MantleTxBuilder::new()
+        .with_reservation_id([1; 32])
+        .push_op(Op::Transfer(TransferOp::new(
+            [first, second].into(),
+            [Note::new(1, Fr::ONE, ZkPublicKey::new(Fr::ONE)).commitment()].into(),
+            Fr::ONE,
+            0,
+        )))
+        .unwrap();
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
+    state
+        .reserve_pending_notes([(NoteSetIndex::Ledger, first)], [1; 32])
+        .unwrap();
+    let job = state.begin_transaction_job(&builder, [2; 32]).unwrap();
+    let (signer, _kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+    let completed = TestWallet::funding_proof(
+        (builder.clone().build(fork_digest()).unwrap(), None),
+        tip(),
+        job,
+        Some([2; 32]),
+        ReservationHandoff::new(),
+        &signer,
+        resp_tx,
+    )
+    .await
+    .deliver();
+    let result = response.await.unwrap().unwrap();
+    assert_eq!(result.response.reservation_id, Some([2; 32]));
+    let Some(PendingRelease::Transaction(job, delivered, _)) = completed else {
+        panic!("missing completion")
+    };
+    state.finish_transaction_job(job, delivered);
+    assert!(state.begin_transaction_job(&builder, [3; 32]).is_err());
+    let completed_builder =
+        builder.with_additional_reservation_id(result.response.reservation_id.unwrap());
+    let subsequent = state
+        .begin_transaction_job(&completed_builder, [3; 32])
+        .unwrap();
+    state.finish_transaction_job(subsequent, false);
+    state.release_transaction_notes(&completed_builder);
+    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &first));
+    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &second));
 }
 
 // An independently prepared step and a Ledger input can have the same
@@ -1234,16 +1300,51 @@ fn inscription_with_reserved_input() -> (MantleTxBuilder, NoteSetIndex, NoteNull
 }
 
 #[tokio::test]
+async fn release_request_requires_the_current_reservation_capability() {
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
+    let input = (NoteSetIndex::Ledger, NoteNullifier(Fr::ONE));
+    state.reserve_pending_notes([input], [1; 32]).unwrap();
+    let (signer, _kms) = signer();
+    let chain = chain();
+    for (owner, expected) in [([2; 32], false), ([1; 32], true), ([1; 32], false)] {
+        let (resp_tx, response) = oneshot::channel();
+        handle(
+            WalletMsg::ReleaseReservation {
+                builder: MantleTxBuilder::new().with_reservation_id(owner),
+                resp_tx,
+            },
+            &mut state,
+            &chain,
+            &signer,
+            &FuturesUnordered::new(),
+        )
+        .await;
+        assert_eq!(response.await.unwrap(), expected);
+        assert_eq!(
+            state.is_pending_note(input.0, &input.1),
+            !expected && owner != [1; 32]
+        );
+    }
+}
+
+#[tokio::test]
 async fn failed_funding_does_not_release_an_inscription_step_reservation() {
     let (builder, channel_set, nullifier) = inscription_with_reserved_input();
     let updater = updater();
     let owner = ZkPublicKey::new(Fr::ONE);
     let mut state = wallet_state(&wallet_settings(owner), &[], &updater);
-    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    state
+        .reserve_pending_notes([(channel_set, nullifier)], [1; 32])
+        .unwrap();
+    state
+        .reserve_pending_notes([(NoteSetIndex::Ledger, nullifier)], [2; 32])
+        .unwrap();
     let (signer, _kms) = signer();
     let (resp_tx, response) = oneshot::channel();
     handle(
         WalletMsg::FundTx {
+            handoff: ReservationHandoff::new(),
             tip: Some(tip()),
             tx_builder: builder,
             change_pk: owner,
@@ -1260,7 +1361,41 @@ async fn failed_funding_does_not_release_an_inscription_step_reservation() {
     .await;
     assert!(response.await.unwrap().is_err());
     assert!(state.is_pending_note(channel_set, &nullifier));
-    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+    assert!(state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+}
+
+#[tokio::test]
+async fn cancelled_funding_does_not_transfer_a_prepared_step() {
+    let (builder, channel_set, nullifier) = inscription_with_reserved_input();
+    let updater = updater();
+    let owner = ZkPublicKey::new(Fr::ONE);
+    let mut state = wallet_state(&wallet_settings(owner), &[], &updater);
+    state
+        .reserve_pending_notes([(channel_set, nullifier)], [1; 32])
+        .unwrap();
+    let handoff = ReservationHandoff::new();
+    assert!(!handoff.cancel());
+    let (signer, _kms) = signer();
+    let (resp_tx, response) = oneshot::channel();
+    handle(
+        WalletMsg::FundTx {
+            handoff,
+            tip: Some(tip()),
+            tx_builder: builder.with_reservation_id([1; 32]),
+            change_pk: owner,
+            funding_pks: vec![owner],
+            priority_fee_percent: None,
+            max_tx_fee: None,
+            resp_tx,
+        },
+        &mut state,
+        &chain(),
+        &signer,
+        &FuturesUnordered::new(),
+    )
+    .await;
+    assert!(response.await.is_err());
+    assert!(state.is_pending_note(channel_set, &nullifier));
 }
 
 #[tokio::test]
@@ -1268,11 +1403,17 @@ async fn failed_signing_does_not_release_an_inscription_step_reservation() {
     let (builder, channel_set, nullifier) = inscription_with_reserved_input();
     let updater = updater();
     let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
-    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    state
+        .reserve_pending_notes([(channel_set, nullifier)], [1; 32])
+        .unwrap();
+    state
+        .reserve_pending_notes([(NoteSetIndex::Ledger, nullifier)], [2; 32])
+        .unwrap();
     let (signer, _kms) = signer();
     let (resp_tx, response) = oneshot::channel();
     handle(
         WalletMsg::SignTx {
+            handoff: ReservationHandoff::new(),
             tip: Some(tip()),
             tx_builder: builder,
             resp_tx,
@@ -1285,7 +1426,72 @@ async fn failed_signing_does_not_release_an_inscription_step_reservation() {
     .await;
     assert!(response.await.unwrap().is_err());
     assert!(state.is_pending_note(channel_set, &nullifier));
-    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+    assert!(state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+}
+
+#[tokio::test]
+async fn failed_signing_or_proving_keeps_a_funded_builders_reservation() {
+    use lb_core::mantle::transactions::builder::FundingNote;
+
+    for proving in [false, true] {
+        let (builder, channel_set, nullifier) = inscription_with_reserved_input();
+        let funding_nullifier = NoteNullifier(Fr::from(9u64));
+        let builder = builder
+            .extend_funding_inputs(
+                Fr::ONE,
+                [FundingNote {
+                    note: Note::new(100, Fr::ONE, ZkPublicKey::new(Fr::ONE)),
+                    nullifier: funding_nullifier,
+                }],
+            )
+            .unwrap();
+        let updater = updater();
+        let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
+        state
+            .reserve_pending_notes([(channel_set, nullifier)], [1; 32])
+            .unwrap();
+        let prepared = builder.with_reservation_id([1; 32]);
+        state
+            .transfer_reservations(&prepared, [2; 32], true)
+            .unwrap();
+        let funded = prepared.with_transferred_reservations([2; 32]);
+        let (signer, _kms) = signer();
+        if proving {
+            let (resp_tx, response) = oneshot::channel();
+            handle(
+                WalletMsg::ProveFunding {
+                    handoff: ReservationHandoff::new(),
+                    tip: Some(tip()),
+                    tx_builder: funded,
+                    resp_tx,
+                },
+                &mut state,
+                &chain(),
+                &signer,
+                &FuturesUnordered::new(),
+            )
+            .await;
+            assert!(response.await.unwrap().is_err());
+        } else {
+            let (resp_tx, response) = oneshot::channel();
+            handle(
+                WalletMsg::SignTx {
+                    handoff: ReservationHandoff::new(),
+                    tip: Some(tip()),
+                    tx_builder: funded,
+                    resp_tx,
+                },
+                &mut state,
+                &chain(),
+                &signer,
+                &FuturesUnordered::new(),
+            )
+            .await;
+            assert!(response.await.unwrap().is_err());
+        }
+        assert!(state.is_pending_note(channel_set, &nullifier));
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &funding_nullifier));
+    }
 }
 
 #[tokio::test]
@@ -1305,11 +1511,17 @@ async fn failed_funding_proof_does_not_release_an_inscription_step_reservation()
         .unwrap();
     let updater = updater();
     let mut state = wallet_state(&wallet_settings(owner), &[], &updater);
-    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    state
+        .reserve_pending_notes([(channel_set, nullifier)], [1; 32])
+        .unwrap();
+    state
+        .reserve_pending_notes([(NoteSetIndex::Ledger, nullifier)], [2; 32])
+        .unwrap();
     let (signer, _kms) = signer();
     let (resp_tx, response) = oneshot::channel();
     handle(
         WalletMsg::ProveFunding {
+            handoff: ReservationHandoff::new(),
             tip: Some(tip()),
             tx_builder: builder,
             resp_tx,
@@ -1322,7 +1534,7 @@ async fn failed_funding_proof_does_not_release_an_inscription_step_reservation()
     .await;
     assert!(response.await.unwrap().is_err());
     assert!(state.is_pending_note(channel_set, &nullifier));
-    assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
+    assert!(state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
 }
 
 #[tokio::test]
@@ -1340,22 +1552,50 @@ async fn asynchronous_signing_and_proving_failures_preserve_step_reservations() 
     let (signer, kms) = signer();
     drop(kms);
 
-    state.reserve_pending_notes([(channel_set, nullifier), (NoteSetIndex::Ledger, nullifier)]);
+    state
+        .reserve_pending_notes([(channel_set, nullifier)], [1; 32])
+        .unwrap();
+    state
+        .reserve_pending_notes([(NoteSetIndex::Ledger, nullifier)], [2; 32])
+        .unwrap();
+    let ledger_builder = MantleTxBuilder::new()
+        .with_reservation_id([2; 32])
+        .push_op(Op::Transfer(TransferOp::new(
+            [nullifier].into(),
+            [Note::new(1, Fr::ONE, key.to_public_key()).commitment()].into(),
+            Fr::ONE,
+            0,
+        )))
+        .unwrap();
+    let job = state
+        .begin_transaction_job(&ledger_builder, [3; 32])
+        .unwrap();
     let (resp_tx, response) = oneshot::channel();
     let unused = TestWallet::signing(
         signing_job(builder.clone()),
         tip(),
-        builder.note_set_nullifiers_consumed().collect(),
+        job,
+        None,
+        ReservationHandoff::new(),
         &signer,
         resp_tx,
     )
-    .await;
+    .await
+    .deliver();
     assert!(response.await.unwrap().is_err());
-    state.release_pending_notes(unused);
+    let Some(PendingRelease::Transaction(job, delivered, _)) = unused else {
+        panic!("missing cleanup")
+    };
+    state.finish_transaction_job(job, delivered);
     assert!(state.is_pending_note(channel_set, &nullifier));
     assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
 
-    state.reserve_pending_notes([(NoteSetIndex::Ledger, nullifier)]);
+    state
+        .reserve_pending_notes([(NoteSetIndex::Ledger, nullifier)], [2; 32])
+        .unwrap();
+    let job = state
+        .begin_transaction_job(&ledger_builder, [3; 32])
+        .unwrap();
     let witness = step_witness(
         &state.wallet().spend_state(tip()).unwrap(),
         state.wallet().known_notes(),
@@ -1373,13 +1613,19 @@ async fn asynchronous_signing_and_proving_failures_preserve_step_reservations() 
     let unused = TestWallet::funding_proof(
         (builder.clone().build(fork_digest()).unwrap(), Some(witness)),
         tip(),
-        builder.note_set_nullifiers_consumed().collect(),
+        job,
+        None,
+        ReservationHandoff::new(),
         &signer,
         resp_tx,
     )
-    .await;
+    .await
+    .deliver();
     assert!(response.await.unwrap().is_err());
-    state.release_pending_notes(unused);
+    let Some(PendingRelease::Transaction(job, delivered, _)) = unused else {
+        panic!("missing cleanup")
+    };
+    state.finish_transaction_job(job, delivered);
     assert!(state.is_pending_note(channel_set, &nullifier));
     assert!(!state.is_pending_note(NoteSetIndex::Ledger, &nullifier));
 }
@@ -1436,13 +1682,16 @@ async fn failed_channel_step_proof_releases_its_set_aware_reservation() {
             .unwrap();
         parent = id;
     }
-    state.reserve_pending_notes([(NoteSetIndex::Ledger, channel_note.nullifier)]);
+    state
+        .reserve_pending_notes([(NoteSetIndex::Ledger, channel_note.nullifier)], [1; 32])
+        .unwrap();
     let (signer, kms) = signer();
     drop(kms);
     let (resp_tx, mut response) = oneshot::channel();
     let mut signings = FuturesUnordered::new();
     handle(
         WalletMsg::ProveChannelStep {
+            handoff: ReservationHandoff::new(),
             tip: Some(parent),
             request: ChannelStepRequest {
                 channel_id,
@@ -1466,9 +1715,12 @@ async fn failed_channel_step_proof_releases_its_set_aware_reservation() {
         "channel step did not reach proving: {:?}",
         response.try_recv()
     );
-    let unused = signings.next().await.unwrap();
+    let unused = signings.next().await.unwrap().deliver();
     assert!(response.await.unwrap().is_err());
-    state.release_pending_notes(unused);
+    let Some(PendingRelease::Channel(inputs, owner)) = unused else {
+        panic!("missing cleanup")
+    };
+    state.release_pending_notes(inputs, owner);
     assert!(!state.is_pending_note(channel_set, &channel_note.nullifier));
     assert!(state.is_pending_note(NoteSetIndex::Ledger, &channel_note.nullifier));
 }
@@ -1483,30 +1735,175 @@ async fn an_undelivered_transaction_gives_its_reservations_back() {
         signing_job(MantleTxBuilder::new()),
         tip(),
         funded_notes(),
+        None,
+        ReservationHandoff::new(),
         &signer,
         resp_tx,
     )
-    .await;
+    .await
+    .deliver();
 
-    assert_eq!(unused, funded_notes());
+    assert!(
+        matches!(unused, Some(PendingRelease::Transaction(job, false, _)) if job == funded_notes())
+    );
 }
 
 #[tokio::test]
 async fn a_delivered_transaction_keeps_its_reservations() {
     let (signer, _unserved_kms) = signer();
-    let (resp_tx, response) = oneshot::channel();
+    let (resp_tx, mut response) = oneshot::channel();
 
-    let unused = TestWallet::signing(
+    let completion = TestWallet::signing(
         signing_job(MantleTxBuilder::new()),
         tip(),
         funded_notes(),
+        None,
+        ReservationHandoff::new(),
         &signer,
         resp_tx,
     )
     .await;
+    assert!(matches!(response.try_recv(), Err(TryRecvError::Empty)));
+    let unused = completion.deliver();
 
     assert!(response.await.unwrap().is_ok());
-    assert_eq!(unused, vec![]);
+    assert!(
+        matches!(unused, Some(PendingRelease::Transaction(job, true, _)) if job == funded_notes())
+    );
+}
+
+#[tokio::test]
+async fn cancelled_queued_signing_and_proving_preserve_prepared_claims() {
+    use lb_core::mantle::transactions::{GasPrices, tx_list::ops::OpsGasContext};
+
+    for proving in [false, true] {
+        for extra_input in [false, true] {
+            let first = NoteNullifier(Fr::ONE);
+            let second = NoteNullifier(Fr::from(2u64));
+            let mut inputs = vec![first];
+            if extra_input {
+                inputs.push(second);
+            }
+            let builder = MantleTxBuilder::new()
+                .with_reservation_id([1; 32])
+                .push_op(Op::Transfer(TransferOp::new(
+                    inputs.try_into().unwrap(),
+                    [Note::new(1, Fr::ONE, ZkPublicKey::new(Fr::ONE)).commitment()].into(),
+                    Fr::ONE,
+                    0,
+                )))
+                .unwrap();
+            let updater = updater();
+            let fee_key = ZkKey::new(Fr::from(7u64));
+            let fee_note = known_note(&fee_key, 100_000, 1);
+            let mut state = wallet_state(
+                &wallet_settings(fee_key.to_public_key()),
+                &[fee_note],
+                &updater,
+            );
+            state
+                .reserve_pending_notes([(NoteSetIndex::Ledger, first)], [1; 32])
+                .unwrap();
+            let handoff = ReservationHandoff::new();
+            let job = state
+                .begin_transaction_job(&builder, handoff.owner)
+                .unwrap();
+            if extra_input {
+                assert!(handoff.acquired());
+            }
+            let (signer, _kms) = signer();
+            let (completion, response): (_, Box<dyn std::any::Any>) = if proving {
+                let (resp_tx, response) = oneshot::channel();
+                let completion = TestWallet::funding_proof(
+                    (MantleTxBuilder::new().build(fork_digest()).unwrap(), None),
+                    tip(),
+                    job,
+                    extra_input.then_some(handoff.owner),
+                    handoff.clone(),
+                    &signer,
+                    resp_tx,
+                )
+                .await;
+                (completion, Box::new(response))
+            } else {
+                let (resp_tx, response) = oneshot::channel();
+                let completion = TestWallet::signing(
+                    signing_job(MantleTxBuilder::new()),
+                    tip(),
+                    job,
+                    extra_input.then_some(handoff.owner),
+                    handoff.clone(),
+                    &signer,
+                    resp_tx,
+                )
+                .await;
+                (completion, Box::new(response))
+            };
+            let Some(PendingRelease::Transaction(job, true, returned_handoff)) =
+                completion.deliver()
+            else {
+                panic!("successful response was not queued");
+            };
+            state.finish_transaction_handoff(job, true, returned_handoff);
+            assert!(state.validate_funding(&builder).is_err());
+            assert_eq!(handoff.cancel(), extra_input);
+            drop(response);
+            if extra_input {
+                assert!(state.release_reservation(handoff.owner));
+                assert!(!state.is_pending_note(NoteSetIndex::Ledger, &second));
+            }
+            // The original prepared claim can now be transferred by funding.
+            assert!(state.validate_funding(&builder).is_ok());
+            let context = OpsContext {
+                gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1), GAS_PROFILE),
+            };
+            let funded = state
+                .fund_tx(
+                    tip(),
+                    &builder,
+                    fee_key.to_public_key(),
+                    Fr::ONE,
+                    [fee_key.to_public_key()],
+                    &context,
+                    0,
+                )
+                .unwrap();
+            state.transfer_reservations(&funded, [9; 32], true).unwrap();
+            assert!(state.is_pending_note(NoteSetIndex::Ledger, &first));
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelled_queued_result_does_not_undo_an_overlapping_delivered_result() {
+    let note_set = NoteSetIndex::Ledger;
+    let nullifier = NoteNullifier(Fr::ONE);
+    let builder = MantleTxBuilder::new()
+        .with_reservation_id([1; 32])
+        .push_op(Op::Transfer(TransferOp::new(
+            [nullifier].into(),
+            [Note::new(1, Fr::ONE, ZkPublicKey::new(Fr::ONE)).commitment()].into(),
+            Fr::ONE,
+            0,
+        )))
+        .unwrap();
+    let updater = updater();
+    let mut state = wallet_state(&wallet_settings(ZkPublicKey::new(Fr::ONE)), &[], &updater);
+    state
+        .reserve_pending_notes([(note_set, nullifier)], [1; 32])
+        .unwrap();
+    let first = ReservationHandoff::new();
+    let second = ReservationHandoff::new();
+    let job1 = state.begin_transaction_job(&builder, first.owner).unwrap();
+    let job2 = state.begin_transaction_job(&builder, second.owner).unwrap();
+    state.finish_transaction_handoff(job1, true, first.clone());
+    state.finish_transaction_handoff(job2, true, second.clone());
+    first.complete();
+    second.cancel();
+    assert!(state.validate_funding(&builder).is_err());
+    assert!(state.is_pending_note(note_set, &nullifier));
+    assert!(!first.cancel());
+    assert!(state.validate_funding(&builder).is_err());
 }
 
 /// The genesis parameters of a test chain: the supply cap and the genesis gas
@@ -1714,10 +2111,11 @@ fn inscription() -> Op {
 
 fn sign_message() -> (
     WalletMsg,
-    oneshot::Receiver<Result<TipResponse<TestTx>, WalletServiceError>>,
+    oneshot::Receiver<Result<TipResponse<SignedTransaction>, WalletServiceError>>,
 ) {
     let (resp_tx, resp_rx) = oneshot::channel();
     let msg = WalletMsg::SignTx {
+        handoff: ReservationHandoff::new(),
         tip: Some(tip()),
         tx_builder: MantleTxBuilder::new().push_op(inscription()).unwrap(),
         resp_tx,
@@ -1744,6 +2142,6 @@ fn unsignable_job() -> TxSigningRequest {
 }
 
 /// The note funding a signing's transaction.
-fn funded_notes() -> Vec<(NoteSetIndex, NoteNullifier)> {
-    vec![(NoteSetIndex::Ledger, NoteNullifier(Fr::ONE))]
+fn funded_notes() -> Vec<((NoteSetIndex, NoteNullifier), [u8; 32])> {
+    vec![((NoteSetIndex::Ledger, NoteNullifier(Fr::ONE)), [1; 32])]
 }

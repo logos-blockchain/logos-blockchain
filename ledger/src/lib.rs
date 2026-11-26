@@ -21,7 +21,7 @@ pub use cryptarchia::EpochState;
 use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use gas_and_fees::GasAndFees;
 pub use intent::{Intent, IntentStatus};
-#[cfg(feature = "test-utils")]
+#[cfg(any(test, feature = "test-utils"))]
 use lb_core::mantle::ops::channel::withdraw::PendingWithdrawals;
 use lb_core::{
     block::BlockNumber,

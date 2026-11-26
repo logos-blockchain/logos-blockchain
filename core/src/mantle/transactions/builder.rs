@@ -1,7 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
-    slice,
+    fmt, slice,
 };
 
 use lb_groth16::{AdditiveGroup as _, Fr, serde::serde_fr};
@@ -108,7 +108,7 @@ impl From<u64> for PriorityFee {
 /// [`Self::return_change`]) at the moment they run. This keeps the builder
 /// serializable, so a partially built tx can be handed to a wallet (e.g. over
 /// HTTP) to be funded against a freshly fetched context.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MantleTxBuilder {
     // The spec's transaction shape, without the fork digest it gets when built.
     #[serde(rename = "mantle_tx", with = "unbuilt_tx")]
@@ -122,6 +122,29 @@ pub struct MantleTxBuilder {
     openings: BTreeMap<usize, ZkTransferOpening>,
     // Maps a Proof to its Op by the Op Index
     channel_multi_sig_proofs: HashMap<usize, ChannelMultiSigProof>,
+    // Local capabilities for pending inputs; never included in built Ops.
+    #[serde(default)]
+    reservation_id: Option<[u8; 32]>,
+    #[serde(default)]
+    additional_reservation_ids: Vec<[u8; 32]>,
+}
+
+impl fmt::Debug for MantleTxBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MantleTxBuilder")
+            .field("ops", &self.ops)
+            .field("funding_inputs", &self.funding_inputs)
+            .field("funding_outputs", &self.funding_outputs)
+            .field("funding_root", &self.funding_root)
+            .field("openings", &self.openings)
+            .field("channel_multi_sig_proofs", &self.channel_multi_sig_proofs)
+            .field("has_reservation_id", &self.reservation_id.is_some())
+            .field(
+                "additional_reservation_count",
+                &self.additional_reservation_ids.len(),
+            )
+            .finish()
+    }
 }
 
 impl Default for MantleTxBuilder {
@@ -141,7 +164,45 @@ impl MantleTxBuilder {
             funding_root: Fr::ZERO,
             openings: BTreeMap::new(),
             channel_multi_sig_proofs: HashMap::new(),
+            reservation_id: None,
+            additional_reservation_ids: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub const fn reservation_id(&self) -> Option<[u8; 32]> {
+        self.reservation_id
+    }
+
+    /// Attach a capability issued by the wallet that will process this builder.
+    #[must_use]
+    pub const fn with_reservation_id(mut self, id: [u8; 32]) -> Self {
+        self.reservation_id = Some(id);
+        self
+    }
+
+    /// Attach a capability returned by a step prepared by the wallet that
+    /// will process this builder. Foreign wallets manage their own claims.
+    #[must_use]
+    pub fn with_additional_reservation_id(mut self, id: [u8; 32]) -> Self {
+        if !self.additional_reservation_ids.contains(&id) {
+            self.additional_reservation_ids.push(id);
+        }
+        self
+    }
+
+    pub fn reservation_ids(&self) -> impl Iterator<Item = [u8; 32]> + '_ {
+        self.reservation_id
+            .into_iter()
+            .chain(self.additional_reservation_ids.iter().copied())
+    }
+
+    /// Replace superseded claims after an atomic reservation transfer.
+    #[must_use]
+    pub fn with_transferred_reservations(mut self, id: [u8; 32]) -> Self {
+        self.reservation_id = Some(id);
+        self.additional_reservation_ids.clear();
+        self
     }
 
     pub fn push_op(self, op: Op) -> Result<Self, TxBuilderError> {
@@ -386,6 +447,29 @@ impl MantleTxBuilder {
             .filter_map(move |(set, nullifier)| (set == note_set).then_some(nullifier))
     }
 
+    /// Inputs for wallet reservation coordination, including channel steps.
+    pub fn reservation_inputs(&self) -> impl Iterator<Item = (NoteSetIndex, NoteNullifier)> {
+        self.note_set_nullifiers_consumed().chain(
+            self.ops
+                .iter()
+                .filter_map(|op| {
+                    if let Op::ChannelInscribe(inscription) = op {
+                        channel_note_set(inscription.channel_id).map(|set| (set, inscription))
+                    } else {
+                        None
+                    }
+                })
+                .flat_map(|(set, inscription)| {
+                    inscription.steps().flat_map(move |step| {
+                        step.inputs()
+                            .iter()
+                            .copied()
+                            .map(move |nullifier| (set, nullifier))
+                    })
+                }),
+        )
+    }
+
     #[must_use]
     pub fn funding_inputs(&self) -> &[FundingNote] {
         &self.funding_inputs
@@ -554,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn inscription_steps_are_not_transaction_reservations() {
+    fn inscription_steps_are_included_in_reservation_inputs() {
         let channel = ChannelId::from([5; 32]);
         let mut inscription = InscriptionOp::sample_with_step();
         inscription.channel_id = channel;
@@ -566,6 +650,13 @@ mod tests {
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(inscription))
             .unwrap();
+        assert_eq!(
+            builder.reservation_inputs().collect::<Vec<_>>(),
+            step_inputs
+                .into_iter()
+                .map(|input| (NoteSetIndex::Channel(channel), input))
+                .collect::<Vec<_>>()
+        );
         assert!(builder.note_set_nullifiers_consumed().next().is_none());
         assert!(builder.nullifiers_consumed().next().is_none());
         assert!(
@@ -595,7 +686,9 @@ mod tests {
             .extend_funding_inputs(Fr::from(5u64), [funding_note(50, 1, 3)])
             .unwrap()
             .add_ledger_output(Note::new(40, Fr::from(2u64), ZkPublicKey::zero()))
-            .unwrap();
+            .unwrap()
+            .with_reservation_id([239; 32])
+            .with_additional_reservation_id([238; 32]);
 
         let json = serde_json::to_string(&builder).expect("builder should serialize");
         let restored: MantleTxBuilder =
@@ -605,7 +698,22 @@ mod tests {
         assert_eq!(restored.funding_inputs(), builder.funding_inputs());
         assert_eq!(restored.openings(), builder.openings());
         assert_eq!(
+            restored.reservation_ids().collect::<Vec<_>>(),
+            vec![[239; 32], [238; 32]]
+        );
+        let debug = format!("{builder:?}");
+        assert!(!debug.contains("239, 239"));
+        assert!(!debug.contains("238, 238"));
+        assert_eq!(
             restored.build(FORK_DIGEST).unwrap(),
+            builder.clone().build(FORK_DIGEST).unwrap()
+        );
+        assert_eq!(
+            builder
+                .clone()
+                .with_transferred_reservations([3; 32])
+                .build(FORK_DIGEST)
+                .unwrap(),
             builder.build(FORK_DIGEST).unwrap()
         );
     }

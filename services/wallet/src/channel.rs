@@ -1,3 +1,5 @@
+use std::fmt;
+
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -54,19 +56,38 @@ pub struct ProgramPayment {
 
 /// A step with its proof and the openings of the notes it creates, the
 /// change last.
-#[derive(Debug)]
 pub struct ChannelStep {
     pub step: Step,
     pub proof: ZkTransferProof,
     pub outputs: Vec<Note>,
+    pub reservation_id: [u8; 32],
+}
+
+impl fmt::Debug for ChannelStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChannelStep")
+            .field("step", &self.step)
+            .field("proof", &self.proof)
+            .field("outputs", &self.outputs)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A withdrawal of channel notes of the wallet, each released as a ledger
 /// note of the same value and key.
-#[derive(Debug)]
 pub struct ChannelWithdrawal {
     pub op: ChannelWithdrawOp,
     pub opening: ZkTransferOpening,
+    pub reservation_id: [u8; 32],
+}
+
+impl fmt::Debug for ChannelWithdrawal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChannelWithdrawal")
+            .field("op", &self.op)
+            .field("opening", &self.opening)
+            .finish_non_exhaustive()
+    }
 }
 
 // A user step, or a program deposit, spending the channel notes of the
@@ -154,6 +175,7 @@ pub fn build_withdrawal(
     channel_id: ChannelId,
     notes: &[NoteCommitment],
     state: &ServiceState<'_>,
+    owner: [u8; 32],
 ) -> Result<ChannelWithdrawal, WalletServiceError> {
     let note_set = channel_note_set(channel_id)
         .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
@@ -192,6 +214,7 @@ pub fn build_withdrawal(
     };
     Ok(ChannelWithdrawal {
         op,
+        reservation_id: owner,
         opening: ZkTransferOpening {
             inputs: inputs.iter().map(|owned| owned.note).collect(),
             outputs,

@@ -1925,13 +1925,28 @@ where
         claims,
         &nullifiers,
     )?;
-    let signed_tx = wallet_api.sign_tx(Some(tip), tx_builder).await?.response;
+    let reservation_builder = tx_builder.clone();
+    let signed = wallet_api.sign_tx(Some(tip), tx_builder).await?.response;
+    let reservation_builder = match signed.reservation_id {
+        Some(id) => reservation_builder.with_additional_reservation_id(id),
+        None => reservation_builder,
+    };
+    let mut reservation_guard = wallet_api.guard_reservations(&reservation_builder);
     // The wallet adopts the change once its commitment is appended; a signing
     // failure leaves no opening of a note that never lands.
     for change in change_notes {
-        wallet_api.import_note(change, NoteSetIndex::Ledger).await?;
+        if let Err(err) = wallet_api.import_note(change, NoteSetIndex::Ledger).await {
+            wallet_api
+                .release_pending_notes(
+                    &reservation_builder,
+                    reservation_builder.reservation_inputs().collect(),
+                )
+                .await;
+            return Err(err.into());
+        }
     }
-    Ok(signed_tx)
+    reservation_guard.disarm();
+    Ok(signed.transaction)
 }
 
 /// How many of `tickets` claims a transaction takes: as many as `reward_pool`

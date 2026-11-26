@@ -29,8 +29,6 @@ use lb_core::{
         Note, Op, TxHash,
         channel::{ChannelState, channel_note_set},
         ledger::verification_mode::StandardMode,
-        note_set::NoteSetIndex,
-        notes::NoteNullifier,
         ops::channel::{ChannelId, deposit::DepositOp},
         traits::Hashable,
         transactions::{
@@ -75,7 +73,7 @@ use lb_tx_service::{
 use lb_version::BuildVersionInfo;
 use lb_wallet_service::{
     ChannelStepRequest, ProgramPayment,
-    api::{WalletApi, WalletServiceData, added_nullifiers},
+    api::{WalletApi, WalletServiceData},
 };
 use overwatch::{
     overwatch::handle::OverwatchHandle,
@@ -117,13 +115,12 @@ fn validate_max_tx_fee(
 }
 
 // Rejects a funded transaction whose fee exceeds `max_tx_fee`, releasing
-// `reserved`, the notes this request reserved for it. A funding capped at
+// the notes this request owns. A funding capped at
 // `max_tx_fee` exceeds it only when its mandatory fee does.
 async fn check_funded_tx_fee<WalletService, RuntimeServiceId>(
     wallet: &WalletApi<WalletService, RuntimeServiceId>,
     funded: &MantleTxBuilder,
     max_tx_fee: lb_core::mantle::gas::GasCost,
-    reserved: Vec<(NoteSetIndex, NoteNullifier)>,
 ) -> Result<(), DynError>
 where
     WalletService: WalletServiceData,
@@ -134,7 +131,9 @@ where
         .map_err(DynError::from)
         .and_then(|tx_fee| validate_max_tx_fee(tx_fee, max_tx_fee));
     if checked.is_err() {
-        wallet.release_pending_notes(reserved).await;
+        wallet
+            .release_pending_notes(funded, funded.reservation_inputs().collect())
+            .await;
     }
     checked
 }
@@ -1145,6 +1144,7 @@ where
             tip,
             step: response.step,
             proof: response.proof,
+            reservation_id: response.reservation_id,
             outputs: response.outputs,
         })
     })
@@ -1197,6 +1197,7 @@ where
                 req.funding_public_keys.clone(),
             )
             .await?;
+        let mut split_guard = wallet.guard_reservations(&split_builder);
         // The wallet holds the notes of the split until the transaction spends
         // them, so a request that fails before funding releases them.
         let deposit = async {
@@ -1239,7 +1240,9 @@ where
             Ok(deposit) => deposit,
             Err(error) => {
                 let split_notes = split_builder.note_set_nullifiers_consumed().collect();
-                wallet.release_pending_notes(split_notes).await;
+                wallet
+                    .release_pending_notes(&split_builder, split_notes)
+                    .await;
                 return Err(error);
             }
         };
@@ -1260,17 +1263,21 @@ where
             )
             .await?;
 
-        let reserved = added_nullifiers(&tx_builder, &funded_tx_builder)
-            .into_iter()
-            .chain(split_builder.note_set_nullifiers_consumed())
-            .collect();
-        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
+        let mut funded_guard = wallet.guard_reservations(&funded_tx_builder);
+        split_guard.disarm();
+        let mut reservation_ids = funded_tx_builder.reservation_ids().collect::<Vec<_>>();
 
-        let transaction = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee).await?;
+
+        let signed = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        reservation_ids.extend(signed.reservation_id);
+        let transaction = signed.transaction;
+        funded_guard.disarm();
         Ok::<_, DynError>(ChannelPrepareDepositResponseBody {
             hash: transaction.hash(),
             transaction,
             holder_note,
+            reservation_ids,
         })
     })
 }
@@ -1334,7 +1341,9 @@ where
             .channel_withdrawal(req.tip, req.channel_id, req.notes)
             .await?;
         let outputs = withdrawal.opening.outputs.clone();
-        let tx_builder = MantleTxBuilder::new()
+        let reserved = MantleTxBuilder::new().with_reservation_id(withdrawal.reservation_id);
+        let mut withdrawal_guard = wallet.guard_reservations(&reserved);
+        let tx_builder = reserved
             .push_op_with_opening(Op::ChannelWithdraw(withdrawal.op), withdrawal.opening)?;
         // The withdrawal names the channel root of this tip. A funding that
         // fails releases the notes of `tx_builder` in the wallet.
@@ -1351,12 +1360,19 @@ where
                 Some(req.max_tx_fee),
             )
             .await?;
-        let reserved = added_nullifiers(&tx_builder, &funded_tx_builder);
-        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
+        let mut funded_guard = wallet.guard_reservations(&funded_tx_builder);
+        withdrawal_guard.disarm();
+        check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee).await?;
 
-        let signed_tx = wallet.sign_tx(Some(tip), funded_tx_builder).await?.response;
+        let signed_tx = wallet
+            .sign_tx(Some(tip), funded_tx_builder)
+            .await?
+            .response
+            .transaction;
         let tx_hash = signed_tx.hash();
 
+        // Submission can succeed even if its response is lost.
+        funded_guard.disarm();
         mempool::add_tx::<
             Libp2pNetworkBackend,
             MempoolNetworkAdapter<ValidatedTx, <ValidatedTx as Hashable>::Hash, RuntimeServiceId>,
@@ -2157,7 +2173,9 @@ where
 pub mod wallet {
     use lb_http_api_common::bodies::wallet::{
         aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
-        fund::{WalletFundRequestBody, WalletFundResponseBody},
+        fund::{
+            WalletFundRequestBody, WalletFundResponseBody, WalletReleaseReservationRequestBody,
+        },
         import::WalletImportNoteRequestBody,
         sign::{WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody},
     };
@@ -2288,7 +2306,7 @@ pub mod wallet {
                 get_relay::<WalletService, _>(&handle).await?,
             );
             let lb_wallet_service::TipResponse {
-                response: (transaction, recipient_note),
+                response: (transaction, recipient_note, reservation_ids),
                 ..
             } = wallet
                 .transfer_funds(
@@ -2305,6 +2323,7 @@ pub mod wallet {
                 hash: transaction.hash(),
                 transaction,
                 recipient_note,
+                reservation_ids,
             })
         })
     }
@@ -2431,21 +2450,51 @@ pub mod wallet {
                 )
                 .await?;
 
-            // The inputs of the caller's own ops may be reserved by another
-            // request, so only the notes the funding added are released.
-            let reserved = added_nullifiers(&req.tx_builder, &funded_tx_builder);
-            check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee, reserved).await?;
+            let mut reservation_guard = wallet.guard_reservations(&funded_tx_builder);
 
-            let (funded_tx, transfer_proof) = wallet
+            check_funded_tx_fee(&wallet, &funded_tx_builder, req.max_tx_fee).await?;
+
+            let mut reservation_ids = funded_tx_builder.reservation_ids().collect::<Vec<_>>();
+            let proven = wallet
                 .prove_funding(Some(tip), funded_tx_builder)
                 .await?
                 .response;
+            let funded_tx = proven.ops;
+            let transfer_proof = proven.proof;
+            reservation_ids.extend(proven.reservation_id);
+
+            reservation_guard.disarm();
 
             Ok::<_, DynError>(WalletFundResponseBody {
                 tip,
                 funded_tx,
                 transfer_proof,
+                reservation_ids,
             })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::RELEASE_RESERVATION,
+        responses(
+            (status = 200, description = "Whether the capability owned a live reservation"),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
+    )]
+    pub async fn release_reservation<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletReleaseReservationRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+            Ok::<_, DynError>(wallet.release_reservation(req.reservation_id).await?)
         })
     }
 

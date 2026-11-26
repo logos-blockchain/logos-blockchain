@@ -10,6 +10,7 @@ use lb_core::{
         Note, Op, OpProof, SignedOps,
         batch::test_utils::batch_verify,
         gas::GasCost,
+        note_set::NoteSetIndex,
         notes::NoteCommitment,
         ops::{
             ChannelInscribeProof, OpRef, StepProof,
@@ -35,6 +36,7 @@ use lb_http_api_common::{
         },
         wallet::{
             fund::{WalletFundRequestBody, WalletFundResponseBody},
+            import::WalletImportNoteRequestBody,
             transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
     },
@@ -154,6 +156,7 @@ async fn channel_deposit() {
         hash: deposit_tx_hash,
         transaction,
         holder_note,
+        ..
     } = response
         .json::<ChannelPrepareDepositResponseBody>()
         .await
@@ -533,6 +536,7 @@ async fn channel_note_round_trip() {
         step: first_step,
         proof: first_proof,
         outputs: first_outputs,
+        reservation_id: first_reservation_id,
         ..
     } = channel_user_step(
         &validator.client,
@@ -557,7 +561,8 @@ async fn channel_note_round_trip() {
     let ChannelStepResponseBody {
         step,
         proof,
-        outputs,
+        outputs: second_outputs,
+        reservation_id: second_reservation_id,
         ..
     } = channel_user_step(
         &validator.client,
@@ -573,12 +578,57 @@ async fn channel_note_round_trip() {
         "the second step should spend both notes of the first"
     );
     assert_eq!(
-        outputs.iter().map(|note| note.value).collect::<Vec<_>>(),
+        second_outputs
+            .iter()
+            .map(|note| note.value)
+            .collect::<Vec<_>>(),
         vec![paid, deposit_amount - paid]
     );
 
+    // A different wallet prepares a third step. Its capability remains local
+    // to that wallet; the sequencer only supplies its own two capabilities.
+    let foreign = &nodes[1];
+    for note in &second_outputs {
+        CommonHttpClient::new(None)
+            .import_note(
+                api_url(&foreign.client, ""),
+                WalletImportNoteRequestBody {
+                    note: *note,
+                    note_set: NoteSetIndex::Channel(channel_id),
+                },
+            )
+            .await
+            .expect("foreign wallet should register the opening");
+    }
+    let appended = first_outputs
+        .iter()
+        .chain(&second_outputs)
+        .map(Note::commitment)
+        .collect();
+    let ChannelStepResponseBody {
+        step: foreign_step,
+        proof: foreign_proof,
+        outputs,
+        reservation_id: foreign_reservation_id,
+        ..
+    } = channel_user_step(&foreign.client, channel_id, funding_pk, appended, paid).await;
+    for note in &outputs {
+        CommonHttpClient::new(None)
+            .import_note(
+                api_url(&validator.client, ""),
+                WalletImportNoteRequestBody {
+                    note: *note,
+                    note_set: NoteSetIndex::Channel(channel_id),
+                },
+            )
+            .await
+            .expect("withdrawing wallet should register the opening");
+    }
+
     let signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let tx_builder = MantleTxBuilder::new()
+        .with_reservation_id(first_reservation_id)
+        .with_additional_reservation_id(second_reservation_id)
         .push_op(Op::ChannelInscribe(InscriptionOp {
             channel_id,
             inscription: Inscription::new_unchecked(b"zone block".to_vec()),
@@ -587,25 +637,77 @@ async fn channel_note_round_trip() {
             mini_blocks: MiniBlocks::from([
                 MiniBlock::try_from(vec![first_step]).expect("one step fits a mini-block"),
                 MiniBlock::try_from(vec![step]).expect("one step fits a mini-block"),
+                MiniBlock::try_from(vec![foreign_step]).expect("one step fits a mini-block"),
             ]),
         }))
         .expect("inscription op should fit");
+    let request = |tx_builder| WalletFundRequestBody {
+        tip: None,
+        tx_builder,
+        change_public_key: funding_pk,
+        funding_public_keys: vec![funding_pk],
+        max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
+        priority_fee_percent: 0,
+    };
+    assert!(
+        validator
+            .client
+            .fund_tx(request(
+                tx_builder
+                    .clone()
+                    .with_additional_reservation_id(foreign_reservation_id)
+            ))
+            .await
+            .is_err()
+    );
+    assert!(
+        validator
+            .client
+            .fund_tx(request(
+                tx_builder.clone().with_additional_reservation_id([255; 32])
+            ))
+            .await
+            .is_err()
+    );
+    assert!(
+        !validator
+            .client
+            .release_wallet_reservation(foreign_reservation_id)
+            .await
+            .unwrap()
+    );
     let WalletFundResponseBody {
         funded_tx: ops,
         transfer_proof,
+        reservation_ids,
         ..
     } = validator
         .client
-        .fund_tx(WalletFundRequestBody {
-            tip: None,
-            tx_builder,
-            change_public_key: funding_pk,
-            funding_public_keys: vec![funding_pk],
-            max_tx_fee: GasCost::new(MAX_CHANNEL_TX_FEE),
-            priority_fee_percent: 0,
-        })
+        .fund_tx(request(tx_builder))
         .await
         .expect("inscription should be funded");
+    assert_eq!(reservation_ids.len(), 1);
+    assert!(
+        foreign
+            .client
+            .release_wallet_reservation(foreign_reservation_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !validator
+            .client
+            .release_wallet_reservation(first_reservation_id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !validator
+            .client
+            .release_wallet_reservation(second_reservation_id)
+            .await
+            .unwrap()
+    );
     let tx_hash = ops.hash();
     let op_proofs = OpProofs::from([
         OpProof::ChannelInscribe(ChannelInscribeProof::new(
@@ -613,6 +715,7 @@ async fn channel_note_round_trip() {
             vec![
                 StepProof::ZkTransfer(first_proof),
                 StepProof::ZkTransfer(proof),
+                StepProof::ZkTransfer(foreign_proof),
             ],
         )),
         transfer_proof.expect("funding at non-zero gas prices should add a transfer"),
@@ -624,6 +727,20 @@ async fn channel_note_round_trip() {
         .await
         .expect("inscription with a user step should be submitted");
     wait_for_tx_inclusion(&mut block_stream, tx_hash, "user step inscription").await;
+    assert!(
+        validator
+            .client
+            .release_wallet_reservation(reservation_ids[0])
+            .await
+            .unwrap()
+    );
+    assert!(
+        !validator
+            .client
+            .release_wallet_reservation(reservation_ids[0])
+            .await
+            .unwrap()
+    );
 
     // The paid note is withdrawn once the wallet adopted it and its block is
     // deep enough.

@@ -295,6 +295,18 @@ impl NodeHttpClient {
         .await
     }
 
+    pub async fn release_wallet_reservation(
+        &self,
+        reservation_id: [u8; 32],
+    ) -> Result<bool, Error> {
+        self.with_timeout(
+            "Release wallet reservation request",
+            self.http_client
+                .release_wallet_reservation(self.base_url.clone(), reservation_id),
+        )
+        .await
+    }
+
     pub async fn channel_step(
         &self,
         body: ChannelStepRequestBody,

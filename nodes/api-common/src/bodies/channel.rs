@@ -43,6 +43,9 @@ pub struct ChannelDepositRequestBody {
 pub struct ChannelPrepareDepositResponseBody<Tx = SignedOps<Unverified, StandardMode>> {
     pub hash: TxHash,
     pub transaction: Tx,
+    /// Capabilities for abandoning this prepared deposit's reservations.
+    #[serde(default)]
+    pub reservation_ids: Vec<[u8; 32]>,
     /// The note paid to the holder in the channel. A holder whose wallet is not
     /// this node's imports it to withdraw it.
     pub holder_note: Note,
@@ -115,6 +118,11 @@ pub struct ChannelStepResponseBody {
     pub tip: HeaderId,
     pub step: Step,
     pub proof: ZkTransferProof,
+    /// A wallet-local capability. Attach it only when the builder will be
+    /// funded, signed, or proven by the wallet that issued it. A sequencer
+    /// using another wallet includes the step without this capability; the
+    /// issuing wallet continues to manage its own reservation.
+    pub reservation_id: [u8; 32],
     /// The openings of the notes the step creates, the change last. A payee
     /// whose wallet is not this node's imports its note to spend it.
     pub outputs: Vec<Note>,
