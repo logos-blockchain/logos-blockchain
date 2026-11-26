@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use lb_log_targets::utils;
-use log::error;
+use log::{debug, error};
 use overwatch::{
     overwatch::OverwatchHandle,
     services::state::{ServiceState, StateOperator},
@@ -59,9 +59,10 @@ where
     }
 
     async fn run(&mut self, state: Self::State) {
-        let save_result = self.recovery_backend.save_state(state).await;
-        if let Err(error) = save_result {
-            error!(target: LOG_TARGET, "{error}");
+        match self.recovery_backend.save_state(state).await {
+            Ok(()) => {}
+            Err(error @ RecoveryError::NotRunning(_)) => debug!(target: LOG_TARGET, "{error}"),
+            Err(error) => error!(target: LOG_TARGET, "{error}"),
         }
     }
 }

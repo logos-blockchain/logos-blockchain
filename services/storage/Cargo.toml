@@ -32,6 +32,7 @@ tracing               = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio    = { features = ["test-util"], workspace = true }
 
 [features]
 tokio-task-names = ["lb-utils/tokio-task-names"]
