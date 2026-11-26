@@ -125,6 +125,7 @@ time:
       timeout: 5s
       listening_interface: 0.0.0.0
     update_interval: 15s
+    max_offset: 30s
 sdp:
   declaration: null
   wallet:

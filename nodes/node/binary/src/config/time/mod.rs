@@ -33,6 +33,7 @@ impl ServiceConfig {
                 },
                 ntp_server: self.user.backend.server,
                 update_interval: self.user.backend.update_interval,
+                max_offset: self.user.backend.max_offset,
             },
             era_schedule: eras.map(|era| era_settings(era.parameters)),
         }

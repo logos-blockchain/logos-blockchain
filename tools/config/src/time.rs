@@ -47,6 +47,7 @@ fn default_public_time_config() -> GeneralTimeConfig {
             },
             server: PUBLIC_NTP_SERVER.to_owned(),
             update_interval: PUBLIC_NTP_UPDATE_INTERVAL,
+            ..Default::default()
         },
     }
 }
@@ -80,6 +81,7 @@ fn local_host_ntp_time_config() -> GeneralTimeConfig {
             },
             server: LOCAL_NTP_SERVER.to_owned(),
             update_interval: LOCAL_NTP_UPDATE_INTERVAL,
+            ..Default::default()
         },
     }
 }
