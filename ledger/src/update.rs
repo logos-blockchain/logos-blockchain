@@ -36,6 +36,7 @@ impl<Id> PreparedUpdate<Id> {
 
     /// Creates a [`VerifiedUpdate`] by skipping batch proof verification.
     /// This must be used only in trusted paths.
+    // TODO: Restrict this to trusted callers.
     #[must_use]
     pub fn trust_batch_proofs(self) -> VerifiedUpdate<Id> {
         let (update, _deferred_proofs) = self.into_parts();
