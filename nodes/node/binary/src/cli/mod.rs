@@ -302,6 +302,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     apply_default_log_filter(&mut user_config.tracing);
 
     let deployment_settings = match deployment_args.custom_deployment_path {
+        None if deployment_args.testnet => DeploymentSettings::testnet(),
         None => DeploymentSettings::default(),
         Some(path) => deserialize_value_at_path::<DeploymentSettings>(&path, OnUnknownKeys::Fail)?,
     };

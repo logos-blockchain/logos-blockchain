@@ -38,7 +38,11 @@ pub fn tx_from_mock_message(message: &MockMessage) -> Option<Ops> {
         return None;
     }
     let bytes = hex::decode(message.payload()).ok()?;
-    let (rest, tx) = Ops::decode(&bytes, &u32::MAX).ok()?;
+    let (rest, tx) = Ops::decode(
+        &bytes,
+        &lb_core::mantle::transactions::TxDecodeContext::UNBOUNDED,
+    )
+    .ok()?;
     rest.is_empty().then_some(tx)
 }
 

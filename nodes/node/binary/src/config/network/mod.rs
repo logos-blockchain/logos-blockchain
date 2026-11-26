@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use lb_core::{self, header::HeaderId};
 use lb_cryptarchia_engine::time::EraSchedule;
 use lb_libp2p::{
     ChainSyncSettings, IdentifySettings, KademliaSettings, SwarmConfig, config::CachingSettings,
@@ -12,10 +11,7 @@ use lb_network_service::{
 };
 use libp2p::gossipsub::{IdentTopic, TopicHash};
 
-use crate::config::{
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-    network::serde::Config,
-};
+use crate::config::{deployment::EraDefinition, network::serde::Config};
 
 pub mod serde;
 
@@ -32,10 +28,9 @@ impl ServiceConfig {
     #[must_use]
     pub fn into_network_service_settings(
         self,
-        genesis_id: HeaderId,
+        chain: &ProtocolScope,
         eras: &EraSchedule<EraDefinition>,
     ) -> NetworkConfig<Libp2pConfig> {
-        let chain = ProtocolScope::Chain(genesis_id);
         let user = self.user;
         NetworkConfig {
             backend: Libp2pConfig {
@@ -98,7 +93,7 @@ impl ServiceConfig {
                     connection_limits_config: user.backend.swarm.connection_limits.into(),
                 },
                 era_schedule: eras.map(|era| {
-                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    let parameters = era.parameters.ruleset.parameters();
                     let fork = ProtocolScope::Fork(era.parameters.fork_digest);
                     Libp2pEraConfig {
                         fork_digest: era.parameters.fork_digest,

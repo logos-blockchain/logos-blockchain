@@ -13,10 +13,7 @@ use lb_tx_service::{
 
 use crate::{
     ValidatedTx,
-    config::{
-        deployment::{EraDefinition, era::ruleset::EraRuleset},
-        mempool::serde::Config,
-    },
+    config::{deployment::EraDefinition, mempool::serde::Config},
 };
 
 pub mod serde;
@@ -41,7 +38,7 @@ impl ServiceConfig {
             network_adapter: Libp2pNetworkAdapterSettings {
                 id: ValidatedTx::hash,
                 era_schedule: eras.map(|era| {
-                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    let parameters = era.parameters.ruleset.parameters();
                     Libp2pNetworkAdapterEraSettings {
                         topic: ProtocolScope::Fork(era.parameters.fork_digest)
                             .to_string_with_name("mempool"),
@@ -53,7 +50,7 @@ impl ServiceConfig {
             pool: MempoolSettings {
                 tx_ttl: self.user.tx_ttl,
                 pow_claim: Some(eras.map(|era| {
-                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    let parameters = era.parameters.ruleset.parameters();
                     PowClaimEvictionSettings {
                         slot_window: parameters.cryptarchia.pow_config.reward.slot_window,
                     }
@@ -64,7 +61,7 @@ impl ServiceConfig {
                     epoch_length: era.parameters.epoch_length(),
                 })),
                 admission: eras.map(|era| {
-                    let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                    let parameters = era.parameters.ruleset.parameters();
                     AdmissionLimits {
                         max_transaction_size: parameters.cryptarchia.max_transactions_size as usize,
                         max_op_data_size: parameters.cryptarchia.max_op_data_size() as usize,

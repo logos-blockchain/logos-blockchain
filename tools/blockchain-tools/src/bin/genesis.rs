@@ -383,7 +383,7 @@ fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
 
 /// Load a genesis template, and assemble from it the deployment config the
 /// ceremony completes: the template's eras, each keyed by the epoch it starts
-/// at and tagged with its ruleset (`!V1`), become its `eras`.
+/// at and tagged with its ruleset (`!V2`), become its `eras`.
 ///
 /// If `path` is `None`, returns the default deployment config, whose genesis
 /// block the ceremony replaces.

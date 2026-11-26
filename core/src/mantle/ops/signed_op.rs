@@ -264,6 +264,7 @@ impl SignedOp<Preverified, StandardMode> {
                         Err(error) => return Err(map_verify_failure((op, error))),
                     };
                 let context = SDPDeclareVerificationContext {
+                    era: helper.sdp_era(),
                     utxo_tree: helper.get_utxos(),
                     channels: helper.get_channels(),
                     service_notes: helper.get_service_notes(),
@@ -277,11 +278,11 @@ impl SignedOp<Preverified, StandardMode> {
                     .map_err(map_verify_failure)
             }
             Self::SDPWithdraw(op) => {
-                let declaration = match helper.get_declaration_by_id(&op.operation().declaration_id)
-                {
-                    Ok(declaration) => declaration,
-                    Err(error) => return Err(map_verify_failure((op, error))),
-                };
+                let declaration =
+                    match helper.get_declaration_by_id(&op.operation().declaration_id()) {
+                        Ok(declaration) => declaration,
+                        Err(error) => return Err(map_verify_failure((op, error))),
+                    };
                 let context = SDPWithdrawValidationContext {
                     declaration,
                     epoch: helper.get_epoch(),
@@ -487,7 +488,7 @@ mod tests {
     #[test]
     fn sdp_withdraw_with_unknown_declaration_fails_during_signed_op_verification() {
         let declaration_id = DeclarationId([0xA5; 32]);
-        let operation = SDPWithdrawOp {
+        let operation = SDPWithdrawOp::Master {
             declaration_id,
             nonce: Nonce::new(Epoch::from(0), 1),
         };

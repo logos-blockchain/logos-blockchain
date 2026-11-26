@@ -6,10 +6,10 @@ mod uncle;
 use core::fmt::Debug;
 
 use lb_binary_codec::{
-    bincode::SerializeOp as _,
+    bincode::{DeserializeOp as _, SerializeOp as _},
     canonical::{BinaryDecode, BinaryEncode, DecodeError},
 };
-use lb_cryptarchia_engine::Slot;
+use lb_cryptarchia_engine::{EraSchedule, Slot};
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
 use lb_utils::bounded::{BoundedError, UpperRuntimeBoundedVec};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,10 @@ use crate::{
     header::{ContentId, Header, HeaderId},
     mantle::{
         traits::{Hashable, StorageSize},
-        transactions::hash::{TxHash, TxHashPrefix},
+        transactions::{
+            TxDecodeContext, TxEra,
+            hash::{TxHash, TxHashPrefix},
+        },
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::merkle,
@@ -464,6 +467,134 @@ impl<Tx> Block<Tx> {
             signature: self.signature,
         }
     }
+
+    // The encoding a block has outside the node, in storage and in chain
+    // sync: canonical, but for the blocks of a chain's legacy era, which keep
+    // the encoding the releases that produced them stored and served them in.
+    // Both encodings open with the block's slot, which tells them apart.
+
+    /// The block in the encoding of the era of its slot.
+    #[must_use]
+    pub fn encode_wire(&self) -> Vec<u8>
+    where
+        Tx: BinaryEncode + Hashable<Hash = TxHash> + StorageSize,
+    {
+        match TxEra::at_slot(self.header().slot()) {
+            TxEra::Master => self.encode_to_vec(),
+            TxEra::Legacy => LegacyBlock {
+                header: self.header().clone(),
+                signature: *self.signature(),
+                uncle_headers: self.uncle_headers().iter().cloned().collect(),
+                transactions: self
+                    .transactions_iter()
+                    .map(BinaryEncode::encode_to_vec)
+                    .collect(),
+            }
+            .to_bytes()
+            .expect("A block serializes to bytes.")
+            .into(),
+        }
+    }
+
+    /// Decodes a block from the encoding of the era of its slot, which it
+    /// opens with, under the limits `eras` gives that era.
+    pub fn decode_wire<Era>(bytes: &[u8], eras: &EraSchedule<Era>) -> Result<Self, DecodeError>
+    where
+        Tx: BinaryDecode<Context = TxDecodeContext> + Hashable<Hash = TxHash> + StorageSize,
+        Era: EraDecodeLimits,
+    {
+        let slot = Slot::peek_decode(bytes, &())?;
+        let era = eras.at_slot(slot).parameters;
+        Self::decode_wire_at(bytes, slot, era.block_limits(), era.max_op_data_size())
+    }
+
+    /// Decodes a block this node stored, from the encoding of the era of its
+    /// slot. The node checked the block against its era before storing it, so
+    /// it is read under the widest limits their types allow.
+    pub fn decode_stored(bytes: &[u8]) -> Result<Self, DecodeError>
+    where
+        Tx: BinaryDecode<Context = TxDecodeContext> + Hashable<Hash = TxHash> + StorageSize,
+    {
+        let slot = Slot::peek_decode(bytes, &())?;
+        let widest = BlockLimits {
+            max_uncles: u8::MAX,
+            max_transactions: u16::MAX,
+            max_transactions_size: u32::MAX,
+        };
+        Self::decode_wire_at(bytes, slot, widest, u32::MAX)
+    }
+
+    /// Decodes a block of `slot` from the encoding of the era of that slot,
+    /// under `limits` and the most bytes of data an Operation may carry.
+    fn decode_wire_at(
+        bytes: &[u8],
+        slot: Slot,
+        limits: BlockLimits,
+        max_op_data_size: u32,
+    ) -> Result<Self, DecodeError>
+    where
+        Tx: BinaryDecode<Context = TxDecodeContext> + Hashable<Hash = TxHash> + StorageSize,
+    {
+        let BlockLimits {
+            max_uncles,
+            max_transactions,
+            max_transactions_size,
+        } = limits;
+        let tx_context = TxDecodeContext::at_slot(slot, max_op_data_size);
+        if !tx_context.era.is_legacy() {
+            return Self::decode_all(
+                bytes,
+                &(
+                    max_uncles,
+                    max_transactions_size,
+                    (max_transactions, tx_context),
+                ),
+            );
+        }
+
+        let LegacyBlock {
+            header,
+            signature,
+            uncle_headers,
+            transactions,
+        } = LegacyBlock::from_bytes(bytes)
+            .map_err(|error| DecodeError::custom(error.to_string()))?;
+        let uncle_headers = UncleHeaders::try_new(uncle_headers, max_uncles)
+            .map_err(|error| DecodeError::custom(error.to_string()))?;
+        let transactions = transactions
+            .iter()
+            .map(|transaction| Tx::decode_all(transaction, &tx_context))
+            .collect::<Result<Vec<_>, _>>()?;
+        let transactions = BlockTransactions::try_new(transactions, max_transactions)
+            .map_err(|error| DecodeError::custom(error.to_string()))?;
+        Self::validate_total_transactions_size(&transactions, max_transactions_size)
+            .map_err(|error| DecodeError::invalid_value::<Self>(error.to_string()))?;
+        Ok(Self::reconstruct(
+            header,
+            uncle_headers,
+            transactions,
+            signature,
+        ))
+    }
+}
+
+/// What decoding a block needs to know of the era of its slot.
+pub trait EraDecodeLimits {
+    /// The most uncles, transactions and transaction bytes a block of the era
+    /// may hold.
+    fn block_limits(&self) -> BlockLimits;
+
+    /// The most bytes of data an Operation of the era may carry.
+    fn max_op_data_size(&self) -> u32;
+}
+
+/// A block as releases 0.3.1 to 0.3.6 serialize it.
+#[derive(Serialize, Deserialize)]
+struct LegacyBlock {
+    header: Header,
+    signature: Ed25519Signature,
+    uncle_headers: Vec<SignedHeader>,
+    transactions: Vec<Vec<u8>>,
 }
 
 /// A transaction carried by a block, with the slot of that block.

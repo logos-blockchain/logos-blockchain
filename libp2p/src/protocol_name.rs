@@ -1,6 +1,6 @@
 use core::ops::{Deref, DerefMut};
 
-use lb_core::{era::ForkDigest, header::HeaderId};
+use lb_core::{era::ForkDigest, header::HeaderId, mantle::transactions::genesis_tx::ChainId};
 use libp2p::StreamProtocol as Libp2pStreamProtocol;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
@@ -83,11 +83,18 @@ const NAMESPACE: &str = "/logos-blockchain";
 /// peers of the same chain, so they are bound to the chain: their names carry
 /// the genesis block ID instead, and peer discovery keeps working across the
 /// forks of a chain.
-#[derive(Clone, Copy, Debug)]
+///
+/// A chain started by releases 0.3.1 to 0.3.6 keeps the names those releases
+/// gave Kademlia and identify, which carry its chain ID instead.
+#[derive(Clone, Debug)]
 pub enum ProtocolScope {
     /// The chain that starts from the genesis block with this ID, on every
     /// fork of it.
     Chain(HeaderId),
+    /// The chain with this chain ID, on every fork of it: how releases 0.3.1
+    /// to 0.3.6 scoped the chain's names, and so how a chain they started
+    /// still does.
+    LegacyChain(ChainId),
     /// The fork with this digest.
     Fork(ForkDigest),
 }
@@ -95,12 +102,13 @@ pub enum ProtocolScope {
 impl ProtocolScope {
     /// The name of `protocol` in this scope:
     /// `/logos-blockchain/<scope>/<protocol>`, the scope being the genesis
-    /// block ID or the fork digest, in hex.
+    /// block ID or the fork digest, in hex, or the percent-encoded chain ID.
     #[must_use]
-    pub fn to_string_with_name(self, name: &str) -> String {
+    pub fn to_string_with_name(&self, name: &str) -> String {
         let scope = match self {
-            Self::Chain(genesis_id) => hex::encode(<[u8; 32]>::from(genesis_id)),
-            Self::Fork(fork_digest) => hex::encode(<[u8; 32]>::from(fork_digest)),
+            Self::Chain(genesis_id) => hex::encode(<[u8; 32]>::from(*genesis_id)),
+            Self::LegacyChain(chain_id) => percent_encode_reserved(chain_id.as_ref()),
+            Self::Fork(fork_digest) => hex::encode(<[u8; 32]>::from(*fork_digest)),
         };
         format!("{NAMESPACE}/{scope}/{name}")
     }
@@ -108,7 +116,7 @@ impl ProtocolScope {
     /// The stream protocol `protocol` in this scope, named by
     /// [`Self::to_string_with_name`].
     #[must_use]
-    pub fn to_stream_protocol_with_name(self, name: &str) -> StreamProtocol {
+    pub fn to_stream_protocol_with_name(&self, name: &str) -> StreamProtocol {
         Libp2pStreamProtocol::try_from_owned(self.to_string_with_name(name))
             .unwrap()
             .into()
@@ -133,11 +141,58 @@ impl ProtocolScope {
     }
 }
 
+/// `text` with every byte but RFC 3986's unreserved characters (letters,
+/// digits, `-`, `.`, `_` and `~`) percent-encoded.
+fn percent_encode_reserved(text: &str) -> String {
+    use core::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            write!(encoded, "%{byte:02X}").expect("Writing to a string does not fail.");
+        }
+    }
+    encoded
+}
+
 #[cfg(test)]
 mod tests {
-    use lb_core::{era::ForkDigest, header::HeaderId};
+    use lb_core::{era::ForkDigest, header::HeaderId, mantle::transactions::genesis_tx::ChainId};
 
     use super::ProtocolScope;
+
+    fn legacy_chain(chain_id: &str) -> ProtocolScope {
+        ProtocolScope::LegacyChain(ChainId::try_from(chain_id.to_owned()).unwrap())
+    }
+
+    #[test]
+    fn a_legacy_chain_name_carries_the_chain_id() {
+        assert_eq!(
+            legacy_chain("0.3.1").to_string_with_name("kad"),
+            "/logos-blockchain/0.3.1/kad"
+        );
+        assert_eq!(
+            legacy_chain("0.3.1")
+                .to_stream_protocol_with_name("identify")
+                .as_ref(),
+            "/logos-blockchain/0.3.1/identify"
+        );
+        // A name of a legacy chain does not read as one bound to a fork.
+        assert_eq!(
+            ProtocolScope::fork_digest_in(&legacy_chain("0.3.1").to_string_with_name("kad")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_chain_id_is_percent_encoded_but_for_unreserved_characters() {
+        assert_eq!(
+            legacy_chain("0.3.0-rc.5_x~ a/b,c=d \u{e9}").to_string_with_name("kad"),
+            "/logos-blockchain/0.3.0-rc.5_x~%20a%2Fb%2Cc%3Dd%20%C3%A9/kad"
+        );
+    }
 
     #[test]
     fn a_name_carries_the_fork_digest_or_the_genesis_block_id_it_is_bound_to() {

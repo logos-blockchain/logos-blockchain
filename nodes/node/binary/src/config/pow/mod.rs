@@ -2,10 +2,7 @@ use lb_cryptarchia_engine::time::EraSchedule;
 use lb_pow_service::{PoWEraSettings, PoWServiceSettings};
 use lb_services_utils::overwatch::RecoveryData;
 
-use crate::config::{
-    deployment::{EraDefinition, era::ruleset::EraRuleset},
-    pow::serde::Config,
-};
+use crate::config::{deployment::EraDefinition, pow::serde::Config};
 
 pub mod serde;
 
@@ -26,7 +23,7 @@ impl ServiceConfig {
             auto_claim: self.user.auto_claim.into(),
             start_on_boot,
             era_schedule: eras.map(|era| {
-                let EraRuleset::V1(parameters) = &era.parameters.ruleset;
+                let parameters = era.parameters.ruleset.parameters();
                 let reward = &parameters.cryptarchia.pow_config.reward;
                 PoWEraSettings {
                     slot_window: reward.slot_window,
@@ -35,7 +32,7 @@ impl ServiceConfig {
                         era.parameters.ruleset.blend_payload_body_size(),
                     )
                     .min(parameters.cryptarchia.max_transactions_size as usize),
-                    fork_digest: era.parameters.fork_digest,
+                    fork_digest: era.parameters.tx_fork_digest(),
                     gas_profile: parameters.cryptarchia.gas_profile,
                 }
             }),

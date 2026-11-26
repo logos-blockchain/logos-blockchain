@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod codec;
+pub mod era;
 pub mod errors;
 pub mod gas;
 pub mod genesis_tx;
@@ -13,6 +14,7 @@ pub mod verified_ops;
 use std::sync::LazyLock;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
+pub use era::{TxDecodeContext, TxEra};
 pub use errors::VerificationError;
 pub use gas::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices};
 pub use genesis_tx::{

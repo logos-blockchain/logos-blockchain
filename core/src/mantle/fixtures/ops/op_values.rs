@@ -92,7 +92,7 @@ pub static SDP_DECLARE: LazyLock<SDPDeclareOp> = LazyLock::new(|| SDPDeclareOp {
     service_note_id: NoteId(Fr::from(0x62u64)),
 });
 
-pub static SDP_WITHDRAW: LazyLock<SDPWithdrawOp> = LazyLock::new(|| SDPWithdrawOp {
+pub static SDP_WITHDRAW: LazyLock<SDPWithdrawOp> = LazyLock::new(|| SDPWithdrawOp::Master {
     declaration_id: DeclarationId([0x70u8; 32]),
     nonce: Nonce::new(Epoch::new(0), 0x72),
 });

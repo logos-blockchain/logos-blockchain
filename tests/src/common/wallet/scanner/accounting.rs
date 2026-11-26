@@ -500,7 +500,7 @@ mod tests {
         let declare_tx = SignedOps::from_ops_with_sample_proofs(declare_ops);
         let withdraw_ops = Ops::new(
             ForkDigest::new([0x11; 32]),
-            [Op::SDPWithdraw(WithdrawMessage {
+            [Op::SDPWithdraw(WithdrawMessage::Master {
                 declaration_id: declaration.id(),
                 nonce: Nonce::new(0.into(), 0),
             })],
@@ -557,7 +557,7 @@ mod tests {
 
         let withdraw_tx = SignedOps::from_ops_with_sample_proofs(Ops::new(
             ForkDigest::new([0x11; 32]),
-            [Op::SDPWithdraw(WithdrawMessage {
+            [Op::SDPWithdraw(WithdrawMessage::Master {
                 declaration_id: declaration.id(),
                 nonce: Nonce::new(0.into(), 1),
             })],
@@ -597,11 +597,11 @@ mod tests {
         let withdrawals = SignedOps::from_ops_with_sample_proofs(Ops::new(
             ForkDigest::new([0x11; 32]),
             [
-                Op::SDPWithdraw(WithdrawMessage {
+                Op::SDPWithdraw(WithdrawMessage::Master {
                     declaration_id: declaration_id_a,
                     nonce: Nonce::new(0.into(), 1),
                 }),
-                Op::SDPWithdraw(WithdrawMessage {
+                Op::SDPWithdraw(WithdrawMessage::Master {
                     declaration_id: declaration_id_b,
                     nonce: Nonce::new(0.into(), 1),
                 }),

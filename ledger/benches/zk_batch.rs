@@ -289,6 +289,7 @@ fn config() -> Config {
         epoch_config,
         consensus_config,
         sdp_config: logos_blockchain_ledger::mantle::sdp::Config {
+            era: logos_blockchain_ledger::mantle::sdp::SdpEra::Master,
             service_params: Arc::new(HashMap::from([(
                 ServiceType::BlendNetwork,
                 ServiceParameters {
@@ -311,6 +312,8 @@ fn config() -> Config {
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
         max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        tx_era: lb_core::mantle::transactions::TxEra::Master,
+        pow_reward_pool_reset: None,
         execution_market: logos_blockchain_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: logos_blockchain_ledger::config::MaxGasPerBlock::new(3_193_460)
                 .unwrap(),

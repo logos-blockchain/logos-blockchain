@@ -42,7 +42,7 @@ where
         + 'static
         + Serialize
         + for<'de> Deserialize<'de>
-        + BinaryDecode<Context = u32>
+        + BinaryDecode<Context = lb_core::mantle::transactions::TxDecodeContext>
         + Hashable<Hash = TxHash>
         + StorageSize,
     Key: Clone + Send + Sync + 'static + Into<TxHash>,

@@ -146,6 +146,14 @@ impl PowState {
         Ok(())
     }
 
+    /// Replace the pool with `reward_pool`, the one an era starts with, and
+    /// recompute the per-claim `epoch_reward` from it. What the era before
+    /// left is dropped.
+    pub(crate) fn reset_reward_pool(&mut self, reward_pool: PowReward, config: &Config) {
+        self.reward.reward_pool = reward_pool;
+        self.reward.epoch_reward = compute_epoch_pow_reward(reward_pool, config);
+    }
+
     /// Add `reward` to the current epoch's pending `refill_rewards`.
     pub(crate) fn add_reward_refill_rewards(
         &mut self,
@@ -279,7 +287,7 @@ fn is_within_slot_window(anchor_slot: Slot, current: Slot, slot_windows: &PowSlo
 pub struct PowRewardPoolOverflow;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
@@ -320,7 +328,7 @@ mod tests {
         (pow_slot_windows(&eras), later_era_start)
     }
 
-    fn epoch_state(epoch: u32) -> EpochState {
+    pub fn epoch_state(epoch: u32) -> EpochState {
         EpochState {
             epoch: epoch.into(),
             nonce: Fr::ZERO,
@@ -539,6 +547,18 @@ mod tests {
             state.try_apply_header(&epoch_state(0), &epoch_state(1), &ledger_config()),
             Err(PowRewardPoolOverflow)
         );
+    }
+
+    #[test]
+    fn reset_reward_pool_replaces_the_pool_and_recomputes_the_reward() {
+        let mut state = pow_state();
+        let config = test_pool_config();
+        let reset = 7 * POW_REWARD_POOL_GENESIS;
+
+        state.reset_reward_pool(reset, &config);
+
+        assert_eq!(state.reward_pool(), reset);
+        assert_eq!(state.epoch_reward(), reset / 100);
     }
 
     #[test]

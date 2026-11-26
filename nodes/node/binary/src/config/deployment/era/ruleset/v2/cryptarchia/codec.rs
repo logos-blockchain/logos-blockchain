@@ -12,9 +12,9 @@ use lb_groth16::ModulusShift;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio, ProperFraction};
 
 use super::{
-    BlendPoWConfig, BlockRewardsConfig, EpochConfig, ExecutionMarketConfig, MaxGasPerBlock,
-    PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters, Settings, SlotActivationCoeff,
-    StorageMarketConfig,
+    BlendPoWConfig, BlockRewardsConfig, EpochConfig, EraStartRewardPool, ExecutionMarketConfig,
+    MaxGasPerBlock, PoWConfig, RewardPoWConfig, SdpConfig, ServiceParameters, Settings,
+    SlotActivationCoeff, StorageMarketConfig,
 };
 
 pub fn fixture_settings() -> Settings {
@@ -59,6 +59,7 @@ pub fn fixture_settings() -> Settings {
             leader_claim: Gas::new(69),
             claim_pow_reward: Gas::new(70),
         },
+        pow_reward_pool: EraStartRewardPool::default(),
     }
 }
 
@@ -138,6 +139,12 @@ const BLEND_POW_CONFIG_HEX: &str = "
 ";
 
 codec_fixtures!(Settings, encode_only, fixture_settings() => SETTINGS_HEX);
+codec_fixtures!(
+    EraStartRewardPool,
+    encode_only,
+    EraStartRewardPool(None) => "",
+    EraStartRewardPool(Some(0x0102)) => "0201000000000000",
+);
 codec_fixtures!(SlotActivationCoeff, encode_only, fixture_slot_activation_coeff() => "1000000011000000");
 codec_fixtures!(EpochConfig, encode_only, fixture_epoch_config() => "0c0d0e");
 codec_fixtures!(SdpConfig, encode_only, fixture_sdp_config() => SDP_CONFIG_HEX);
