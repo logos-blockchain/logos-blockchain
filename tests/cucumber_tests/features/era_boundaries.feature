@@ -15,6 +15,7 @@ Feature: Happy-path era boundaries
     When I capture a non-genesis finalized block before the era boundary on node "NODE_1"
     And all nodes enter the target era within 260 seconds
     Then all nodes report the target-era fork digest within 30 seconds
+    And all nodes report the target-era limits
     And all nodes have at least 3 canonical target-era blocks and at least 1 canonical source-era blocks within 180 seconds
     And all nodes have at least 12 blocks and converged to within 1 blocks in 180 seconds
     And all nodes preserve the captured finalized block on their LIB ancestry after the era boundary within 120 seconds
@@ -35,6 +36,7 @@ Feature: Happy-path era boundaries
     When I capture a non-genesis finalized block before the era boundary on node "NODE_1"
     And all nodes enter the target era within 260 seconds
     Then all nodes report the target-era fork digest within 30 seconds
+    And all nodes report the target-era limits
     Then all nodes have at least 3 canonical target-era blocks and at least 1 canonical source-era blocks within 180 seconds
     When I prepare node "NODE_2" to join with fresh state from node "NODE_1"
     And I start peer node "NODE_2" connected to node "NODE_1"

@@ -5,7 +5,7 @@ use common_http_client::{
 };
 use futures::Stream;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
-use lb_chain_service::ChainServiceInfo;
+use lb_chain_service::{ChainServiceInfo, Slot};
 use lb_core::{
     era::ForkDigest,
     header::HeaderId,
@@ -20,7 +20,7 @@ use lb_http_api_common::{
     TimeInfo,
     bodies::{
         blend::JoinBlendRequestBody,
-        mantle::GasPricesResponseBody,
+        mantle::{GasPricesResponseBody, LimitsResponseBody},
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
@@ -131,6 +131,14 @@ impl NodeHttpClient {
         self.with_timeout(
             "Gas prices request",
             self.http_client.gas_prices(self.base_url.clone(), tip),
+        )
+        .await
+    }
+
+    pub async fn limits(&self, slot: Option<Slot>) -> Result<LimitsResponseBody, Error> {
+        self.with_timeout(
+            "Limits request",
+            self.http_client.limits(self.base_url.clone(), slot),
         )
         .await
     }

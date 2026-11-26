@@ -1824,16 +1824,25 @@ where
     }
 }
 
+#[derive(Deserialize)]
+pub struct LimitsQuery {
+    slot: Option<u64>,
+}
+
 #[utoipa::path(
     get,
     path = paths::MANTLE_LIMITS,
+    params(
+        ("slot" = Option<u64>, Query, description = "The slot whose era the limits are of; the current slot when absent"),
+    ),
     responses(
-        (status = 200, description = "Get what a transaction must fit in the era of the current slot"),
+        (status = 200, description = "Get what a transaction must fit in the era of the slot"),
         (status = 500, description = "Internal server error", body = ErrorBody),
     )
 )]
 pub async fn get_limits<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Query(query): Query<LimitsQuery>,
 ) -> Response
 where
     RuntimeServiceId: AsServiceId<Cryptarchia<RuntimeServiceId>>
@@ -1844,20 +1853,24 @@ where
         + Send
         + 'static,
 {
-    let relay = match handle.relay::<TimeService>().await {
-        Ok(relay) => relay,
-        Err(error) => {
+    let slot = if let Some(slot) = query.slot {
+        Slot::from(slot)
+    } else {
+        let relay = match handle.relay::<TimeService>().await {
+            Ok(relay) => relay,
+            Err(error) => {
+                return ApiError::internal(error).into_response();
+            }
+        };
+        let (sender, receiver) = oneshot::channel();
+        if let Err(error) = relay.send(TimeServiceMessage::CurrentSlot { sender }).await {
             return ApiError::internal(error).into_response();
         }
-    };
-    let (sender, receiver) = oneshot::channel();
-    if let Err(error) = relay.send(TimeServiceMessage::CurrentSlot { sender }).await {
-        return ApiError::internal(error).into_response();
-    }
-    let slot = match receiver.await {
-        Ok(tick) => tick.slot,
-        Err(error) => {
-            return ApiError::internal(error).into_response();
+        match receiver.await {
+            Ok(tick) => tick.slot,
+            Err(error) => {
+                return ApiError::internal(error).into_response();
+            }
         }
     };
 
@@ -1866,6 +1879,9 @@ where
             .await;
     match chain_api.get_ledger_config(slot).await {
         Ok(config) => Json(LimitsResponseBody {
+            slot: slot.into(),
+            max_transactions: config.max_transactions,
+            max_transactions_size: config.max_transactions_size,
             max_op_data_size: config.max_op_data_size,
         })
         .into_response(),
