@@ -15,7 +15,7 @@ use libp2p::PeerId;
 
 use crate::generic_services::{
     ChainNetworkService, CryptarchiaService, MempoolNetworkAdapter, MempoolPool, SdpService,
-    blend::pol::PolInfoProvider,
+    WalletService, blend::pol::PolInfoProvider,
 };
 
 pub(crate) mod pol;
@@ -102,6 +102,7 @@ pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     BlendEdgeService<RuntimeServiceId>,
     BlendBroadcastService<RuntimeServiceId>,
     SdpService<RuntimeServiceId>,
+    WalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>,
     RuntimeServiceId,
 >;
 

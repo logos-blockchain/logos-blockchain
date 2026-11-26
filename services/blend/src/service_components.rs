@@ -8,8 +8,16 @@ pub trait ServiceComponents {
     type NodeId;
 }
 
-impl<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId> ServiceComponents
-    for BlendService<CoreService, EdgeService, BroadcastService, SdpService, RuntimeServiceId>
+impl<CoreService, EdgeService, BroadcastService, SdpService, WalletService, RuntimeServiceId>
+    ServiceComponents
+    for BlendService<
+        CoreService,
+        EdgeService,
+        BroadcastService,
+        SdpService,
+        WalletService,
+        RuntimeServiceId,
+    >
 where
     CoreService: ServiceData + core::service_components::ServiceComponents<RuntimeServiceId>,
     EdgeService: ServiceData + edge::service_components::ServiceComponents,
