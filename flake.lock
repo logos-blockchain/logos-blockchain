@@ -203,6 +203,10 @@
           "logos-blockchain-circuits",
           "logos-blockchain-rapidsnark"
         ],
+        "logos-nix": [
+          "logos-blockchain-circuits",
+          "logos-nix"
+        ],
         "nixpkgs": "nixpkgs_3",
         "rust-overlay": "rust-overlay"
       }
