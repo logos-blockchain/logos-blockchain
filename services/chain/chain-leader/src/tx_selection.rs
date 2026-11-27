@@ -336,24 +336,22 @@ mod tests {
     fn gas_limited_selection_returns_canonically_applicable_prefix() {
         const CANDIDATE_COUNT: usize = 7;
 
+        let base = leadership::test_config();
         let funding_key = ZkKey::zero();
         let funding_notes = funding_notes(&funding_key, CANDIDATE_COUNT);
         let ledger_state = LedgerState::from_notes(
             funding_notes.iter().copied(),
-            &leadership::test_config(),
+            &base,
             &leadership::genesis_parameters(),
         );
         let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
         let candidates = transfer_transactions(&funding_notes, &funding_key, commitment_root);
-        let gas_context = ledger_state
-            .tx_context(leadership::test_config().gas_profile)
-            .gas_context;
+        let gas_context = ledger_state.tx_context(base.gas_profile).gas_context;
         let individual_gas = candidates[0]
             .op_refs()
             .execution_gas_consumption(&gas_context)
             .unwrap();
         // A block takes six of the candidates and not a seventh.
-        let base = leadership::test_config();
         let config = Config {
             execution_market: ExecutionMarketConfig {
                 max_gas_per_block: MaxGasPerBlock::new(

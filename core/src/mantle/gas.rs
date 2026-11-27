@@ -83,7 +83,7 @@ pub struct GasProfile {
     pub commitment: Gas,
     /// Per signature check.
     pub signature: Gas,
-    /// Per user step of an inscription, beyond its spend.
+    /// Per step of an inscription, beyond its spend.
     pub user_step: Gas,
 }
 

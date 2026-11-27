@@ -17,7 +17,7 @@ use lb_core::{
     events::{BlockEvent, HeaderEvent, TxEvent},
     mantle::{
         Op, OpProof, SignedOps, Value,
-        batch::{DeferredProof, DeferredProofs},
+        batch::DeferredProofs,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::NoteCommitment,
@@ -88,9 +88,9 @@ impl BlockShape {
                             execute_paying(state, &config, reward_value, &txs)
                                 .expect("the block applies");
                         let (proofs, verified) = if verify {
-                            (None, verify_each(proofs))
+                            (None, verify_proofs(proofs))
                         } else {
-                            (Some(proofs), Vec::new())
+                            (Some(proofs), false)
                         };
                         (txs, state, tx_events, block_events, proofs, verified)
                     },
@@ -100,20 +100,13 @@ impl BlockShape {
     }
 }
 
-/// Verifies the deferred `proofs` as `DeferredProofs::verify` does: their
-/// proofs are of valid points but not of their statements, so the batch fails.
-/// A batch decompresses its proofs, stopping only at an invalid point, then
-/// runs one multi-pairing whatever the proofs, so that a failing batch costs
-/// what a passing one does. Returns whether the `ZkTransfer` batch passed.
-pub fn verify_each(proofs: DeferredProofs) -> Vec<bool> {
-    let transfers = DeferredProofs::from_iter(
-        proofs
-            .zk_transfers()
-            .iter()
-            .map(|proof| DeferredProof::new(*proof.proof(), *proof.inputs())),
-    );
-    drop(proofs);
-    vec![transfers.verify().is_ok()]
+/// Verifies the deferred `proofs`: they are of valid points but not of their
+/// statements, so the `ZkTransfer` batch fails. A batch decompresses its
+/// proofs, stopping only at an invalid point, then runs one multi-pairing
+/// whatever the proofs, so that a failing batch costs what a passing one does.
+/// Returns whether the batch passed.
+pub fn verify_proofs(proofs: DeferredProofs) -> bool {
+    proofs.verify().is_ok()
 }
 
 /// A header at `slot`, the state and the config it applies to, and the notes

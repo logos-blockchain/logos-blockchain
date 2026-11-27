@@ -1653,8 +1653,9 @@ where
         Ok(known_note)
     }
 
-    // A step spending the channel notes of the wallet, with the notes it creates and the witness of its ZkTransfer. The
-    // wallet follows the notes the step pays to its own keys.
+    // A step spending the channel notes of the wallet, with the notes it
+    // creates and the witness of its ZkTransfer. The wallet follows the notes
+    // the step pays to its own keys.
     async fn channel_step_job(
         tip: HeaderId,
         request: ChannelStepRequest,

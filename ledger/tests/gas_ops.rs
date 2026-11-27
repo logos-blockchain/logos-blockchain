@@ -356,15 +356,15 @@ fn mixed_shape(name: &str) -> block::BlockShape {
 }
 
 #[test]
-fn the_mixed_block_verifies_each_of_its_deferred_proofs() {
+fn the_mixed_block_verifies_its_deferred_proofs() {
     let shape = mixed_shape("block/mixed");
     let bare = mixed_shape("block/mixed_no_verify");
     assert!(shape.verify && !bare.verify);
     assert_eq!((&shape.dims, &shape.txs), (&bare.dims, &bare.txs));
     let (.., deferred) =
         block::execute(shape.state.clone(), &shape.config, &shape.txs).expect("the block applies");
-    // One ZkTransfer batch.
-    assert_eq!(block::verify_each(deferred).len(), 1);
+    // The proofs are of valid points but not of their statements.
+    assert!(!block::verify_proofs(deferred));
 }
 
 #[test]
@@ -387,7 +387,7 @@ fn the_mixed_block_measures_the_verification_of_its_proofs() {
                     .expect("the block applies")
                     .3
             },
-            block::verify_each,
+            block::verify_proofs,
         )
     })
     .take(5)

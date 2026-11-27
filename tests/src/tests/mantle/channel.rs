@@ -442,7 +442,7 @@ async fn assert_not_published(node: &NodeHttpClient, hash: TxHash) {
 /// 4. Call the POST `/channel/withdraw` HTTP endpoint for the note the step
 ///    paid, once that note is deep enough to be spent.
 /// 5. Verify the withdrawing note is neither withdrawn again nor spent by a
-///    step, and a program deposit is proven from the note left.
+///    step.
 /// 6. Verify the ledger balance of the key rises by the note's value once the
 ///    withdrawal is released.
 #[tokio::test]
