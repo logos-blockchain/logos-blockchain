@@ -46,7 +46,6 @@ tracing                       = { workspace = true }
 utoipa                        = { features = ["macros"], optional = true, workspace = true }
 
 [dev-dependencies]
-ark-groth16   = { workspace = true }
 boon          = { workspace = true }
 divan         = { workspace = true }
 hasher        = { workspace = true }

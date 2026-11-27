@@ -4631,7 +4631,6 @@ name = "logos-blockchain-core"
 version = "0.0.0"
 dependencies = [
  "ark-ff",
- "ark-groth16",
  "bincode",
  "blake2",
  "boon",

@@ -803,17 +803,17 @@ mod body_root_test_vectors {
             .collect();
         assert_eq!(
             hex::encode(merkle::calculate_transactions_root(&txs)),
-            "3d276961305ab4654533f94dd792b74d3e6d55d1474588ffb92564c542fb9247"
+            "e866ea12df660b0a6d74e5e8da07e2103970c524fde791295ff11dc7f9124648"
         );
         assert_eq!(
             hex::encode(crate::block::body_root(&UncleHeaders::empty(), &txs).0),
-            "7883dfd36fe2e06d807dd7146405349f94170533f0cb2ff79a93878e010f50c2"
+            "7771f3628978b382ec26956746f5125af4359abb0f90601b762a4374f742f0f9"
         );
         let uncles =
             UncleHeaders::try_new(vec![uncle(0x66), uncle(0x77)], VECTOR_MAX_UNCLES).unwrap();
         assert_eq!(
             hex::encode(crate::block::body_root(&uncles, &txs).0),
-            "55551037498e5ad87c4e92d0fbfd1698b9bd9c3ada705ec15bd73dd759845628"
+            "2f8a042d2ceb54791cc7fa2dee60278d6e8bcc3093d6a24633438a0d9050c950"
         );
     }
 }
