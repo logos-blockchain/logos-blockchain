@@ -3,6 +3,8 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # The Logos toolchain. Windows builds use it to stay compatible with the rest of Logos.
+    logos-nix.follows = "logos-blockchain-circuits/logos-nix";
 
     rust-overlay = {
       url = "github:oxalica/rust-overlay/8bbfc858c7b85f5e6ed6d6cc201ffcee1bb08a9b";
@@ -13,13 +15,10 @@
 
     # Must stay in sync with the lbc-* tags in Cargo.toml.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits/v0.5.7";
+      url = "github:logos-blockchain/logos-blockchain-circuits/v0.8.0-rc.2";
     };
 
-    # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
-    rust-rapidsnark = {
-      url = "github:logos-blockchain/logos-blockchain-rust-rapidsnark/e91187f8ccb5bbfc7bb00dac88169112428da78f";
-    };
+    logos-blockchain-rapidsnark.follows = "logos-blockchain-circuits/logos-blockchain-rapidsnark"; # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
   };
 
   outputs =
@@ -29,7 +28,8 @@
       rust-overlay,
       crane,
       logos-blockchain-circuits,
-      rust-rapidsnark,
+      logos-blockchain-rapidsnark,
+      logos-nix,
       ...
     }:
     let
@@ -37,7 +37,6 @@
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
-        "x86_64-darwin"
       ];
 
       forAll = nixpkgs.lib.genAttrs systems;
@@ -105,14 +104,14 @@
             '';
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             LBC_ROOT_DIR = logos-blockchain-circuits.packages.${system}.default;
-            RAPIDSNARK_LIB_DIR = rust-rapidsnark.packages.${system}.rapidsnark;
+            RAPIDSNARK_LIB_DIR = "${logos-blockchain-rapidsnark.packages.${system}.default}/lib";
           } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin {
             RUSTFLAGS = "-L ${pkgs.libiconv}/lib";
           };
 
           logosBlockchainDependencies = craneLib.buildDepsOnly commonArgs;
 
-          logosBlockChainC = craneLib.buildPackage (
+          logosBlockchainC = craneLib.buildPackage (
             commonArgs
             // {
               cargoArtifacts = logosBlockchainDependencies;
@@ -125,10 +124,87 @@
               '';
             }
           );
+
+          # Windows is cross-built from x86_64-linux with logos-nix's MinGW.
+          windowsTarget = "x86_64-pc-windows-gnu";
+          windowsPkgs = logos-nix.legacyPackages.${system}.pkgsWindows;
+          windowsCc = windowsPkgs.stdenv.cc;
+          windowsCcPrefix = "${windowsCc}/bin/${windowsCc.targetPrefix}";
+          windowsCraneLib = (crane.mkLib pkgs).overrideToolchain (
+            pkgs.rust-bin.stable.${rustVersion}.default.override { targets = [ windowsTarget ]; }
+          );
+
+          # The circuits flake's `packages.x86_64-windows` does not evaluate, so fetch its Windows release here.
+          circuitsVersion = logos-blockchain-circuits.packages.${system}.default.version;
+          circuitsHashes = builtins.fromJSON (builtins.readFile "${logos-blockchain-circuits}/circuits_nix_hashes.json");
+          windowsCircuits = pkgs.stdenvNoCC.mkDerivation {
+            pname = "logos-blockchain-circuits-windows-x86_64";
+            version = circuitsVersion;
+            src = pkgs.fetchurl {
+              url = "https://github.com/logos-blockchain/logos-blockchain-circuits/releases/download/v${circuitsVersion}/logos-blockchain-circuits-v${circuitsVersion}-windows-x86_64.tar.gz";
+              hash = circuitsHashes.${circuitsVersion}.x86_64-windows;
+            };
+            dontConfigure = true;
+            dontBuild = true;
+            dontFixup = true;
+            installPhase = "cp -r . $out";
+          };
+
+          windowsArgs = commonArgs // {
+            pname = "logos-blockchain-c-windows-x86_64";
+            CARGO_BUILD_TARGET = windowsTarget;
+            buildInputs = [ ];
+            nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ windowsCc ];
+
+            CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "${windowsCcPrefix}gcc";
+            CC_x86_64_pc_windows_gnu = "${windowsCcPrefix}gcc";
+            CXX_x86_64_pc_windows_gnu = "${windowsCcPrefix}g++";
+            AR_x86_64_pc_windows_gnu = "${windowsCcPrefix}ar";
+            # logos-nix's MinGW uses mcfgthread, so it ships no `sched.h`; aws-lc-sys needs it.
+            CFLAGS_x86_64_pc_windows_gnu = "-I${windowsPkgs.windows.pthreads}/include";
+            # Rust expects pthreads, but logos-nix's MinGW uses mcfgthread.
+            CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = builtins.concatStringsSep " " [
+              "-L native=${windowsPkgs.windows.pthreads}/lib"
+              "-C link-arg=-l:libmcfgthread.a"
+              "-C link-arg=-lntdll"
+              "-C link-arg=-lkernel32"
+            ];
+
+            LBC_ROOT_DIR = windowsCircuits;
+            RAPIDSNARK_LIB_DIR = "${logos-blockchain-rapidsnark.packages.${system}.windows-x86_64}/lib";
+          };
+
+          logosBlockchainCWindows = windowsCraneLib.buildPackage (
+            windowsArgs
+            // {
+              cargoArtifacts = windowsCraneLib.buildDepsOnly windowsArgs;
+
+              postInstall = ''
+                mkdir -p $out/include
+                cp c-bindings/logos_blockchain.h $out/include/
+              '';
+            }
+          );
+
+          logosBlockchainNodeWindowsArgs = windowsArgs // {
+            pname = "logos-blockchain-node-windows-x86_64";
+            cargoExtraArgs = "-p logos-blockchain-node";
+          };
+
+          logosBlockchainNodeWindows = windowsCraneLib.buildPackage (
+            logosBlockchainNodeWindowsArgs
+            // {
+              cargoArtifacts = windowsCraneLib.buildDepsOnly logosBlockchainNodeWindowsArgs;
+            }
+          );
         in
         {
-          logos-blockchain-c = logosBlockChainC;
-          default = logosBlockChainC;
+          logos-blockchain-c = logosBlockchainC;
+          default = logosBlockchainC;
+        }
+        // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
+          logos-blockchain-c-windows-x86_64 = logosBlockchainCWindows;
+          logos-blockchain-node-windows-x86_64 = logosBlockchainNodeWindows;
         }
       );
 
@@ -150,7 +226,7 @@
             shellHook = ''
               export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
               export LBC_ROOT_DIR=${logos-blockchain-circuits.packages.${system}.default}
-              export RAPIDSNARK_LIB_DIR=${rust-rapidsnark.packages.${system}.rapidsnark}
+              export RAPIDSNARK_LIB_DIR=${logos-blockchain-rapidsnark.packages.${system}.default}/lib
             '';
           };
         }
