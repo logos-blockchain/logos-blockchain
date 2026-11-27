@@ -13,7 +13,7 @@
 
     # Must stay in sync with the lbc-* tags in Cargo.toml.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits/v0.5.7";
+      url = "github:logos-blockchain/logos-blockchain-circuits/v0.8.0-rc.2";
     };
 
     # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
@@ -37,7 +37,6 @@
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
-        "x86_64-darwin"
       ];
 
       forAll = nixpkgs.lib.genAttrs systems;
