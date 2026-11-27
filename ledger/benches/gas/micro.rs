@@ -8,40 +8,30 @@ use lb_core::{
     block::BlockNumber,
     crypto::{Digest as _, Hasher, ZkDigest as _, ZkHasher},
     mantle::{
-        Op, OpProof, SignedOps,
-        batch::{DeferredProofs, DeferredZkProgramSpend},
+        Op, SignedOps,
         ledger::verification_mode::StandardMode,
         note_set::{NoteSet, NoteSets, TxBuffer, TxRoots, eligible_leaf},
-        notes::{InputNullifiers, NoteNullifier, OutputCommitments},
-        ops::{
-            ChannelInscribeProof, StepProof,
-            channel::{
-                MsgId,
-                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
-                program_step::{ProgramDeposit, ProgramStep},
-            },
+        notes::NoteNullifier,
+        ops::channel::{
+            MsgId,
+            inscribe::{Inscription, InscriptionOp, MiniBlocks},
         },
-        programs::RegisteredProgram,
         traits::Hashable as _,
-        transactions::{OpProofs, Ops, states::Unverified},
+        transactions::{Ops, states::Unverified},
     },
 };
 use lb_groth16::{
-    AdditiveGroup as _, CompressedGroth16Proof, Field as _, Fr, Groth16Input, Groth16Proof,
-    Groth16VerificationKey, fr_from_mod_bytes, groth16_batch_verify,
+    CompressedGroth16Proof, Field as _, Fr, Groth16Input, Groth16Proof, Groth16VerificationKey,
+    fr_from_mod_bytes, groth16_batch_verify,
     test_utils::{three_input_prove, three_input_setup},
 };
 use lb_pol::PolVerifierInput;
-use lb_utils::bounded::Bounded;
 use lb_zktransfer::ZkTransferVerifierInput;
 use rand::{Rng as _, SeedableRng as _, rngs::StdRng};
 
 use crate::{
     cycles::{Case, Counter, ROUNDS, in_turn},
-    fixture::{
-        FORK_DIGEST, HeaderId, ROOT_WINDOW, commitments, filled_state, nullifiers, program_key,
-        signed,
-    },
+    fixture::{FORK_DIGEST, ROOT_WINDOW, commitments, filled_state, nullifiers, signed},
 };
 
 const BATCH_SIZES: [u64; 9] = [1, 2, 4, 8, 16, 32, 64, 128, 256];
@@ -112,36 +102,9 @@ pub fn micro_cases() -> Vec<Case> {
     cases.extend(point_cases());
     cases.push(ed25519_case());
     cases.extend(batch_cases(&mut rng));
-    cases.extend(key_cases(&mut rng));
+    cases.extend(key_cases());
     cases.push(pol_case(&mut rng));
     cases
-}
-
-/// The `n` deferred `ZkProgramSpend`s the batch of `n` verifies: a random proof
-/// each, against random full-size public inputs.
-///
-/// Their verifier input is only built by the ledger, so a program step
-/// applied to the fixture gives one, every field of which is then replaced.
-pub fn program_spends(n: usize) -> Vec<DeferredZkProgramSpend> {
-    let mut rng = StdRng::seed_from_u64(0x5be4d);
-    PROOFS
-        .iter()
-        .take(n)
-        .map(|proof| {
-            let mut inputs = *PROGRAM_SPEND.inputs();
-            inputs.inputs = random_inputs(&mut rng);
-            inputs.outputs = random_inputs(&mut rng);
-            inputs.program_step_id = random_input(&mut rng);
-            inputs.inputs_active = random_inputs(&mut rng);
-            inputs.outputs_active = random_inputs(&mut rng);
-            inputs.outputs_of_program = random_inputs(&mut rng);
-            inputs.tx_commitment_root = random_input(&mut rng);
-            inputs.program_id = random_input(&mut rng);
-            inputs.paid_value = random_input(&mut rng);
-            inputs.msg = random_input(&mut rng);
-            DeferredZkProgramSpend::new(compressed(proof), inputs)
-        })
-        .collect()
 }
 
 fn case<S, R>(
@@ -164,8 +127,6 @@ static PROOFS: LazyLock<Vec<Groth16Proof>> = LazyLock::new(|| {
         .map(|seed| three_input_prove(&proving_key, [Fr::from(seed), Fr::ONE, Fr::ONE], seed))
         .collect()
 });
-
-static PROGRAM_SPEND: LazyLock<DeferredZkProgramSpend> = LazyLock::new(applied_program_spend);
 
 fn compressed(proof: &Groth16Proof) -> CompressedGroth16Proof {
     CompressedGroth16Proof::try_from(proof).expect("a valid proof compresses")
@@ -440,77 +401,6 @@ fn ed25519_case() -> Case {
     )
 }
 
-// The proofs of a program step are sample proofs, which the ledger defers.
-fn applied_program_spend() -> DeferredZkProgramSpend {
-    let fixture = filled_state();
-    let channel_set = fixture
-        .state
-        .latest_note_sets()
-        .get(fixture.channel_set)
-        .expect("the channel set exists");
-    let root = channel_set.commitment_root();
-    let tip = fixture
-        .state
-        .mantle_ledger()
-        .channels()
-        .channel_state(&fixture.channel)
-        .expect("the channel exists")
-        .tip_message;
-    let mini_blocks: MiniBlocks = [MiniBlock::from([
-        Step::ProgramDeposit(ProgramDeposit {
-            program_id: fixture.program,
-            inputs: [nullifiers(1, 0x9a)[0]].into(),
-            outputs: OutputCommitments::default(),
-            commitment_merkle_root: root,
-            value: 5,
-            intent: Fr::ONE,
-            inscription: Inscription::default(),
-        }),
-        Step::Program(ProgramStep {
-            program_id: fixture.program,
-            inputs: InputNullifiers::default(),
-            program_outputs: OutputCommitments::default(),
-            outputs: [commitments(1, 0x9a)[0]].into(),
-            commitment_merkle_root: root,
-            program_step_id: Fr::ZERO,
-            inscription: Inscription::default(),
-        }),
-    ])]
-    .into();
-    let step_proofs = mini_blocks
-        .iter()
-        .flat_map(Bounded::iter)
-        .map(|step| StepProof::sample_for(step.into()))
-        .collect();
-    let ops = Ops::new(
-        FORK_DIGEST,
-        [Op::ChannelInscribe(InscriptionOp {
-            channel_id: fixture.channel,
-            inscription: Inscription::new_unchecked(vec![1]),
-            parent: tip,
-            signer: fixture.channel_key.public_key().into_unverified(),
-            mini_blocks,
-        })],
-    );
-    let signature = fixture
-        .channel_key
-        .sign_payload(ops.hash().as_signing_bytes());
-    let proofs = OpProofs::new_unchecked(vec![OpProof::ChannelInscribe(
-        ChannelInscribeProof::new(signature, step_proofs),
-    )]);
-    let tx = SignedOps::from_parts(ops, proofs)
-        .expect("the transaction builds")
-        .preverify()
-        .expect("the transaction preverifies");
-    let (_, _, _, deferred) = fixture
-        .state
-        .clone()
-        .try_apply_transaction::<_, HeaderId>(&fixture.config, &tx)
-        .expect("the program step applies");
-    let spend = &deferred.program_spends()[0];
-    DeferredZkProgramSpend::new(*spend.proof(), *spend.inputs())
-}
-
 fn zk_transfers(
     n: usize,
     rng: &mut StdRng,
@@ -539,7 +429,6 @@ fn zk_transfers(
 // fixed keys are prepared once, on their first use, outside the measures.
 fn batch_cases(rng: &mut StdRng) -> Vec<Case> {
     drop(lb_zktransfer::batch_verify(&zk_transfers(1, rng)));
-    drop(DeferredProofs::from_iter(program_spends(1)).verify());
     let key = three_input_setup(2).0;
     let mut cases = Vec::new();
     for n in BATCH_SIZES {
@@ -549,12 +438,6 @@ fn batch_cases(rng: &mut StdRng) -> Vec<Case> {
             vec![("N", 27), ("n", n)],
             || (),
             move |()| lb_zktransfer::batch_verify(&transfers),
-        ));
-        cases.push(case(
-            "micro/groth16_batch",
-            vec![("N", 37), ("n", n)],
-            move || program_spends(n as usize),
-            |spends| DeferredProofs::from_iter(spends).verify(),
         ));
         let prepared = key.clone().into_prepared();
         let proofs: Vec<Groth16Proof> = PROOFS.iter().take(n as usize).copied().collect();
@@ -572,45 +455,13 @@ fn batch_cases(rng: &mut StdRng) -> Vec<Case> {
     cases
 }
 
-// A registered program keeps its decompressed key and `e(alpha, beta)`, and
-// every verification of its proofs computes the line coefficients of `-gamma`
-// and `-delta`.
-fn key_cases(rng: &mut StdRng) -> Vec<Case> {
-    let fixture = filled_state();
-    let program = fixture
-        .state
-        .mantle_ledger()
-        .programs()
-        .get(&fixture.program)
-        .expect("the program is registered")
-        .clone();
-    let proof = compressed(&PROOFS[0]);
-    let public = [random_fr(rng), random_fr(rng), random_fr(rng)];
-    let key = program_key();
-    let registered_key = key.clone();
-    let groth16_key = key.to_groth16().expect("the test key is valid");
-    let alpha_beta = groth16_key.alpha_beta();
-    let (pairing_key, lines_key, prepared_key) =
-        (groth16_key.clone(), groth16_key.clone(), groth16_key);
+// Preparing a key computes `e(alpha, beta)` and the line coefficients of
+// `-gamma` and `-delta`.
+fn key_cases() -> Vec<Case> {
+    let key = three_input_setup(1).0;
+    let alpha_beta = key.alpha_beta();
+    let (pairing_key, lines_key, prepared_key) = (key.clone(), key.clone(), key);
     vec![
-        case(
-            "micro/program_proof_verify",
-            vec![],
-            || (),
-            move |()| program.verify(&proof, &public),
-        ),
-        case(
-            "micro/key_decompress",
-            vec![],
-            || (),
-            move |()| key.to_groth16(),
-        ),
-        case(
-            "micro/program_key_register",
-            vec![],
-            move || registered_key.clone(),
-            RegisteredProgram::new,
-        ),
         case(
             "micro/key_e_alpha_beta",
             vec![],

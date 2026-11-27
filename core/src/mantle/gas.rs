@@ -59,7 +59,6 @@ codec_fixtures!(Gas, encode_only, Gas::new(0x0807_0605_0403_0201) => "0102030405
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GasProfile {
     pub transfer: Gas,
-    pub program_register: Gas,
     pub channel_config: Gas,
     pub channel_inscribe: Gas,
     pub channel_deposit: Gas,
@@ -84,15 +83,8 @@ pub struct GasProfile {
     pub commitment: Gas,
     /// Per signature check.
     pub signature: Gas,
-    /// Per user step of an inscription, beyond its spend.
+    /// Per step of an inscription, beyond its spend.
     pub user_step: Gas,
-    /// Per program deposit of an inscription, beyond its spend.
-    pub program_deposit: Gas,
-    /// Per program step of an inscription, with its program proof, beyond its
-    /// spend.
-    pub program_step: Gas,
-    /// Per program note a program step opens.
-    pub opening: Gas,
 }
 
 impl GasProfile {
@@ -143,7 +135,6 @@ impl BinaryEncode for GasProfile {
     fn encoded_length(&self) -> usize {
         let Self {
             transfer,
-            program_register,
             channel_config,
             channel_inscribe,
             channel_deposit,
@@ -161,12 +152,8 @@ impl BinaryEncode for GasProfile {
             commitment,
             signature,
             user_step,
-            program_deposit,
-            program_step,
-            opening,
         } = self;
         transfer.encoded_length()
-            + program_register.encoded_length()
             + channel_config.encoded_length()
             + channel_inscribe.encoded_length()
             + channel_deposit.encoded_length()
@@ -184,15 +171,11 @@ impl BinaryEncode for GasProfile {
             + commitment.encoded_length()
             + signature.encoded_length()
             + user_step.encoded_length()
-            + program_deposit.encoded_length()
-            + program_step.encoded_length()
-            + opening.encoded_length()
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         let Self {
             transfer,
-            program_register,
             channel_config,
             channel_inscribe,
             channel_deposit,
@@ -210,12 +193,8 @@ impl BinaryEncode for GasProfile {
             commitment,
             signature,
             user_step,
-            program_deposit,
-            program_step,
-            opening,
         } = self;
         transfer.encode_into(out);
-        program_register.encode_into(out);
         channel_config.encode_into(out);
         channel_inscribe.encode_into(out);
         channel_deposit.encode_into(out);
@@ -233,19 +212,15 @@ impl BinaryEncode for GasProfile {
         commitment.encode_into(out);
         signature.encode_into(out);
         user_step.encode_into(out);
-        program_deposit.encode_into(out);
-        program_step.encode_into(out);
-        opening.encode_into(out);
     }
 }
 
 /// The encoding of the fixture below, one cost per group.
 const GAS_PROFILE_HEX: &str = "
-    0100000000000000 0200000000000000 0300000000000000 0400000000000000 0500000000000000
-    0600000000000000 0700000000000000 0800000000000000 0900000000000000 0a00000000000000
-    0b00000000000000 0c00000000000000 0d00000000000000 0e00000000000000 0f00000000000000
-    1000000000000000 1100000000000000 1200000000000000 1300000000000000 1400000000000000
-    1500000000000000 1600000000000000
+    0100000000000000 0300000000000000 0400000000000000 0500000000000000 0600000000000000
+    0700000000000000 0800000000000000 0900000000000000 0a00000000000000 0b00000000000000
+    0c00000000000000 0d00000000000000 0e00000000000000 0f00000000000000 1000000000000000
+    1100000000000000 1200000000000000 1300000000000000
 ";
 
 codec_fixtures!(
@@ -253,7 +228,6 @@ codec_fixtures!(
     encode_only,
     GasProfile {
         transfer: Gas::new(1),
-        program_register: Gas::new(2),
         channel_config: Gas::new(3),
         channel_inscribe: Gas::new(4),
         channel_deposit: Gas::new(5),
@@ -271,9 +245,6 @@ codec_fixtures!(
         commitment: Gas::new(17),
         signature: Gas::new(18),
         user_step: Gas::new(19),
-        program_deposit: Gas::new(20),
-        program_step: Gas::new(21),
-        opening: Gas::new(22),
     } => GAS_PROFILE_HEX
 );
 
@@ -407,7 +378,6 @@ pub mod test_utils {
     /// The costs of the deployments' current gas profile.
     pub const GAS_PROFILE: GasProfile = GasProfile {
         transfer: Gas::new(10),
-        program_register: Gas::new(15114),
         channel_config: Gas::new(24),
         channel_inscribe: Gas::new(26),
         channel_deposit: Gas::new(26),
@@ -425,9 +395,6 @@ pub mod test_utils {
         commitment: Gas::new(58),
         signature: Gas::new(557),
         user_step: Gas::new(28),
-        program_deposit: Gas::new(144),
-        program_step: Gas::new(13528),
-        opening: Gas::new(470),
     };
 
     pub struct FixedThresholds(pub ChannelKeyIndex);

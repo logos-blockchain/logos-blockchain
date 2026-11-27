@@ -141,7 +141,6 @@ cryptarchia:
   # Raspberry Pi 5.
   gas_profile:
     transfer: 10
-    program_register: 15114
     channel_config: 24
     channel_inscribe: 26
     channel_deposit: 26
@@ -159,8 +158,5 @@ cryptarchia:
     commitment: 58
     signature: 557
     user_step: 28
-    program_deposit: 144
-    program_step: 13528
-    opening: 470
 time:
   slot_duration_in_seconds: 1

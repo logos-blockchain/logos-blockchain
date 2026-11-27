@@ -15,7 +15,6 @@ use crate::{
             pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
             sdp::SdpError,
         },
-        programs::Programs,
     },
     sdp::{Declaration, DeclarationId, MinStake, ServiceType},
 };
@@ -27,8 +26,6 @@ pub trait OperationVerificationHelper {
 
     /// The buffers and roots the previous Operations of the transaction left.
     fn get_tx_notes(&self) -> &TxNoteState;
-
-    fn get_programs(&self) -> &Programs;
 
     fn get_block_number(&self) -> BlockNumber;
 
@@ -118,7 +115,6 @@ pub mod test_utils {
                 },
                 sdp::SdpError,
             },
-            programs::Programs,
             transactions::OperationVerificationHelper,
         },
         sdp::{Declaration, DeclarationId, MinStake, ServiceType},
@@ -129,7 +125,6 @@ pub mod test_utils {
         keys: HashMap<(ChannelId, ChannelKeyIndex), UnverifiedEd25519PublicKey>,
         note_sets: NoteSets,
         tx_notes: TxNoteState,
-        programs: Programs,
         block_number: BlockNumber,
         declarations: Declarations,
         provider_index: ProviderIndex,
@@ -155,7 +150,6 @@ pub mod test_utils {
                 keys: keys.into_iter().collect(),
                 note_sets: NoteSets::new(),
                 tx_notes: TxNoteState::new(),
-                programs: Programs::new(),
                 block_number: 0,
                 declarations: Declarations::new_sync(),
                 provider_index: ProviderIndex::new_sync(),
@@ -248,10 +242,6 @@ pub mod test_utils {
 
         fn get_tx_notes(&self) -> &TxNoteState {
             &self.tx_notes
-        }
-
-        fn get_programs(&self) -> &Programs {
-            &self.programs
         }
 
         fn get_block_number(&self) -> BlockNumber {

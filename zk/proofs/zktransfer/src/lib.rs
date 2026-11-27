@@ -179,9 +179,9 @@ mod tests {
     use super::*;
     use crate::test_utils::sample_witness_data;
 
-    // Sample: active inputs of 1335 and 4845, eight outputs of 766, so 6180
-    // minus 6128.
-    const SAMPLE_EXCESS: u64 = 52;
+    // Sample: active inputs of 4133 and 3105, eight outputs of 898, so 7238
+    // minus 7184.
+    const SAMPLE_EXCESS: u64 = 54;
 
     fn frs(values: &[Groth16Input]) -> Vec<Fr> {
         values.iter().map(|value| value.into_inner()).collect()

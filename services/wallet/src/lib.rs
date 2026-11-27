@@ -87,7 +87,7 @@ use tokio::{
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{debug, error, info, trace, warn};
 
-pub use crate::channel::{ChannelStep, ChannelStepRequest, ChannelWithdrawal, ProgramPayment};
+pub use crate::channel::{ChannelStep, ChannelStepRequest, ChannelWithdrawal};
 use crate::states::{RecoveryState, ServiceState, Wallet};
 
 type KmsBackend = PreloadKMSBackend;
@@ -152,7 +152,7 @@ pub enum WalletServiceError {
     #[error("The note {0:?} of channel {1:?} is spent by a withdrawal or a step in flight")]
     ChannelNoteInFlight(NoteCommitment, ChannelId),
 
-    #[error("A channel step must pay a note or deposit to a program")]
+    #[error("A channel step must pay a note")]
     EmptyChannelStep,
 
     #[error("Failed to read or write the persisted state of the wallet: {0}")]
@@ -1107,7 +1107,7 @@ where
                     Ok((step, outputs, witness)) => {
                         // The proof runs off the loop: the notes are held from
                         // now, so that no other request spends them meanwhile.
-                        let spent: Vec<NoteNullifier> = step.inputs().iter().copied().collect();
+                        let spent: Vec<NoteNullifier> = step.inputs.iter().copied().collect();
                         state.reserve_pending_notes(spent.iter().copied());
                         signings.push(Self::channel_step_proof(
                             (step, outputs, witness),
@@ -1465,8 +1465,7 @@ where
             | OpRef::ChannelDeposit(_)
             | OpRef::ChannelWithdraw(_)
             | OpRef::Transfer(_)
-            | OpRef::ClaimPowReward(_)
-            | OpRef::ProgramRegister(_) => return Ok(None),
+            | OpRef::ClaimPowReward(_) => return Ok(None),
         };
         Self::sign_ed25519(tx_hash, signer, kms).await.map(Some)
     }
@@ -1654,9 +1653,9 @@ where
         Ok(known_note)
     }
 
-    // A user step, or a program deposit, spending the channel notes of the
-    // wallet, with the notes it creates and the witness of its ZkTransfer. The
-    // wallet follows the notes the step pays to its own keys.
+    // A step spending the channel notes of the wallet, with the notes it
+    // creates and the witness of its ZkTransfer. The wallet follows the notes
+    // the step pays to its own keys.
     async fn channel_step_job(
         tip: HeaderId,
         request: ChannelStepRequest,
@@ -2359,9 +2358,7 @@ const fn op_proof(
             OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::new(zk_proof, signature)),
         ),
         (OpRef::SDPActive(_), None, Some(signature)) => Ok(OpProof::Ed25519Sig(signature)),
-        (OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_), None, None) => {
-            Ok(OpProof::None(NoOpProof))
-        }
+        (OpRef::ClaimPowReward(_), None, None) => Ok(OpProof::None(NoOpProof)),
         _ => Err(WalletServiceError::OpProofParts),
     }
 }

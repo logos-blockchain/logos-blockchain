@@ -203,8 +203,6 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
             PolWalletInputsData {
                 note_value,
                 note_nonce,
-                note_program,
-                note_data,
                 set_selectors,
                 commitment_aged_path,
                 commitment_aged_selectors,
@@ -224,8 +222,6 @@ pub fn leadership_quota_inputs(leader_private: &LeaderPrivate) -> ProofOfLeaders
         slot: *slot_number,
         note_value: *note_value,
         note_nonce: *note_nonce,
-        note_program: *note_program,
-        note_data: *note_data,
         commitment_aged_path_and_selectors: core::array::from_fn(|i| {
             (commitment_aged_path[i], commitment_aged_selectors[i])
         }),

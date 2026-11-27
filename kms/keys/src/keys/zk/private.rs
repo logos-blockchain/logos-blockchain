@@ -120,9 +120,8 @@ pub fn kdf_public_key(secret: &Fr) -> PublicKey {
     PublicKey::new(<Poseidon2Bn254Hasher as Digest>::compress(&[*KDF, *secret]))
 }
 
-/// `PK0`, the public key of the spending secret key `0`, which holds every
-/// program note: everyone knows its nullifier key `NF_SK0`, so only the proof
-/// of its program moves a program note.
+/// `PK0`, the public key of the spending secret key `0`: everyone knows its
+/// nullifier key `NF_SK0`, so anyone can spend a note it holds.
 pub static PK0: LazyLock<PublicKey> = LazyLock::new(|| SecretKey(Fr::ZERO).to_public_key());
 
 impl PartialEq for SecretKey {

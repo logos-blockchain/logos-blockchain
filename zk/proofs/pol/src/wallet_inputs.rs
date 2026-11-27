@@ -13,8 +13,6 @@ pub struct PolWalletInputs {
     note_value: Groth16Input,
     // every path and selector list from the leaf level up
     note_nonce: Groth16Input,
-    note_program: Groth16Input,
-    note_data: Groth16Input,
     set_selectors: [Groth16Input; NOTE_SET_TREE_DEPTH],
     commitment_aged_path: [Groth16Input; NOTE_SET_TREE_DEPTH],
     commitment_aged_selectors: [Groth16Input; NOTE_SET_TREE_DEPTH],
@@ -38,9 +36,6 @@ pub struct PolWalletInputsData {
     pub note_value: u64,
     // every path and selector list from the leaf level up
     pub note_nonce: Fr,
-    // the program and the data of the note, 0 for a user note
-    pub note_program: Fr,
-    pub note_data: Fr,
     pub set_selectors: [bool; NOTE_SET_TREE_DEPTH],
     pub commitment_aged_path: [Fr; NOTE_SET_TREE_DEPTH],
     pub commitment_aged_selectors: [bool; NOTE_SET_TREE_DEPTH],
@@ -74,10 +69,6 @@ pub struct PolWalletInputsJson {
     note_value: Groth16InputDeser,
     #[serde(rename = "nonce")]
     note_nonce: Groth16InputDeser,
-    #[serde(rename = "program")]
-    note_program: Groth16InputDeser,
-    #[serde(rename = "data")]
-    note_data: Groth16InputDeser,
     #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
     set_selectors: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
     #[serde(rename = "cm_aged_path")]
@@ -114,8 +105,6 @@ impl From<&PolWalletInputs> for PolWalletInputsJson {
         PolWalletInputs {
             note_value,
             note_nonce,
-            note_program,
-            note_data,
             set_selectors,
             commitment_aged_path,
             commitment_aged_selectors,
@@ -136,8 +125,6 @@ impl From<&PolWalletInputs> for PolWalletInputsJson {
         Self {
             note_value: note_value.into(),
             note_nonce: note_nonce.into(),
-            note_program: note_program.into(),
-            note_data: note_data.into(),
             set_selectors: set_selectors.each_ref().map(Into::into),
             commitment_aged_path: commitment_aged_path.each_ref().map(Into::into),
             commitment_aged_selectors: commitment_aged_selectors.each_ref().map(Into::into),
@@ -162,8 +149,6 @@ impl From<PolWalletInputsData> for PolWalletInputs {
         PolWalletInputsData {
             note_value,
             note_nonce,
-            note_program,
-            note_data,
             set_selectors,
             commitment_aged_path,
             commitment_aged_selectors,
@@ -185,8 +170,6 @@ impl From<PolWalletInputsData> for PolWalletInputs {
         Self {
             note_value: Groth16Input::new(Fr::from(BigUint::from(note_value))),
             note_nonce: note_nonce.into(),
-            note_program: note_program.into(),
-            note_data: note_data.into(),
             set_selectors: set_selectors
                 .map(|selector| Groth16Input::new(if selector { Fr::ONE } else { Fr::ZERO })),
             commitment_aged_path: commitment_aged_path.map(Into::into),

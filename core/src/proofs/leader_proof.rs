@@ -246,7 +246,7 @@ pub struct LeaderPublic {
 /// Check if the given note leads and wins the lottery with the given keys.
 ///
 /// The nullifier key derives the public key of the note and the staking secret
-/// key its staking key and the ticket. A program note leads like a user note.
+/// key its staking key and the ticket.
 #[must_use]
 pub fn check_winning(
     note: &notes::Note,
@@ -345,8 +345,6 @@ impl LeaderPrivate {
             nonce: wallet.note_nonce,
             public_key: kdf_public_key(&wallet.nullifier_key),
             stake_public_key: kdf_public_key(&wallet.staking_secret_key),
-            program: wallet.note_program,
-            data: wallet.note_data,
         };
         Poseidon2Bn254Hasher::digest(&[
             *NONCE_CONTRIB_V1,
@@ -459,8 +457,6 @@ pub fn pol_wallet_inputs(
     Ok(lb_pol::PolWalletInputsData {
         note_value: note.value,
         note_nonce: note.nonce,
-        note_program: note.program,
-        note_data: note.data,
         set_selectors,
         commitment_aged_path,
         commitment_aged_selectors,

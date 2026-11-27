@@ -106,7 +106,6 @@ impl Settings {
         let max_gas_per_block = Gas::from(self.execution_market.max_gas_per_block);
         let GasProfile {
             transfer,
-            program_register,
             channel_config,
             channel_inscribe,
             channel_deposit,
@@ -124,13 +123,9 @@ impl Settings {
             commitment,
             signature,
             user_step,
-            program_deposit,
-            program_step,
-            opening,
         } = self.gas_profile;
         for (operation, gas) in [
             ("a transfer", transfer),
-            ("a program registration", program_register),
             ("a channel configuration", channel_config),
             ("a channel inscription", channel_inscribe),
             ("a channel deposit", channel_deposit),
@@ -148,9 +143,6 @@ impl Settings {
             ("a commitment", commitment),
             ("a signature check", signature),
             ("a user step", user_step),
-            ("a program deposit", program_deposit),
-            ("a program step", program_step),
-            ("a program note opening", opening),
         ] {
             ensure!(
                 gas <= max_gas_per_block,

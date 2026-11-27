@@ -365,8 +365,6 @@ mod test {
             low_leaf_aged_next_nullifier: ZkHash::ONE,
             low_leaf_aged_path_and_selectors: [(ZkHash::ONE, true); _],
             set_aged_path_and_selectors: [(ZkHash::ONE, true); _],
-            note_program: ZkHash::ZERO,
-            note_data: ZkHash::ZERO,
             nullifier_key: ZkHash::ONE,
             staking_secret_key: ZkHash::ONE,
         };

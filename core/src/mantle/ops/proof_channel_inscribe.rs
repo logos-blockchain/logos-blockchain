@@ -1,20 +1,21 @@
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode, DecodeError};
+use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::{ED25519_SIGNATURE_SIZE, Ed25519Signature};
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::ops::{StepProof, StepProofShape, channel::inscribe::InscriptionOp};
+use crate::mantle::ops::{ZkTransferProof, channel::inscribe::InscriptionOp};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ChannelInscribeProof {
     // By the signer, over the mantle_txhash.
     pub signature: Ed25519Signature,
     // One per step.
-    pub step_proofs: Vec<StepProof>,
+    pub step_proofs: Vec<ZkTransferProof>,
 }
 
 impl ChannelInscribeProof {
     #[must_use]
-    pub const fn new(signature: Ed25519Signature, step_proofs: Vec<StepProof>) -> Self {
+    pub const fn new(signature: Ed25519Signature, step_proofs: Vec<ZkTransferProof>) -> Self {
         Self {
             signature,
             step_proofs,
@@ -26,21 +27,16 @@ impl ChannelInscribeProof {
         Self::new(signature, Vec::new())
     }
 
-    /// The shape of the proof of each step of `operation`, the context its
-    /// proof decodes with.
+    /// The number of steps of `operation`, the context its proof decodes with.
     #[must_use]
-    pub fn decode_context(operation: &InscriptionOp) -> Vec<StepProofShape> {
-        operation.steps().map(StepProofShape::from).collect()
+    pub fn decode_context(operation: &InscriptionOp) -> usize {
+        operation.steps_len()
     }
 
     /// The size of the encoded proof of `operation`.
     #[must_use]
     pub fn encoded_length_for(operation: &InscriptionOp) -> usize {
-        ED25519_SIGNATURE_SIZE
-            + operation
-                .steps()
-                .map(|step| StepProofShape::from(step).encoded_length())
-                .sum::<usize>()
+        ED25519_SIGNATURE_SIZE + operation.steps_len() * COMPRESSED_PROOF_SIZE
     }
 }
 
@@ -63,17 +59,17 @@ impl BinaryEncode for ChannelInscribeProof {
 }
 
 impl BinaryDecode for ChannelInscribeProof {
-    // The proof shape of each step of the inscription.
-    type Context = Vec<StepProofShape>;
+    // The number of steps of the inscription.
+    type Context = usize;
 
     fn decode<'input>(
         input: &'input [u8],
-        context: &Self::Context,
+        steps: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
         let (mut rest, signature) = Ed25519Signature::decode(input, &())?;
-        let mut step_proofs = Vec::with_capacity(context.len());
-        for shape in context {
-            let (next, step_proof) = StepProof::decode(rest, shape)?;
+        let mut step_proofs = Vec::with_capacity(*steps);
+        for _ in 0..*steps {
+            let (next, step_proof) = ZkTransferProof::decode(rest, &())?;
             step_proofs.push(step_proof);
             rest = next;
         }
@@ -91,24 +87,21 @@ impl crate::mantle::ops::op_proof::samples::SampleProof for ChannelInscribeProof
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mantle::ops::{ZkTransferProof, op_proof::samples::SampleProof as _};
+    use crate::mantle::ops::op_proof::samples::SampleProof as _;
 
     #[test]
     fn decode_reads_one_zk_transfer_per_step() {
         let proof = ChannelInscribeProof::new(
             Ed25519Signature::from_bytes(&[2u8; 64]),
-            vec![
-                StepProof::ZkTransfer(ZkTransferProof::sample()),
-                StepProof::ZkTransfer(ZkTransferProof::sample()),
-            ],
+            vec![ZkTransferProof::sample(), ZkTransferProof::sample()],
         );
         let bytes = proof.encode();
         assert_eq!(bytes.len(), 64 + 2 * 128);
         assert_eq!(
-            ChannelInscribeProof::decode(&bytes, &vec![StepProofShape::ZkTransfer; 2]).unwrap(),
+            ChannelInscribeProof::decode(&bytes, &2).unwrap(),
             (&[][..], proof)
         );
-        let (rest, without) = ChannelInscribeProof::decode(&bytes, &vec![]).unwrap();
+        let (rest, without) = ChannelInscribeProof::decode(&bytes, &0).unwrap();
         assert_eq!(
             without,
             ChannelInscribeProof::without_steps(Ed25519Signature::from_bytes(&[2u8; 64]))

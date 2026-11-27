@@ -854,7 +854,6 @@ pub fn era_schedule() -> ServiceEraSchedule {
 /// The costs of the deployments' current gas profile.
 pub const GAS_PROFILE: GasProfile = GasProfile {
     transfer: Gas::new(10),
-    program_register: Gas::new(15114),
     channel_config: Gas::new(24),
     channel_inscribe: Gas::new(26),
     channel_deposit: Gas::new(26),
@@ -872,9 +871,6 @@ pub const GAS_PROFILE: GasProfile = GasProfile {
     commitment: Gas::new(58),
     signature: Gas::new(557),
     user_step: Gas::new(28),
-    program_deposit: Gas::new(144),
-    program_step: Gas::new(13528),
-    opening: Gas::new(470),
 };
 
 fn wallet_for_backfill<'u>(

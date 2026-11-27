@@ -10,7 +10,6 @@ use lb_core::{
             pow::{PowNullifier, PowReward, PowSlotWindows, PowTarget},
             sdp::SdpError,
         },
-        programs::Programs,
         transactions::{OperationVerificationHelper, VerificationError},
     },
     sdp::{Declaration, DeclarationId, MinStake, ServiceType},
@@ -62,10 +61,6 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
 
     fn get_tx_notes(&self) -> &TxNoteState {
         self.tx_notes
-    }
-
-    fn get_programs(&self) -> &Programs {
-        self.ledger_state.programs()
     }
 
     fn get_block_number(&self) -> BlockNumber {

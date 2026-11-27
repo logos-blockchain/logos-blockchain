@@ -14,13 +14,12 @@ use crate::{
             CHANNEL_WITHDRAW_PAYLOAD_HEX, DEPOSIT, DEPOSIT_PAYLOAD_HEX, INSCRIPTION,
             INSCRIPTION_PAYLOAD_HEX,
         },
-        notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
+        notes::{InputNullifiers, NoteNullifier, OutputCommitments},
         ops::channel::{
             ChannelId, MsgId,
             config::{ChannelConfigFields, ChannelConfigOp},
             deposit::{DepositOp, Metadata},
-            inscribe::{Inscription, InscriptionOp, MiniBlocks, Step, UserStep},
-            program_step::{ProgramDeposit, ProgramStep},
+            inscribe::{Inscription, InscriptionOp, MiniBlocks, Step},
             withdraw::ChannelWithdrawOp,
         },
     },
@@ -82,54 +81,10 @@ codec_fixtures!(
     INSCRIPTION.clone() => INSCRIPTION_PAYLOAD_HEX,
 );
 codec_fixtures!(
-    UserStep,
+    Step,
     context = (u32::MAX, ()),
     Self { inputs: [NoteNullifier(Fr::ONE)].into(), outputs: OutputCommitments::default(), commitment_merkle_root: Fr::ZERO, inscription: Inscription::default() }
         => "01010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-);
-// `ProgramDeposit::sample` and `ProgramStep::sample` only exist with
-// `test-utils`, the examples always do.
-fn program_deposit() -> ProgramDeposit {
-    ProgramDeposit {
-        program_id: Fr::from(0x34u64),
-        inputs: [NoteNullifier(Fr::from(0x35u64))].into(),
-        outputs: [NoteCommitment(Fr::from(0x36u64))].into(),
-        commitment_merkle_root: Fr::from(0x37u64),
-        value: 0x38,
-        intent: Fr::from(0x39u64),
-        inscription: Inscription::new_unchecked(b"deposit-inscription".to_vec()),
-    }
-}
-
-fn program_step() -> ProgramStep {
-    ProgramStep {
-        program_id: Fr::from(0x34u64),
-        inputs: [NoteNullifier(Fr::from(0x3au64))].into(),
-        program_outputs: [NoteCommitment(Fr::from(0x3bu64))].into(),
-        outputs: OutputCommitments::default(),
-        commitment_merkle_root: Fr::from(0x3cu64),
-        program_step_id: Fr::from(0x3du64),
-        inscription: Inscription::new_unchecked(b"program-step-inscription".to_vec()),
-    }
-}
-
-codec_fixtures!(
-    ProgramDeposit,
-    context = (u32::MAX, ()),
-    program_deposit() => "3400000000000000000000000000000000000000000000000000000000000000013500000000000000000000000000000000000000000000000000000000000000013600000000000000000000000000000000000000000000000000000000000000370000000000000000000000000000000000000000000000000000000000000038000000000000003900000000000000000000000000000000000000000000000000000000000000130000006465706f7369742d696e736372697074696f6e",
-);
-codec_fixtures!(
-    ProgramStep,
-    context = (u32::MAX, ()),
-    program_step() => "3400000000000000000000000000000000000000000000000000000000000000013a00000000000000000000000000000000000000000000000000000000000000013b00000000000000000000000000000000000000000000000000000000000000003c000000000000000000000000000000000000000000000000000000000000003d000000000000000000000000000000000000000000000000000000000000001800000070726f6772616d2d737465702d696e736372697074696f6e",
-);
-codec_fixtures!(
-    Step,
-    context = u32::MAX,
-    Step::User(UserStep { inputs: [NoteNullifier(Fr::ONE)].into(), outputs: OutputCommitments::default(), commitment_merkle_root: Fr::ZERO, inscription: Inscription::default() })
-        => "0001010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-    Step::ProgramDeposit(program_deposit()) => "013400000000000000000000000000000000000000000000000000000000000000013500000000000000000000000000000000000000000000000000000000000000013600000000000000000000000000000000000000000000000000000000000000370000000000000000000000000000000000000000000000000000000000000038000000000000003900000000000000000000000000000000000000000000000000000000000000130000006465706f7369742d696e736372697074696f6e",
-    Step::Program(program_step()) => "023400000000000000000000000000000000000000000000000000000000000000013a00000000000000000000000000000000000000000000000000000000000000013b00000000000000000000000000000000000000000000000000000000000000003c000000000000000000000000000000000000000000000000000000000000003d000000000000000000000000000000000000000000000000000000000000001800000070726f6772616d2d737465702d696e736372697074696f6e",
 );
 codec_fixtures!(
     ChannelWithdrawOp,

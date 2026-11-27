@@ -14,14 +14,13 @@ use crate::mantle::{
         },
         proofs::proof_values::{
             CHANNEL_MULTI_SIG, CHANNEL_MULTI_SIG_HEX, ED25519_SIG, ED25519_SIG_HEX,
-            PROGRAM_STEP_PROOF, PROGRAM_STEP_PROOF_HEX, ZK_AND_ED25519_SIGS,
-            ZK_AND_ED25519_SIGS_HEX, ZK_TRANSFER, ZK_TRANSFER_HEX,
+            ZK_AND_ED25519_SIGS, ZK_AND_ED25519_SIGS_HEX, ZK_TRANSFER, ZK_TRANSFER_HEX,
         },
     },
     ledger::verification_mode::VerificationMode,
     notes::{NoteNullifier, OutputCommitments},
     ops::{
-        ChannelInscribeProof, NoOpProof, SignedOp, SignedOperation, StepProof, ZkTransferProof,
+        ChannelInscribeProof, NoOpProof, SignedOp, SignedOperation, ZkTransferProof,
         channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp, MiniBlocks},
@@ -117,8 +116,6 @@ fn all_ops_hex() -> String {
         ED25519_SIG_HEX,
         ZK_TRANSFER_HEX,
         ZK_TRANSFER_HEX,
-        PROGRAM_STEP_PROOF_HEX,
-        ZK_TRANSFER_HEX,
         ZK_TRANSFER_HEX,
         ZK_AND_ED25519_SIGS_HEX,
         ZK_AND_ED25519_SIGS_HEX,
@@ -140,14 +137,7 @@ fn all_ops<State: VerificationState, Mode: VerificationMode>() -> SignedOps<Stat
         signed!(
             ChannelInscribe,
             INSCRIPTION,
-            ChannelInscribeProof::new(
-                *ED25519_SIG,
-                vec![
-                    StepProof::ZkTransfer(*ZK_TRANSFER),
-                    StepProof::ZkTransfer(*ZK_TRANSFER),
-                    StepProof::ProgramStep(PROGRAM_STEP_PROOF.clone())
-                ]
-            )
+            ChannelInscribeProof::new(*ED25519_SIG, vec![*ZK_TRANSFER])
         ),
         signed!(ChannelDeposit, DEPOSIT, *ZK_TRANSFER),
         signed!(ChannelWithdraw, CHANNEL_WITHDRAW, *ZK_TRANSFER),

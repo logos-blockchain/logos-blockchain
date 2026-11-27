@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_cryptarchia_engine::Slot;
-use lb_program_spend::ZkProgramSpendInputsError;
 use lb_zktransfer::ZkTransferInputsError;
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +11,7 @@ use crate::{
         gas::ThresholdSource,
         ledger::verification_mode::GenesisMode,
         note_set::{NoteSetError, NoteSetIndex, NoteSets, TxNoteState},
-        notes::{NoteNullifier, ProgramId},
+        notes::NoteNullifier,
         ops::{
             SignedOperation,
             channel::{
@@ -101,26 +100,6 @@ pub enum Error {
     StepProofCount { steps: usize, proofs: usize },
     #[error("Note {0:?} is consumed by two steps of the inscription")]
     StepDoubleSpend(NoteNullifier),
-    #[error("Program {0:?} is not registered")]
-    UnknownProgram(ProgramId),
-    #[error("The proof of step {step} is not of the kind of the step")]
-    StepProofKind { step: usize },
-    #[error("A program deposit to program {0:?} is left unconsumed at the end of its mini-block")]
-    UnconsumedDeposit(ProgramId),
-    #[error("Program step {step} consumes a program deposit to program {program_id:?}")]
-    DepositToAnotherProgram { step: usize, program_id: ProgramId },
-    #[error("Step {step} carries {openings} openings for {program_outputs} outputs of the program")]
-    ProgramNoteCount {
-        step: usize,
-        openings: usize,
-        program_outputs: usize,
-    },
-    #[error("The opening of program output {output} of step {step} does not match it")]
-    ProgramNoteOpening { step: usize, output: usize },
-    #[error("The program deposits consumed by step {step} overflow")]
-    PaidValueOverflow { step: usize },
-    #[error(transparent)]
-    ZkProgramSpendInputs(#[from] ZkProgramSpendInputsError),
 }
 
 impl Error {
@@ -139,15 +118,7 @@ impl Error {
             | Self::NoNoteSet { .. }
             | Self::ZkTransferInputs(_)
             | Self::StepProofCount { .. }
-            | Self::StepDoubleSpend(_)
-            | Self::UnknownProgram(_)
-            | Self::StepProofKind { .. }
-            | Self::UnconsumedDeposit(_)
-            | Self::DepositToAnotherProgram { .. }
-            | Self::ProgramNoteCount { .. }
-            | Self::ProgramNoteOpening { .. }
-            | Self::PaidValueOverflow { .. }
-            | Self::ZkProgramSpendInputs(_) => false,
+            | Self::StepDoubleSpend(_) => false,
         }
     }
 }

@@ -138,7 +138,7 @@ logos-blockchain/
 │   ├── groth16/              Groth16 over BN254 (arkworks)
 │   ├── poseidon2/            Poseidon2 hash function
 │   ├── circuits/             Circuit prover, verifier, witness generator
-│   └── proofs/               PoL, PoQ, ZkTransfer, program spend
+│   └── proofs/               PoL, PoQ, ZkTransfer
 ├── ledger/               UTXO-based ledger & state transitions
 ├── utxotree/             Poseidon2 Merkle node hasher
 ├── mmr/                  Merkle Mountain Range (header commitments)

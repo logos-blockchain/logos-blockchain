@@ -73,7 +73,7 @@ use lb_tx_service::{
 };
 use lb_version::BuildVersionInfo;
 use lb_wallet_service::{
-    ChannelStepRequest, ProgramPayment,
+    ChannelStepRequest,
     api::{WalletApi, WalletServiceData, added_nullifiers},
 };
 use overwatch::{
@@ -1106,16 +1106,8 @@ where
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
 {
     // A step spends at least one note, so it has to move some value.
-    if req.payments.iter().all(|payment| payment.value == 0)
-        && req
-            .program_deposit
-            .as_ref()
-            .is_none_or(|deposit| deposit.value == 0)
-    {
-        return ApiError::BadRequest(
-            "A channel step must pay a note or deposit to a program".into(),
-        )
-        .into_response();
+    if req.payments.iter().all(|payment| payment.value == 0) {
+        return ApiError::BadRequest("A channel step must pay a note".into()).into_response();
     }
     make_request_and_return_response!(async {
         let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
@@ -1129,11 +1121,6 @@ where
                 .into_iter()
                 .map(|payment| (payment.public_key, payment.value))
                 .collect(),
-            program_deposit: req.program_deposit.map(|deposit| ProgramPayment {
-                program_id: deposit.program_id,
-                value: deposit.value,
-                intent: deposit.intent,
-            }),
             inscription: req.inscription,
             change_pk: req.change_public_key,
             holder_pks: req.holder_public_keys,

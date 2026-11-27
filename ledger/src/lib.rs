@@ -41,7 +41,6 @@ use lb_core::{
                 withdraw::{PendingWithdrawals, WithdrawExecutionContext},
             },
             pow::ClaimPoWRewardExecutionContext,
-            program::ProgramRegisterExecutionContext,
             sdp::{SDPActiveOp, SDPDeclareOp},
         },
         traits::{GenesisTx, PreverifiedMantleTransaction, StorageSize, genesis::GenesisOps},
@@ -1570,15 +1569,6 @@ impl LedgerState {
                     self.cryptarchia_ledger.update_note_sets(result.note_sets);
                 tx_events.extend(events);
             }
-            SignedOp::ProgramRegister(signed_operation) => {
-                let (result, events) = signed_operation
-                    .execute(ProgramRegisterExecutionContext {
-                        programs: self.mantle_ledger.programs().clone(),
-                    })
-                    .map_err(|(_signed_operation, error)| mantle::Error::Program(error))?;
-                self.mantle_ledger = self.mantle_ledger.update_programs(result.programs);
-                tx_events.extend(events);
-            }
         }
 
         Ok((self, balance, tx_events))
@@ -1726,25 +1716,19 @@ mod tests {
                 derive_note_nullifier,
             },
             ops::{
-                ChannelInscribeProof, OpId as _, SignedOperation, StepProof, ZkAndEd25519Proof,
+                ChannelInscribeProof, OpId as _, SignedOperation, ZkAndEd25519Proof,
                 ZkTransferProof,
                 channel::{
                     ChannelId, MsgId, NULL_CHANNEL_ID,
                     config::ChannelConfigOp,
                     deposit::{DepositOp, Metadata},
-                    inscribe::{
-                        Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep,
-                        user_step_id,
-                    },
-                    program_step::{ProgramDeposit, ProgramStep},
+                    inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, step_id},
                     withdraw::{ChannelWithdrawOp, PendingWithdrawal},
                 },
                 op_proof::samples::SampleProof as _,
-                program::ProgramRegisterOp,
                 sdp::{SDPWithdrawOp, SdpError},
                 transfer::{TransferError, TransferOp, test_utils::prove_transfer},
             },
-            programs::{ProgramVerificationKey, RegisteredProgram, derive_program_id},
             traits::Hashable as _,
             transactions::{
                 GenesisAllocation, GenesisTx, OpProofs, Ops, TxList,
@@ -2383,46 +2367,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(balance, 13);
-    }
-
-    #[test]
-    fn program_register_stores_the_key_once_and_charges_each_registration() {
-        use lb_core::mantle::ops::NoOpProof;
-
-        let test_config = config();
-        let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
-        let key = ProgramVerificationKey::try_from(&lb_groth16::test_utils::three_input_setup(1).0)
-            .unwrap();
-        let register = Op::ProgramRegister(ProgramRegisterOp {
-            verification_key: key.clone(),
-        });
-        let tx = SignedOps::from_parts(
-            Ops::new(
-                FORK_DIGEST,
-                TxList::new_unchecked(vec![register.clone(), register]),
-            ),
-            OpProofs::new_unchecked(vec![OpProof::None(NoOpProof), OpProof::None(NoOpProof)]),
-        )
-        .unwrap()
-        .preverify()
-        .unwrap();
-
-        let (state, _, execution_gas, events, _) = state
-            .try_apply_tx_operations::<_, HeaderId>(&eras, tx)
-            .unwrap();
-
-        assert_eq!(execution_gas, Gas::new(2 * 15_114));
-        assert_eq!(events, []);
-        assert_eq!(state.mantle_ledger.programs().len(), 1);
-        assert_eq!(
-            state
-                .mantle_ledger
-                .programs()
-                .get(&derive_program_id(&key))
-                .map(RegisteredProgram::key),
-            Some(&key)
-        );
     }
 
     #[test]
@@ -4368,7 +4312,7 @@ mod tests {
         );
         let (ledger_mmr, _) = note_commitments_with_paths(ledger_commitments);
         let (channel_mmr, _) = note_commitments_with_paths(channel_commitments);
-        let user_step = UserStep {
+        let user_step = Step {
             inputs: [note_nullifier(&alice_note, alice_secret)].into(),
             outputs: [bob_note.commitment()].into(),
             commitment_merkle_root: channel_mmr.frontier_root(),
@@ -4379,7 +4323,7 @@ mod tests {
             inscription: Inscription::new_unchecked(b"alice to bob".to_vec()),
             parent: channel_parent,
             signer: fixture.verifying_key.into_unverified(),
-            mini_blocks: [MiniBlock::from([Step::User(user_step.clone())])].into(),
+            mini_blocks: [MiniBlock::from([user_step.clone()])].into(),
         };
         let fee_transfer = TransferOp::new(
             [note_nullifier(&fee_transfer_input, fee_transfer_secret)].into(),
@@ -4410,7 +4354,7 @@ mod tests {
             0,
             &[bob_note],
             channel_commitments,
-            user_step_id(&channel_id, &user_step),
+            step_id(&channel_id, &user_step),
         );
         let transfer_tx = SignedOps::from_parts(
             transfer_ops,
@@ -4420,7 +4364,7 @@ mod tests {
                     fixture
                         .signing_key
                         .sign_payload(transfer_hash.as_signing_bytes()),
-                    vec![StepProof::ZkTransfer(channel_transfer_proof)],
+                    vec![channel_transfer_proof],
                 )),
             ]),
         )
@@ -5025,7 +4969,7 @@ mod tests {
         let bob_secret = Fr::from(7u64);
         let (ledger_mmr, _) = note_commitments_with_paths(ledger_commitments);
         let (channel_mmr, _) = note_commitments_with_paths(channel_commitments);
-        let cancel_step = UserStep {
+        let cancel_step = Step {
             inputs: [note_nullifier(&bob_note, bob_secret)].into(),
             outputs: [carol_note.commitment()].into(),
             commitment_merkle_root: channel_mmr.frontier_root(),
@@ -5036,7 +4980,7 @@ mod tests {
             inscription: Inscription::new_unchecked(b"bob to carol".to_vec()),
             parent: pending.progress.channel_parent,
             signer: fixture.verifying_key.into_unverified(),
-            mini_blocks: [MiniBlock::from([Step::User(cancel_step.clone())])].into(),
+            mini_blocks: [MiniBlock::from([cancel_step.clone()])].into(),
         };
         let fee_cancel_op = TransferOp::new(
             [note_nullifier(&fee_cancel_input, fee_cancel_secret)].into(),
@@ -5067,7 +5011,7 @@ mod tests {
             1,
             &[carol_note],
             channel_commitments,
-            user_step_id(&channel_id, &cancel_step),
+            step_id(&channel_id, &cancel_step),
         );
         SignedOps::from_parts(
             cancel_ops,
@@ -5077,7 +5021,7 @@ mod tests {
                     fixture
                         .signing_key
                         .sign_payload(cancel_hash.as_signing_bytes()),
-                    vec![StepProof::ZkTransfer(channel_cancel_proof)],
+                    vec![channel_cancel_proof],
                 )),
             ]),
         )
@@ -5394,7 +5338,7 @@ mod tests {
             .map(|op| match op {
                 Op::ChannelInscribe(_) => OpProof::ChannelInscribe(ChannelInscribeProof::new(
                     signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                    std::iter::repeat_with(|| StepProof::ZkTransfer(zero_proof()))
+                    std::iter::repeat_with(zero_proof)
                         .take(step_proofs)
                         .collect(),
                 )),
@@ -5408,12 +5352,12 @@ mod tests {
     }
 
     fn one_step(input: u64, output: u64, commitment_merkle_root: Fr) -> MiniBlocks {
-        [MiniBlock::from([Step::User(UserStep {
+        [MiniBlock::from([Step {
             inputs: [NoteNullifier(Fr::from(input))].into(),
             outputs: [NoteCommitment(Fr::from(output))].into(),
             commitment_merkle_root,
             inscription: Inscription::default(),
-        })])]
+        }])]
         .into()
     }
 
@@ -5548,14 +5492,8 @@ mod tests {
         );
     }
 
-    // As `inscribe_tx`, with the sample proof of the shape of each step and no
-    // proof for a program registration.
-    fn program_step_tx(
-        ops: Vec<Op>,
-        signing_key: &Ed25519Key,
-    ) -> SignedOps<Preverified, StandardMode> {
-        use lb_core::mantle::ops::NoOpProof;
-
+    // As `inscribe_tx`, with one sample proof per step of each inscription.
+    fn stepped_tx(ops: Vec<Op>, signing_key: &Ed25519Key) -> SignedOps<Preverified, StandardMode> {
         let ops = Ops::new(FORK_DIGEST, TxList::new_unchecked(ops));
         let tx_hash = ops.hash();
         let proofs = ops
@@ -5564,13 +5502,9 @@ mod tests {
                 Op::ChannelInscribe(inscribe) => {
                     OpProof::ChannelInscribe(ChannelInscribeProof::new(
                         signing_key.sign_payload(tx_hash.as_signing_bytes()),
-                        inscribe
-                            .steps()
-                            .map(|step| StepProof::sample_for(step.into()))
-                            .collect(),
+                        inscribe.steps().map(|_| zero_proof()).collect(),
                     ))
                 }
-                Op::ProgramRegister(_) => OpProof::None(NoOpProof),
                 _ => OpProof::ZkTransfer(zero_proof()),
             })
             .collect();
@@ -5580,258 +5514,11 @@ mod tests {
             .unwrap()
     }
 
-    fn test_program_key() -> ProgramVerificationKey {
-        ProgramVerificationKey::try_from(&lb_groth16::test_utils::three_input_setup(1).0).unwrap()
-    }
-    // A deposit and the program step consuming it, paying no opened note, so
-    // the sample proofs pass preverification.
-    fn program_steps(
-        program_id: Fr,
-        nullifier: u64,
-        output: u64,
-        commitment_merkle_root: Fr,
-    ) -> MiniBlocks {
-        [MiniBlock::from([
-            Step::ProgramDeposit(ProgramDeposit {
-                program_id,
-                inputs: [NoteNullifier(Fr::from(nullifier))].into(),
-                outputs: OutputCommitments::default(),
-                commitment_merkle_root,
-                value: 5,
-                intent: Fr::ONE,
-                inscription: Inscription::default(),
-            }),
-            Step::Program(ProgramStep {
-                program_id,
-                inputs: InputNullifiers::default(),
-                program_outputs: OutputCommitments::default(),
-                outputs: [NoteCommitment(Fr::from(output))].into(),
-                commitment_merkle_root,
-                program_step_id: Fr::ZERO,
-                inscription: Inscription::default(),
-            }),
-        ])]
-        .into()
-    }
-    #[test]
-    fn a_program_registered_earlier_in_the_transaction_runs_its_step() {
-        let test_config = config();
-        let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
-        let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([1u8; 32]);
-        let state = create_channel(
-            state,
-            &eras,
-            channel_id,
-            &signing_key,
-            verifying_key.into_unverified(),
-        );
-        let channel = state
-            .mantle_ledger()
-            .channels()
-            .channel_state(&channel_id)
-            .unwrap()
-            .clone();
-        let channel_root = state
-            .latest_note_sets()
-            .channel(&channel_id)
-            .unwrap()
-            .commitment_root();
-        let key = test_program_key();
-        let inscribe = InscriptionOp {
-            channel_id,
-            inscription: Inscription::new_unchecked(vec![1]),
-            parent: channel.tip_message,
-            signer: verifying_key.into_unverified(),
-            mini_blocks: program_steps(derive_program_id(&key), 11, 12, channel_root),
-        };
-
-        let (state, _, execution_gas, _, deferred) = state
-            .try_apply_tx_operations::<_, HeaderId>(
-                &eras,
-                program_step_tx(
-                    vec![
-                        Op::ProgramRegister(ProgramRegisterOp {
-                            verification_key: key.clone(),
-                        }),
-                        Op::ChannelInscribe(inscribe),
-                    ],
-                    &signing_key,
-                ),
-            )
-            .unwrap();
-
-        assert_eq!(deferred.program_proofs()[0].inputs().program.key(), &key);
-        assert_eq!(
-            deferred.program_spends()[0]
-                .inputs()
-                .paid_value
-                .into_inner(),
-            Fr::from(5u64)
-        );
-        let set = state.latest_note_sets().channel(&channel_id).unwrap();
-        assert!(
-            set.contains_nullifier(&NoteNullifier(Fr::from(11u64)))
-                .unwrap()
-        );
-        assert_eq!(
-            set.commitment_root(),
-            CommitmentMmr::new()
-                .push(NoteCommitment(Fr::from(12u64)))
-                .unwrap()
-                .frontier_root()
-        );
-        // The registration, the inscription with its signature, the program
-        // deposit of one input and no output (144 + 4177 + 1758), then the
-        // program step (13528, no opening) and its spend of one output
-        // (4177 + 58), nothing buffered in the channel.
-        assert_eq!(
-            execution_gas,
-            Gas::new(15_114 + (26 + 557) + (144 + 4_177 + 1_758) + 13_528 + (4_177 + 58))
-        );
-    }
-
-    #[test]
-    fn an_unregistered_program_rejects_the_transaction() {
-        let test_config = config();
-        let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
-        let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([1u8; 32]);
-        let state = create_channel(
-            state,
-            &eras,
-            channel_id,
-            &signing_key,
-            verifying_key.into_unverified(),
-        );
-        let channel = state
-            .mantle_ledger()
-            .channels()
-            .channel_state(&channel_id)
-            .unwrap()
-            .clone();
-        let channel_root = state
-            .latest_note_sets()
-            .channel(&channel_id)
-            .unwrap()
-            .commitment_root();
-        let inscribe = InscriptionOp {
-            channel_id,
-            inscription: Inscription::new_unchecked(vec![1]),
-            parent: channel.tip_message,
-            signer: verifying_key.into_unverified(),
-            mini_blocks: program_steps(
-                derive_program_id(&test_program_key()),
-                11,
-                12,
-                channel_root,
-            ),
-        };
-
-        let result = state.try_apply_tx_operations::<_, HeaderId>(
-            &eras,
-            program_step_tx(vec![Op::ChannelInscribe(inscribe)], &signing_key),
-        );
-
-        assert_eq!(
-            result.err(),
-            Some(LedgerError::VerificationError(
-                VerificationError::ChannelVerificationError(
-                    mantle::channel::Error::UnknownProgram(derive_program_id(&test_program_key()))
-                )
-            ))
-        );
-    }
-
-    #[test]
-    fn a_program_deposit_covers_a_channel_deposit_of_the_same_transaction() {
-        let test_config = config();
-        let eras = single_era(test_config.clone());
-        let state = LedgerState::from_notes([note()], &test_config, &genesis_parameters());
-        let (signing_key, verifying_key) = create_test_keys();
-        let channel_id = ChannelId::from([1u8; 32]);
-        let state = create_channel(
-            state,
-            &eras,
-            channel_id,
-            &signing_key,
-            verifying_key.into_unverified(),
-        );
-        let channel = state
-            .mantle_ledger()
-            .channels()
-            .channel_state(&channel_id)
-            .unwrap()
-            .clone();
-        let channel_root = state
-            .latest_note_sets()
-            .channel(&channel_id)
-            .unwrap()
-            .commitment_root();
-        let key = test_program_key();
-        let deposit = DepositOp {
-            channel_id,
-            inputs: [NoteNullifier(Fr::ONE)].into(),
-            commitment_merkle_root: ledger_root(&state),
-            outputs: [NoteCommitment(Fr::from(10u64))].into(),
-            excess_value: 0,
-            metadata: Metadata::empty(),
-        };
-        let inscribe = InscriptionOp {
-            channel_id,
-            inscription: Inscription::new_unchecked(vec![1]),
-            parent: channel.tip_message,
-            signer: verifying_key.into_unverified(),
-            mini_blocks: program_steps(derive_program_id(&key), 11, 12, channel_root),
-        };
-
-        let (_, _, _, _, deferred) = state
-            .try_apply_tx_operations::<_, HeaderId>(
-                &eras,
-                program_step_tx(
-                    vec![
-                        Op::ProgramRegister(ProgramRegisterOp {
-                            verification_key: key,
-                        }),
-                        Op::ChannelDeposit(deposit),
-                        Op::ChannelInscribe(inscribe),
-                    ],
-                    &signing_key,
-                ),
-            )
-            .unwrap();
-
-        let covered = CommitmentMmr::new()
-            .push(NoteCommitment(Fr::from(10u64)))
-            .unwrap()
-            .frontier_root();
-        assert_eq!(
-            deferred.zk_transfers()[1]
-                .inputs()
-                .tx_commitment_root
-                .into_inner(),
-            covered
-        ); // [0] is the deposit
-        assert_eq!(
-            deferred.program_spends()[0]
-                .inputs()
-                .tx_commitment_root
-                .into_inner(),
-            covered
-        );
-    }
-
     // The wallet estimate and the ledger charge the same Execution Gas for a
     // transaction mixing every priced shape: a Transfer buffering outputs for
-    // the Transfer after it, a Deposit, an inscription creating its channel
-    // with a user step of `buffered = 1`, a program deposit and a program step.
+    // the Transfer after it, a Deposit, and an inscription creating its channel
+    // with a step of `buffered = 1`.
     #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Builds and charges a transaction of every priced shape."
-    )]
     fn wallet_estimate_matches_the_ledger_charge() {
         let test_config = config();
         let eras = single_era(test_config.clone());
@@ -5839,7 +5526,6 @@ mod tests {
         update_ledger_prices(&mut state, 1, 1);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([1u8; 32]);
-        let key = test_program_key();
         let root = ledger_root(&state);
         let channel_root = CommitmentMmr::new().frontier_root();
 
@@ -5868,12 +5554,6 @@ mod tests {
             metadata: Metadata::empty(),
         };
         // One mini-block covering the deposit.
-        let mut steps: Vec<Step> = one_step(11, 12, channel_root)[0].iter().cloned().collect();
-        steps.extend(
-            program_steps(derive_program_id(&key), 21, 22, channel_root)[0]
-                .iter()
-                .cloned(),
-        );
         let creation = InscriptionOp {
             channel_id,
             inscription: Inscription::new_unchecked(vec![1]),
@@ -5886,15 +5566,12 @@ mod tests {
             inscription: Inscription::new_unchecked(vec![2]),
             parent: creation.id(),
             signer: verifying_key.into_unverified(),
-            mini_blocks: [MiniBlock::try_from(steps).unwrap()].into(),
+            mini_blocks: one_step(11, 12, channel_root),
         };
-        let tx = program_step_tx(
+        let tx = stepped_tx(
             vec![
                 Op::Transfer(funding),
                 Op::Transfer(second_transfer),
-                Op::ProgramRegister(ProgramRegisterOp {
-                    verification_key: key,
-                }),
                 Op::ChannelInscribe(creation),
                 Op::ChannelDeposit(deposit),
                 Op::ChannelInscribe(inscribe),
@@ -5922,26 +5599,19 @@ mod tests {
 
         // The first Transfer (10 + 4177 + 1758 + 2 * 58), the second one with
         // its root extended over the 2 commitments buffered (10 + 4177
-        // + 2332 + 2 * 60 + 1758 + 58), the registration, the creating
-        // inscription, the Deposit with its root extended over the 3
-        // buffered (26 + 4177 + 2332 + 3 * 60 + 1758 + 58) and the
-        // inscription of the user step buffering 1 (28 + 4177 + 2332 +
-        // 60 + 1758 + 58), the program deposit sharing the extension of
-        // the user step (144 + 4177 + 1758) and the program step
-        // (13528), its spend extended over the 2 buffered of the channel.
+        // + 2332 + 2 * 60 + 1758 + 58), the creating inscription, the
+        // Deposit with its root extended over the 3 buffered (26 + 4177 +
+        // 2332 + 3 * 60 + 1758 + 58) and the inscription of the step
+        // buffering 1 (28 + 4177 + 2332 + 60 + 1758 + 58).
         assert_eq!(
             operations_gas,
             Gas::new(
                 (10 + 4_177 + 1_758 + 116)
                     + (10 + 4_177 + 2_332 + 120 + 1_758 + 58)
-                    + 15_114
                     + (26 + 557)
                     + (26 + 4_177 + 2_332 + 180 + 1_758 + 58)
                     + (26 + 557)
                     + (28 + 4_177 + 2_332 + 60 + 1_758 + 58)
-                    + (144 + 4_177 + 1_758)
-                    + 13_528
-                    + (4_177 + 2_332 + 120 + 58)
             )
         );
         // The bytes of the transaction and the one channel note set it changed.

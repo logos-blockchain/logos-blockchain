@@ -28,7 +28,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
         (TxGasState::new(context), 0),
         |(mut thresholds, total), op| {
             let proof_size = match op {
-                // ChannelInscribeOpProof = Ed25519Signature *StepProof
+                // ChannelInscribeOpProof = Ed25519Signature *ZkTransfer
                 OpRef::ChannelInscribe(operation) => {
                     ChannelInscribeProof::encoded_length_for(operation)
                 }
@@ -54,7 +54,7 @@ pub fn minimum_signed_transaction_size(op_refs: &OpRefs<'_>, context: &OpsGasCon
                     COMPRESSED_PROOF_SIZE
                 }
 
-                OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_) => 0, // no proof
+                OpRef::ClaimPowReward(_) => 0, // no proof
             };
             thresholds.apply(*op);
             (thresholds, total + proof_size)
@@ -89,11 +89,11 @@ mod tests {
             ledger::verification_mode::StandardMode,
             notes::{InputNullifiers, NoteCommitment, NoteNullifier, OutputCommitments},
             ops::{
-                StepProof, ZkAndEd25519Proof, ZkTransferProof,
+                ZkAndEd25519Proof, ZkTransferProof,
                 channel::{
                     ChannelId, MsgId,
                     config::ChannelConfigOp,
-                    inscribe::{self, Inscription, InscriptionOp, MiniBlocks, Step, UserStep},
+                    inscribe::{self, Inscription, InscriptionOp, MiniBlocks, Step},
                     withdraw::ChannelWithdrawOp,
                 },
                 op_proof::samples::SampleProof as _,
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn minimum_size_counts_one_zk_transfer_per_step() {
-        let step = UserStep {
+        let step = Step {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
@@ -395,44 +395,19 @@ mod tests {
         let ops = Ops::new(
             FORK_DIGEST,
             [Op::ChannelInscribe(InscriptionOp {
-                mini_blocks: [inscribe::MiniBlock::from([
-                    Step::User(step.clone()),
-                    Step::User(step),
-                ])]
-                .into(),
+                mini_blocks: [inscribe::MiniBlock::from([step.clone(), step])].into(),
                 ..InscriptionOp::sample()
             })],
         );
         let proof = ChannelInscribeProof::new(
             Ed25519Signature::zero(),
-            vec![
-                StepProof::ZkTransfer(ZkTransferProof::sample()),
-                StepProof::ZkTransfer(ZkTransferProof::sample()),
-            ],
+            vec![ZkTransferProof::sample(), ZkTransferProof::sample()],
         );
         let signed = SignedOps::<Unverified, StandardMode>::from_parts(
             ops.clone(),
             OpProofs::from([OpProof::ChannelInscribe(proof)]),
         )
         .unwrap();
-        assert_eq!(
-            minimum_signed_transaction_size(
-                &ops.by_ref(),
-                &OpsGasContext::new(HashMap::new(), GasPrices::new(0, 0), GAS_PROFILE)
-            ),
-            signed.encode().len()
-        );
-    }
-
-    #[test]
-    fn minimum_size_counts_the_proofs_and_openings_of_a_program_step() {
-        let operation = InscriptionOp::sample_with_step();
-        let ops = Ops::new(FORK_DIGEST, [Op::ChannelInscribe(operation.clone())]);
-        let proof = Op::ChannelInscribe(operation).sample_proof();
-        assert_eq!(proof.encode().len(), 64 + 128 + 128 + (128 + 128 + 104));
-        let signed =
-            SignedOps::<Unverified, StandardMode>::from_parts(ops.clone(), OpProofs::from([proof]))
-                .unwrap();
         assert_eq!(
             minimum_signed_transaction_size(
                 &ops.by_ref(),

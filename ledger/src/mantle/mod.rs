@@ -19,11 +19,9 @@ use lb_core::{
                 withdraw::PendingWithdrawals,
             },
             pow::{ClaimPowRewardError, PowReward},
-            program::ProgramRegisterError,
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
-        programs::Programs,
         transactions::{GenesisDeclarations, states::Verified},
     },
 };
@@ -52,8 +50,6 @@ pub enum Error {
     ClaimPow(#[from] ClaimPowRewardError),
     #[error(transparent)]
     PowRewardPool(#[from] pow::PowRewardPoolOverflow),
-    #[error(transparent)]
-    Program(#[from] ProgramRegisterError),
 }
 
 impl Error {
@@ -64,7 +60,7 @@ impl Error {
             Self::Sdp(err) => err.is_store_failure(),
             Self::Transfer(err) => err.is_store_failure(),
             Self::ClaimPow(err) => err.is_store_failure(),
-            Self::PowRewardPool(_) | Self::Program(_) => false,
+            Self::PowRewardPool(_) => false,
         }
     }
 }
@@ -78,7 +74,6 @@ pub struct LedgerState {
     channels: channel::Channels,
     pub sdp: sdp::SdpLedger,
     pub pow: pow::PowState,
-    programs: Programs,
 }
 
 impl LedgerState {
@@ -97,7 +92,6 @@ impl LedgerState {
                 epoch_slots,
             ),
             pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
-            programs: Programs::new(),
         }
     }
 
@@ -129,7 +123,6 @@ impl LedgerState {
                 channels,
                 sdp,
                 pow: pow::PowState::from_reward_pool_and_config(pow_reward_pool, config),
-                programs: Programs::new(),
             },
             note_sets,
             tx_events,
@@ -166,16 +159,6 @@ impl LedgerState {
     #[must_use]
     pub fn update_channels(self, channels: channel::Channels) -> Self {
         Self { channels, ..self }
-    }
-
-    #[must_use]
-    pub const fn programs(&self) -> &Programs {
-        &self.programs
-    }
-
-    #[must_use]
-    pub fn update_programs(self, programs: Programs) -> Self {
-        Self { programs, ..self }
     }
 
     pub fn try_apply_header(

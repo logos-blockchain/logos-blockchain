@@ -58,8 +58,6 @@ pub fn leader_witness_data() -> (PoQChainInputsData, PoQCommonInputsData, PoQWal
         slot: u64_value(&json["pol_sl"]),
         note_value: u64_value(&json["pol_note_value"]),
         note_nonce: fr(&json["pol_note_nonce"]),
-        note_program: fr(&json["pol_note_program"]),
-        note_data: fr(&json["pol_note_data"]),
         commitment_aged_path_and_selectors: path_and_selectors(
             &json["pol_cm_aged_path"],
             &json["pol_cm_aged_selectors"],

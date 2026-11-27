@@ -205,8 +205,6 @@ mod test {
             note_value: 42,
             note_nonce: ZkHash::ONE,
             slot: 1,
-            note_program: ZkHash::ZERO,
-            note_data: ZkHash::ZERO,
             nullifier_key: ZkHash::ONE,
             staking_secret_key: ZkHash::ONE,
             low_leaf_aged_nullifier: ZkHash::ONE,

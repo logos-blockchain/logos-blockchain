@@ -7,7 +7,6 @@ pub mod mock;
 pub mod note_set;
 pub mod notes;
 pub mod ops;
-pub mod programs;
 pub mod traits;
 pub mod transactions;
 

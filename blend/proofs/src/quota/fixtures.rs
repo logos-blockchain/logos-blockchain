@@ -175,8 +175,6 @@ pub fn valid_proof_of_leadership_quota_inputs(
         slot: wallet.slot,
         note_value: wallet.note_value,
         note_nonce: wallet.note_nonce,
-        note_program: wallet.note_program,
-        note_data: wallet.note_data,
         commitment_aged_path_and_selectors: wallet.commitment_aged_path_and_selectors,
         low_leaf_aged_nullifier: wallet.low_leaf_aged_nullifier,
         low_leaf_aged_next_nullifier: wallet.low_leaf_aged_next_nullifier,

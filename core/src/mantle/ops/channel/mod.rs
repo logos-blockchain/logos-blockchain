@@ -1,7 +1,6 @@
 pub mod config;
 pub mod deposit;
 pub mod inscribe;
-pub mod program_step;
 pub mod verification;
 pub mod withdraw;
 
@@ -35,14 +34,13 @@ serde_bytes_newtype!(ChannelId, 32);
 pub const NULL_CHANNEL_ID: ChannelId = ChannelId([0; 32]);
 
 /// The identifier a holder binds the `ZkTransfer` of its step to: the
-/// BLAKE2b-256 hash, under `dst`, of the channel and of the encoded step, its
-/// kind byte included, reduced modulo `p` as an `op_id` is. No circuit
-/// recomputes it, so it need not be a `zkhash`.
-fn step_id(dst: &[u8], channel_id: &ChannelId, kind: u8, step: &impl BinaryEncode) -> Fr {
+/// BLAKE2b-256 hash, under `dst`, of the channel and of the encoded step,
+/// reduced modulo `p` as an `op_id` is. No circuit recomputes it, so it need
+/// not be a `zkhash`.
+fn step_id(dst: &[u8], channel_id: &ChannelId, step: &impl BinaryEncode) -> Fr {
     let mut hasher = Hasher::new();
     hasher.update(dst);
     hasher.update(channel_id.0);
-    hasher.update([kind]);
     hasher.update(step.encode());
     let digest: [u8; 32] = hasher.finalize().into();
     Fr::from_le_bytes_mod_order(&digest)
