@@ -6,7 +6,7 @@ mod states;
 mod tests;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     num::NonZero,
     pin::Pin,
     sync::Arc,
@@ -55,11 +55,16 @@ use lb_key_management_system_service::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, Ed25519Signature, Key, KeyOperators,
         PayloadEncoding, SignatureEncoding, ZkKey, ZkPublicKey, secured_key::SecuredKey,
     },
-    operators::zk::{nullifier::DeriveNullifier, voucher::UnsafeVoucherOperator},
+    operators::zk::{
+        note_encryption::{DeriveNoteEncryptionKey, OpenDeliveryMessages},
+        nullifier::DeriveNullifier,
+        voucher::UnsafeVoucherOperator,
+    },
 };
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_mmr::MerklePath;
+use lb_note_encryption::DeliveryMessage;
 use lb_services_utils::{
     overwatch::{RecoveryData, RecoveryOperator, StorageRecoverySettings},
     wait_until_services_are_ready,
@@ -71,6 +76,7 @@ use lb_utils::{bounded::BoundedError, tokio::task::spawn_blocking};
 pub use lb_wallet::{DEFAULT_FEE_MARGIN_PERCENT, SPEND_ROOT_DEPTH};
 use lb_wallet::{
     KnownNote, KnownNotes, OwnedNote, WalletBalance, WalletBlock, WalletError, WalletState,
+    address::Address,
     transaction::{OpWitness, WitnessContext, op_witness_at, op_witnesses},
 };
 use overwatch::{
@@ -95,6 +101,10 @@ type KeyId = <KmsBackend as KMSBackend>::KeyId;
 
 const LOG_TARGET: &str = wallet::SERVICE;
 
+const PENDING_DELIVERIES_KEY: &[u8] = b"wallet/pending_deliveries";
+const NAMED_STAKING_KEYS_KEY: &[u8] = b"wallet/named_staking_keys";
+// followed by the commitment of the note
+const SENT_NOTE_KEY_PREFIX: &[u8] = b"wallet/sent_notes/";
 /// How many signings run at once. Each one proves, so this keeps a burst of
 /// requests from crowding out the proofs consensus depends on.
 const MAX_CONCURRENT_SIGNINGS: usize = 4;
@@ -275,6 +285,43 @@ pub enum WalletMsg {
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
+    // The address a sender pays `public_key` at: the key and the key its
+    // note ciphertexts are encrypted to.
+    GetAddress {
+        public_key: ZkPublicKey,
+        resp_tx: Sender<Result<Address, WalletServiceError>>,
+    },
+    // Keeps the delivery messages of notes paid to the wallet until a block
+    // appends their commitment, and answers with how many are kept. A message
+    // that arrives after its block is opened at once, as long as the wallet
+    // still holds the state its block was applied to.
+    ImportDeliveryMessages {
+        messages: Vec<DeliveryMessage>,
+        resp_tx: Sender<usize>,
+    },
+    // Names a staking key the wallet asked a sender to use in place of its
+    // public key: a note delivered under it is opened as the wallet's own.
+    NameStakingKey {
+        staking_key: ZkPublicKey,
+        resp_tx: Sender<Result<(), WalletServiceError>>,
+    },
+    // Keeps a note the wallet created for someone else, so that it can
+    // deliver it again.
+    RecordSentNote {
+        note: Note,
+        resp_tx: Sender<Result<(), WalletServiceError>>,
+    },
+    // A note the wallet created for someone else, by its commitment.
+    SentNote {
+        commitment: NoteCommitment,
+        resp_tx: Sender<Result<Option<Note>, WalletServiceError>>,
+    },
+    // Rebuilds the wallet over the whole chain, from the genesis block, with
+    // the notes it knows and the delivery messages it keeps: it finds the
+    // notes whose commitment was appended before the oldest state it holds.
+    Rescan {
+        resp_tx: Sender<Result<(), WalletServiceError>>,
+    },
     GetTxContext {
         block_id: Option<HeaderId>,
         resp_tx: Sender<Result<OpsContext, WalletServiceError>>,
@@ -446,6 +493,12 @@ impl WalletMsg {
             | Self::TrackLeaderReward { .. }
             | Self::ImportNote { .. }
             | Self::GetKnownAddresses { .. }
+            | Self::GetAddress { .. }
+            | Self::ImportDeliveryMessages { .. }
+            | Self::NameStakingKey { .. }
+            | Self::RecordSentNote { .. }
+            | Self::SentNote { .. }
+            | Self::Rescan { .. }
             | Self::ReleasePendingNotes { .. } => None,
         }
     }
@@ -629,6 +682,7 @@ where
             &storage,
         )
         .await?;
+        Self::restore_delivery_records(&mut state, &storage).await?;
         let voucher_master_key_id = settings.voucher_master_key_id;
 
         Self::backfill_missing_blocks(
@@ -673,11 +727,17 @@ where
                 // one and is backfilled from there; the log line is what tells
                 // an operator why the wallet fell behind.
                 Some(event) = new_blocks.next() => match event {
-                    Ok(event) => Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &signer.kms, &settings.era_schedule).await,
+                    Ok(event) => {
+                        Self::handle_new_block(event.block_id, &mut state, &storage, &cryptarchia_api, &signer.kms, &settings.era_schedule).await;
+                        Self::store_pending_deliveries(&mut state, &storage).await;
+                    }
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("new-block", skipped),
                 },
                 Some(lib_update) = lib_updates.next() => match lib_update {
-                    Ok(lib_update) => Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &signer.kms, &settings.era_schedule).await,
+                    Ok(lib_update) => {
+                        Self::handle_lib_update(&lib_update, &storage, &mut state, &cryptarchia_api, &signer.kms, &settings.era_schedule).await;
+                        Self::store_pending_deliveries(&mut state, &storage).await;
+                    }
                     Err(BroadcastStreamRecvError::Lagged(skipped)) => warn_lagged("LIB", skipped),
                 },
             }
@@ -1086,7 +1146,9 @@ where
                 note_set,
                 resp_tx,
             } => {
-                let result = Self::import_note(note, note_set, state, storage, kms).await;
+                let result =
+                    Self::import_note(note, note_set, state, storage, kms, era_schedule).await;
+                Self::store_pending_deliveries(state, storage).await;
                 if resp_tx.send(result).is_err() {
                     debug!(target: LOG_TARGET, "Failed to respond to ImportNote");
                 }
@@ -1143,6 +1205,81 @@ where
             }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
+            }
+            WalletMsg::GetAddress {
+                public_key,
+                resp_tx,
+            } => {
+                let result = Self::address(public_key, state, kms).await;
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to GetAddress");
+                }
+            }
+            WalletMsg::ImportDeliveryMessages { messages, resp_tx } => {
+                let kept = state.add_pending_deliveries(messages);
+                let pending = state.pending_delivery_commitments();
+                if kept > 0
+                    && let Err(error) =
+                        Self::adopt_late_notes(&pending, state, storage, kms, era_schedule).await
+                {
+                    // The messages stay pending: a later import tries again.
+                    warn!(
+                        target: LOG_TARGET,
+                        err = %error,
+                        "Failed to adopt the notes of late delivery messages"
+                    );
+                }
+                Self::store_pending_deliveries(state, storage).await;
+                if resp_tx.send(kept).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to ImportDeliveryMessages");
+                }
+            }
+            WalletMsg::NameStakingKey {
+                staking_key,
+                resp_tx,
+            } => {
+                let result = if state.name_staking_key(staking_key) {
+                    storage
+                        .store_confirmed(
+                            Bytes::from_static(NAMED_STAKING_KEYS_KEY),
+                            state.named_staking_keys().to_vec(),
+                        )
+                        .await
+                        .map_err(WalletServiceError::PersistedState)
+                } else {
+                    Ok(())
+                };
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to NameStakingKey");
+                }
+            }
+            WalletMsg::RecordSentNote { note, resp_tx } => {
+                let result = storage
+                    .store_confirmed(sent_note_key(&note.commitment()), note)
+                    .await
+                    .map_err(WalletServiceError::PersistedState);
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to RecordSentNote");
+                }
+            }
+            WalletMsg::SentNote {
+                commitment,
+                resp_tx,
+            } => {
+                let result = storage
+                    .load(sent_note_key(&commitment))
+                    .await
+                    .map_err(WalletServiceError::PersistedState);
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to SentNote");
+                }
+            }
+            WalletMsg::Rescan { resp_tx } => {
+                let result = Self::rescan(state, storage, cryptarchia, kms, era_schedule).await;
+                Self::store_pending_deliveries(state, storage).await;
+                if resp_tx.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Failed to respond to Rescan");
+                }
             }
             WalletMsg::GetTxContext { block_id, resp_tx } => {
                 Self::get_tx_context(block_id, resp_tx, cryptarchia, era_settings.gas_profile)
@@ -1466,7 +1603,8 @@ where
             | OpRef::ChannelWithdraw(_)
             | OpRef::Transfer(_)
             | OpRef::ClaimPowReward(_)
-            | OpRef::ProgramRegister(_) => return Ok(None),
+            | OpRef::ProgramRegister(_)
+            | OpRef::Inscribe(_) => return Ok(None),
         };
         Self::sign_ed25519(tx_hash, signer, kms).await.map(Some)
     }
@@ -1642,15 +1780,52 @@ where
         Self::known_note(kms, key_id, note, note_set).await
     }
 
+    // The address of `public_key`, a key of the wallet, with the note
+    // encryption key the KMS derives for it.
+    async fn address(
+        public_key: ZkPublicKey,
+        state: &ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<Address, WalletServiceError> {
+        let key_id = state
+            .wallet()
+            .known_keys()
+            .get(&public_key)
+            .cloned()
+            .ok_or(WalletServiceError::UnknownKey(public_key))?;
+        let (output_tx, output_rx) = oneshot::channel();
+        kms.execute(
+            key_id,
+            KeyOperators::Zk(Box::new(DeriveNoteEncryptionKey::new(output_tx))),
+        )
+        .await
+        .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+        let encryption_key = output_rx.await.map_err(|_| {
+            WalletServiceError::KmsApi(
+                "KMS API did not respond with the note encryption key".into(),
+            )
+        })?;
+        Ok(Address {
+            public_key,
+            encryption_key: Some(encryption_key),
+        })
+    }
+
+    // Registers `note`, which the wallet adopts when a block appends its
+    // commitment. A block the wallet applied may have appended it already:
+    // that block is applied again.
     async fn import_note(
         note: Note,
         note_set: NoteSetIndex,
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        era_schedule: &ServiceEraSchedule,
     ) -> Result<KnownNote, WalletServiceError> {
         let known_note = Self::held_note(note, note_set, state, kms).await?;
         state.store_known_notes(storage, &[known_note]).await?;
+        let late = HashSet::from([note.commitment()]);
+        Self::adopt_late_notes(&late, state, storage, kms, era_schedule).await?;
         Ok(known_note)
     }
 
@@ -1756,6 +1931,48 @@ where
         state.store_known_notes(storage, &[known_note]).await
     }
 
+    // Writes the pending delivery messages to storage when they changed. A
+    // failed write loses nothing a sender cannot deliver again, so it is only
+    // logged.
+    async fn store_pending_deliveries(state: &mut ServiceState<'_>, storage: &StorageApi<Tx>) {
+        let Some(messages) = state.take_changed_pending_deliveries() else {
+            return;
+        };
+        if let Err(error) = storage
+            .store_confirmed(Bytes::from_static(PENDING_DELIVERIES_KEY), messages)
+            .await
+        {
+            warn!(
+                target: LOG_TARGET,
+                err = %error,
+                "Failed to write the pending delivery messages to storage"
+            );
+        }
+    }
+
+    // The pending delivery messages and the named staking keys written before
+    // a restart, known again.
+    async fn restore_delivery_records(
+        state: &mut ServiceState<'_>,
+        storage: &StorageApi<Tx>,
+    ) -> Result<(), WalletServiceError> {
+        let pending: Vec<Vec<u8>> = storage
+            .load(Bytes::from_static(PENDING_DELIVERIES_KEY))
+            .await
+            .map(Option::unwrap_or_default)
+            .map_err(WalletServiceError::PersistedState)?;
+        state.restore_pending_deliveries(&pending);
+        let named_staking_keys: Vec<ZkPublicKey> = storage
+            .load(Bytes::from_static(NAMED_STAKING_KEYS_KEY))
+            .await
+            .map(Option::unwrap_or_default)
+            .map_err(WalletServiceError::PersistedState)?;
+        for staking_key in named_staking_keys {
+            state.name_staking_key(staking_key);
+        }
+        Ok(())
+    }
+
     // Registers the change note `funded` returns to a key of the wallet.
     async fn add_change_note(
         funded: &MantleTxBuilder,
@@ -1835,13 +2052,14 @@ where
     }
 
     // Registers the notes `block` reveals to a key of the wallet, so that
-    // applying the block adopts them.
+    // applying the block adopts them. Returns the commitments whose delivery
+    // messages were opened, to forget once the block is applied.
     async fn add_revealed_notes(
         block: &WalletBlock,
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<(), WalletServiceError> {
+    ) -> Result<Vec<NoteCommitment>, WalletServiceError> {
         for (note_set, note) in &block.revealed {
             let Some(key_id) = state.wallet().known_keys().get(&note.public_key).cloned() else {
                 continue;
@@ -1856,6 +2074,203 @@ where
             let known_note = Self::known_note(kms, key_id, *note, *note_set).await?;
             state.store_known_notes(storage, &[known_note]).await?;
         }
+        Self::add_delivered_notes(block, state, storage, kms).await
+    }
+
+    // Opens the delivery messages kept for the commitments `block` appends,
+    // with every key of the wallet, and registers the notes they deliver, so
+    // that applying the block adopts them. A message is opened here and not
+    // when it is received: the wallet decapsulates only the ciphertexts whose
+    // commitment is in a note set. The messages stay pending: the caller
+    // forgets those of the returned commitments once the block is applied, so
+    // that a failure in between loses none. A message no key opens is not
+    // for this wallet and is forgotten with the others.
+    async fn add_delivered_notes(
+        block: &WalletBlock,
+        state: &mut ServiceState<'_>,
+        storage: &StorageApi<Tx>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<Vec<NoteCommitment>, WalletServiceError> {
+        let mut opened = Vec::new();
+        for update in &block.updates {
+            let messages = state.pending_deliveries_of(&update.commitments);
+            if messages.is_empty() {
+                continue;
+            }
+            let key_ids = state
+                .wallet()
+                .known_keys()
+                .values()
+                .cloned()
+                .collect::<Vec<_>>();
+            for key_id in key_ids {
+                let (output_tx, output_rx) = oneshot::channel();
+                kms.execute(
+                    key_id.clone(),
+                    KeyOperators::Zk(Box::new(OpenDeliveryMessages::new(
+                        messages.clone(),
+                        state.named_staking_keys().to_vec(),
+                        output_tx,
+                    ))),
+                )
+                .await
+                .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+                let notes = output_rx.await.map_err(|_| {
+                    WalletServiceError::KmsApi(
+                        "KMS API did not respond with the delivered notes".into(),
+                    )
+                })?;
+                for note in notes.into_iter().flatten() {
+                    let known_note =
+                        Self::known_note(kms, key_id.clone(), note, update.note_set).await?;
+                    state.store_known_notes(storage, &[known_note]).await?;
+                }
+            }
+            opened.extend_from_slice(&update.commitments);
+        }
+        Ok(opened)
+    }
+
+    // Adopts the notes of `late` commitments an applied block already
+    // appended: a sender may deliver a message, or hand over a note in the
+    // clear, after its transaction is in a block. Each such block is applied
+    // again with its descendants, after its messages are opened, so that its
+    // state tracks the note from the block that appended it. Only the blocks
+    // the wallet still holds the parent state of can be applied again: a
+    // message for an older commitment stays pending. The opened messages are
+    // forgotten once the blocks are applied: after a failure they are still
+    // pending, and a later import tries again.
+    async fn adopt_late_notes(
+        late: &HashSet<NoteCommitment>,
+        state: &mut ServiceState<'_>,
+        storage: &StorageApi<Tx>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        era_schedule: &ServiceEraSchedule,
+    ) -> Result<(), WalletServiceError> {
+        if late.is_empty() {
+            return Ok(());
+        }
+        let mut applied = Vec::new();
+        for header_id in state.wallet().applied_blocks() {
+            let block = Self::load_block(header_id, storage).await?;
+            let events = Self::load_block_events(header_id, storage).await?;
+            applied.push(WalletBlock::from_block(
+                &block,
+                era_schedule.epoch_for_slot(block.header().slot()),
+                &events,
+            ));
+        }
+        // A commitment can be in a block of each branch of a fork.
+        let blocks = blocks_delivered_late(applied, late);
+        if blocks.is_empty() {
+            return Ok(());
+        }
+        let mut opened = Vec::new();
+        for block in &blocks {
+            opened.extend(Self::add_revealed_notes(block, state, storage, kms).await?);
+        }
+        debug!(
+            target: LOG_TARGET,
+            n_blocks = blocks.len(),
+            "Applying blocks again to adopt late notes"
+        );
+        state.reapply_blocks(&blocks)?;
+        state.forget_pending_deliveries(&opened);
+        Ok(())
+    }
+
+    // Rebuilds the wallet over the chain of the tip, from the genesis block.
+    //
+    // A wallet adopts a note when its commitment is appended, and holds no
+    // state older than a few blocks below the LIB, so a note it learns later
+    // than that is found only by following the note sets again from the start.
+    // Each block is read from storage: its pending delivery messages are
+    // opened, then it is applied to the new wallet, which knows every note the
+    // wallet knows. The wallet is replaced at the end, or left as it was if a
+    // step fails. The cost grows with the length of the chain.
+    async fn rescan(
+        state: &mut ServiceState<'_>,
+        storage: &StorageApi<Tx>,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        era_schedule: &ServiceEraSchedule,
+    ) -> Result<(), WalletServiceError> {
+        // The states of the blocks further than this below the block being
+        // applied are dropped as the rebuild goes.
+        const PRUNE_EVERY: usize = 256;
+
+        let genesis = cryptarchia.get_genesis_block().await?;
+        let genesis_tx = genesis.genesis_tx();
+        let genesis_notes = genesis_tx.initial_notes();
+        let genesis_service_notes = genesis_tx
+            .sdp_declarations()
+            .map(|declaration| declaration.operation().service_note())
+            .collect::<Vec<_>>();
+        let genesis_id = genesis.header().id();
+
+        let tip = Self::msg_tip_or_latest(None, cryptarchia).await?;
+        // From the tip down to the genesis block.
+        let mut headers = cryptarchia
+            .get_headers(Some(tip), Some(genesis_id))
+            .await
+            .map_err(WalletServiceError::CryptarchiaApi)?
+            .try_collect::<Vec<_>>()
+            .await?;
+        headers.reverse();
+        let lib = state.lib();
+        let Some(lib_position) = headers.iter().position(|header_id| *header_id == lib) else {
+            return Err(WalletServiceError::FailedToApplyBlock(lib));
+        };
+
+        // Every note the wallet stored: it forgets the ones final at its LIB.
+        let stored_notes = storage
+            .load_wallet_known_notes()
+            .await
+            .map_err(WalletServiceError::PersistedState)?;
+        let mut rebuilt = Wallet::from_genesis(
+            state.wallet().known_keys().clone(),
+            stored_notes,
+            genesis_id,
+            &genesis_notes,
+            &genesis_service_notes,
+        )?;
+        let mut known_notes = state.wallet().known_notes().size();
+        // The commitments whose messages were opened, forgotten once the
+        // wallet is replaced.
+        let mut opened = Vec::new();
+        for (position, header_id) in headers.iter().enumerate() {
+            if *header_id == genesis_id {
+                continue;
+            }
+            let block = Self::load_block(*header_id, storage).await?;
+            let events = Self::load_block_events(*header_id, storage).await?;
+            let wallet_block = WalletBlock::from_block(
+                &block,
+                era_schedule.epoch_for_slot(block.header().slot()),
+                &events,
+            );
+            // Opens the delivery messages kept for this block, and registers
+            // the notes it reveals to a key of the wallet.
+            opened.extend(Self::add_revealed_notes(&wallet_block, state, storage, kms).await?);
+            if state.wallet().known_notes().size() != known_notes {
+                known_notes = state.wallet().known_notes().size();
+                rebuilt.add_known_notes(state.wallet().known_notes().values().copied());
+            }
+            rebuilt
+                .apply_block(&wallet_block)
+                .map_err(|_| WalletServiceError::FailedToApplyBlock(*header_id))?;
+            if position < lib_position && position % PRUNE_EVERY == 0 {
+                rebuilt.prune_states(*header_id);
+            }
+        }
+        rebuilt.prune_states(lib);
+        info!(
+            target: LOG_TARGET,
+            n_blocks = headers.len(),
+            "Rebuilt the wallet over the chain"
+        );
+        state.replace_wallet(rebuilt)?;
+        state.forget_pending_deliveries(&opened);
         Ok(())
     }
 
@@ -2071,17 +2486,21 @@ where
         );
         // An owned note missed here is never adopted, so the block is left
         // unapplied and is backfilled from the next one.
-        if let Err(e) = Self::add_revealed_notes(&wallet_block, state, storage, kms).await {
-            error!(
-                target: LOG_TARGET,
-                block_id = ?header_id,
-                err = %e,
-                "Failed to register the notes the block reveals to the wallet"
-            );
-            return;
-        }
+        let opened = match Self::add_revealed_notes(&wallet_block, state, storage, kms).await {
+            Ok(opened) => opened,
+            Err(e) => {
+                error!(
+                    target: LOG_TARGET,
+                    block_id = ?header_id,
+                    err = %e,
+                    "Failed to register the notes the block reveals to the wallet"
+                );
+                return;
+            }
+        };
         match state.apply_block(&wallet_block) {
             Ok(()) => {
+                state.forget_pending_deliveries(&opened);
                 trace!(target: LOG_TARGET, block_id = ?wallet_block.id, "Applied block to wallet");
             }
             Err(WalletError::UnknownBlock(block_id)) => {
@@ -2244,7 +2663,7 @@ where
                 era_schedule.epoch_for_slot(block.header().slot()),
                 &events,
             );
-            Self::add_revealed_notes(&wallet_block, state, storage, kms).await?;
+            let opened = Self::add_revealed_notes(&wallet_block, state, storage, kms).await?;
 
             if let Err(e) = state.apply_block(&wallet_block) {
                 error!(
@@ -2255,6 +2674,7 @@ where
                 );
                 return Err(WalletServiceError::FailedToApplyBlock(header_id));
             }
+            state.forget_pending_deliveries(&opened);
         }
 
         Ok(())
@@ -2331,6 +2751,42 @@ fn log_lib_update(lib_update: &LibUpdate) {
 }
 
 // A fresh nonce for a note the wallet creates.
+// The storage key of the note of `commitment` the wallet created for someone
+// else.
+// The blocks to apply again for the delivery messages of `pending`: each block
+// that appends one of these commitments, on whichever branch, and the
+// descendants of such a block. `blocks` holds each block after its parent.
+fn blocks_delivered_late(
+    blocks: Vec<WalletBlock>,
+    pending: &HashSet<NoteCommitment>,
+) -> Vec<WalletBlock> {
+    let mut again = HashSet::new();
+    blocks
+        .into_iter()
+        .filter(|block| {
+            let delivers = block
+                .updates
+                .iter()
+                .flat_map(|update| &update.commitments)
+                .any(|commitment| pending.contains(commitment));
+            let applied_again = delivers || again.contains(&block.parent);
+            if applied_again {
+                again.insert(block.id);
+            }
+            applied_again
+        })
+        .collect()
+}
+
+fn sent_note_key(commitment: &NoteCommitment) -> Bytes {
+    [
+        SENT_NOTE_KEY_PREFIX,
+        &lb_groth16::fr_to_bytes(&commitment.0),
+    ]
+    .concat()
+    .into()
+}
+
 fn random_nonce() -> Fr {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
@@ -2359,7 +2815,7 @@ const fn op_proof(
             OpProof::ZkAndEd25519Sigs(ZkAndEd25519Proof::new(zk_proof, signature)),
         ),
         (OpRef::SDPActive(_), None, Some(signature)) => Ok(OpProof::Ed25519Sig(signature)),
-        (OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_), None, None) => {
+        (OpRef::ClaimPowReward(_) | OpRef::ProgramRegister(_) | OpRef::Inscribe(_), None, None) => {
             Ok(OpProof::None(NoOpProof))
         }
         _ => Err(WalletServiceError::OpProofParts),

@@ -231,6 +231,87 @@ pub mod import {
     }
 }
 
+pub mod delivery {
+    use lb_core::{
+        header::HeaderId,
+        mantle::{Note, TxHash, Value, notes::NoteCommitment},
+    };
+    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use serde::{Deserialize, Serialize};
+
+    /// The address senders pay a key of this node's wallet at, as its Bech32m
+    /// string: the public key and the key note ciphertexts are encrypted to.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletAddressResponseBody {
+        pub address: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletTransferFundsToAddressRequestBody {
+        pub tip: Option<HeaderId>,
+        pub change_public_key: ZkPublicKey,
+        pub funding_public_keys: Vec<ZkPublicKey>,
+        /// The Bech32m address of the recipient.
+        pub recipient_address: String,
+        /// The staking key the recipient named, when it asked for another
+        /// than its public key.
+        #[serde(default)]
+        pub recipient_stake_public_key: Option<ZkPublicKey>,
+        pub amount: Value,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletTransferFundsToAddressResponseBody {
+        pub hash: TxHash,
+        /// The delivery message of the note paid to the recipient, in hex: its
+        /// commitment, then its value and nonce encrypted to the recipient.
+        /// The sender hands it over or publishes it. `None` when the address
+        /// holds no encryption key.
+        pub delivery_message: Option<String>,
+        /// The note paid to the recipient, in the clear, when the address
+        /// holds no encryption key: the sender gives it to the recipient by
+        /// other means, and the recipient imports it. `None` otherwise.
+        pub recipient_note: Option<Note>,
+    }
+
+    /// Delivery messages of notes paid to this node's wallet, in hex.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletImportDeliveryMessagesRequestBody {
+        pub messages: Vec<String>,
+    }
+
+    /// A note this node's wallet paid, to deliver again to the address of its
+    /// recipient.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletRedeliverRequestBody {
+        pub commitment: NoteCommitment,
+        pub recipient_address: String,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletRedeliverResponseBody {
+        /// A new delivery message of the note, in hex, when the address holds
+        /// an encryption key.
+        pub delivery_message: Option<String>,
+        /// The note in the clear, when the address holds no encryption key.
+        pub recipient_note: Option<Note>,
+    }
+
+    /// A staking key this node's wallet asked a sender to use in place of its
+    /// public key.
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletNameStakingKeyRequestBody {
+        pub staking_key: ZkPublicKey,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletImportDeliveryMessagesResponseBody {
+        /// The messages the wallet keeps until a block appends their
+        /// commitment.
+        pub kept: usize,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{Note, note_set::NoteSetIndex};

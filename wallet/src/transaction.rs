@@ -222,7 +222,8 @@ fn op_effects<'a>(
         Op::ChannelInscribe(_)
         | Op::ChannelConfig(_)
         | Op::SDPActive(_)
-        | Op::ProgramRegister(_) => (None, Vec::new()),
+        | Op::ProgramRegister(_)
+        | Op::Inscribe(_) => (None, Vec::new()),
     })
 }
 

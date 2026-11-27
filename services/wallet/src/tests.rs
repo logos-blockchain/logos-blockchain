@@ -1,6 +1,5 @@
 use core::num::NonZeroU32;
 use std::{
-    collections::HashSet,
     fmt::{self, Display, Formatter},
     time::Duration,
 };
@@ -351,7 +350,14 @@ async fn imported_note_waits_for_storage_before_becoming_known() {
     let note = Note::new(20, Fr::from(8u64), input.note.public_key);
 
     let (imported, records) = complete_opening_write(
-        TestWallet::import_note(note, NoteSetIndex::Ledger, &mut state, &storage, &kms),
+        TestWallet::import_note(
+            note,
+            NoteSetIndex::Ledger,
+            &mut state,
+            &storage,
+            &kms,
+            &settings.era_schedule,
+        ),
         &mut writes,
         Ok(()),
     )
@@ -1340,4 +1346,41 @@ fn unsignable_job() -> TxSigningRequest {
 /// The note funding a signing's transaction.
 fn funded_notes() -> Vec<NoteNullifier> {
     vec![NoteNullifier(Fr::ONE)]
+}
+
+// A transaction can be in a block of each branch of a fork when its
+// delivery message arrives. Every one of these blocks is applied again:
+// applying only the first found left the note out of the other branch.
+#[test]
+fn a_late_delivery_reapplies_the_block_of_every_branch_that_holds_its_commitment() {
+    let id = |byte: u8| HeaderId::from([byte; 32]);
+    let commitment = |value: u64| NoteCommitment(Fr::from(value));
+    let block = |block: u8, parent: u8, appended: u64| WalletBlock {
+        id: id(block),
+        parent: id(parent),
+        epoch: Epoch::from(0),
+        updates: vec![NoteSetUpdate {
+            note_set: NoteSetIndex::Ledger,
+            nullifiers: Vec::new(),
+            commitments: vec![commitment(appended)],
+        }],
+        revealed: Vec::new(),
+        withdrawals: Vec::new(),
+    };
+    // 1 -> 2 -> 4, and 1 -> 3 -> 5: blocks 2 and 3 append the delivered
+    // commitment, each on its branch, and 6 is on a third branch.
+    let applied = vec![
+        block(2, 1, 7),
+        block(3, 1, 7),
+        block(4, 2, 8),
+        block(5, 3, 9),
+        block(6, 1, 10),
+    ];
+
+    let again = blocks_delivered_late(applied, &HashSet::from([commitment(7)]));
+
+    assert_eq!(
+        again.iter().map(|block| block.id).collect::<Vec<_>>(),
+        [id(2), id(3), id(4), id(5)]
+    );
 }

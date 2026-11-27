@@ -2156,13 +2156,27 @@ where
 pub mod wallet {
     use lb_http_api_common::bodies::wallet::{
         aged_notes::{LeaderAgedNoteResponseBody, LeaderAgedNotesResponseBody},
+        delivery::{
+            WalletAddressResponseBody, WalletImportDeliveryMessagesRequestBody,
+            WalletImportDeliveryMessagesResponseBody, WalletNameStakingKeyRequestBody,
+            WalletRedeliverRequestBody, WalletRedeliverResponseBody,
+            WalletTransferFundsToAddressRequestBody, WalletTransferFundsToAddressResponseBody,
+        },
         fund::{WalletFundRequestBody, WalletFundResponseBody},
         import::WalletImportNoteRequestBody,
         sign::{WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody},
     };
     use lb_key_management_system_service::keys::ZkPublicKey;
+    use lb_note_encryption::DeliveryMessage;
+    use lb_wallet::address::{Address, Network};
+    use lb_wallet_service::api::TransferTo;
 
     use super::*;
+    use crate::api::errors::json_response;
+
+    // The network the addresses of this node are for. Nothing names the
+    // network of a node yet, and none of them is mainnet.
+    const ADDRESS_NETWORK: Network = Network::Other;
 
     #[derive(Deserialize)]
     pub struct TipQuery {
@@ -2306,6 +2320,121 @@ pub mod wallet {
                 recipient_note,
             })
         })
+    }
+
+    #[utoipa::path(
+    post,
+    path = paths::wallet::TRANSACTIONS_TRANSFER_FUNDS_TO_ADDRESS,
+    responses(
+        (status = 200, description = "Make transfer, with the delivery message of the note it pays"),
+        (status = 400, description = "The recipient address is not valid", body = ErrorBody),
+        (status = 500, description = "Internal server error", body = ErrorBody),
+    )
+    )]
+    pub async fn post_transactions_transfer_funds_to_address<
+        WalletService,
+        StorageAdapter,
+        RuntimeServiceId,
+    >(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(body): Json<WalletTransferFundsToAddressRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = ValidatedTx,
+                Key = <ValidatedTx as Hashable>::Hash,
+                BlockId = HeaderId,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Clone
+            + Send
+            + Sync
+            + Display
+            + 'static
+            + AsServiceId<StorageService<RuntimeServiceId>>
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        ValidatedTx,
+                        <ValidatedTx as Hashable>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<HeaderId, ValidatedTx, StorageAdapter, RuntimeServiceId>,
+                    StorageAdapter,
+                    NtpTimeBackend,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        let recipient = match Address::decode(&body.recipient_address, ADDRESS_NETWORK) {
+            Ok(recipient) => recipient,
+            Err(error) => return ApiError::BadRequest(error.to_string()).into_response(),
+        };
+        let wallet_api = {
+            let wallet_relay = match get_relay::<WalletService, _>(&handle).await {
+                Ok(relay) => relay,
+                Err(error) => return error.into_response(),
+            };
+            WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
+        };
+
+        let transfer_funds = wallet_api
+            .transfer_funds_to(
+                body.tip,
+                body.change_public_key,
+                body.funding_public_keys,
+                &recipient,
+                body.recipient_stake_public_key,
+                body.amount,
+            )
+            .await;
+
+        match transfer_funds {
+            Ok(lb_wallet_service::TipResponse {
+                response:
+                    TransferTo {
+                        transaction,
+                        note,
+                        delivery,
+                    },
+                ..
+            }) => {
+                let hash = transaction.hash();
+                // Submit to mempool
+                if let Err(e) = mempool::add_tx::<
+                    Libp2pNetworkBackend,
+                    MempoolNetworkAdapter<
+                        ValidatedTx,
+                        <ValidatedTx as Hashable>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    ValidatedTx,
+                    NtpTimeBackend,
+                    RuntimeServiceId,
+                >(&handle, transaction, Hashable::hash)
+                .await
+                {
+                    return ApiError::Internal(e).into_response();
+                }
+
+                json_response(Ok::<_, DynError>(
+                    WalletTransferFundsToAddressResponseBody {
+                        hash,
+                        recipient_note: delivery.is_none().then_some(note),
+                        delivery_message: delivery.map(|message| hex::encode(message.to_bytes())),
+                    },
+                ))
+            }
+            Err(error) => ApiError::internal(error).into_response(),
+        }
     }
 
     #[utoipa::path(
@@ -2470,6 +2599,165 @@ pub mod wallet {
             );
 
             wallet.import_note(req.note, req.note_set).await?;
+            Ok::<_, DynError>(())
+        })
+    }
+
+    #[utoipa::path(
+        get,
+        path = paths::wallet::ADDRESS,
+        responses(
+            (status = 200, description = "The address senders pay this key of the wallet at"),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
+    )]
+    pub async fn get_address<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Path(public_key): Path<ZkPublicKey>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let address = wallet.address(public_key).await?;
+            Ok::<_, DynError>(WalletAddressResponseBody {
+                address: address.encode(ADDRESS_NETWORK),
+            })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::IMPORT_DELIVERY_MESSAGES,
+        responses(
+            (status = 200, description = "Delivery messages kept, opened once a block appends their commitment"),
+            (status = 400, description = "A message is not a delivery message", body = ErrorBody),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
+    )]
+    pub async fn import_delivery_messages<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletImportDeliveryMessagesRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        let Some(messages) = req
+            .messages
+            .iter()
+            .map(|message| DeliveryMessage::from_bytes(&hex::decode(message).ok()?))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return ApiError::BadRequest(
+                "A delivery message is the hex of its 1208 bytes".to_owned(),
+            )
+            .into_response();
+        };
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let kept = wallet.import_delivery_messages(messages).await?;
+            Ok::<_, DynError>(WalletImportDeliveryMessagesResponseBody { kept })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::REDELIVER_NOTE,
+        responses(
+            (status = 200, description = "A note the wallet paid, delivered again"),
+            (status = 400, description = "The recipient address is not valid", body = ErrorBody),
+            (status = 404, description = "The wallet holds no such note for this address", body = ErrorBody),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
+    )]
+    pub async fn redeliver_note<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletRedeliverRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        let recipient = match Address::decode(&req.recipient_address, ADDRESS_NETWORK) {
+            Ok(recipient) => recipient,
+            Err(error) => return ApiError::BadRequest(error.to_string()).into_response(),
+        };
+        let wallet_api = {
+            let wallet_relay = match get_relay::<WalletService, _>(&handle).await {
+                Ok(relay) => relay,
+                Err(error) => return error.into_response(),
+            };
+            WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay)
+        };
+        match wallet_api.redeliver(req.commitment, &recipient).await {
+            Ok(Some(redelivery)) => json_response(Ok::<_, DynError>(WalletRedeliverResponseBody {
+                recipient_note: redelivery.delivery.is_none().then_some(redelivery.note),
+                delivery_message: redelivery
+                    .delivery
+                    .map(|message| hex::encode(message.to_bytes())),
+            })),
+            Ok(None) => ApiError::NotFound("The wallet holds no such note for this address".into())
+                .into_response(),
+            Err(error) => ApiError::internal(error).into_response(),
+        }
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::NAME_STAKING_KEY,
+        responses(
+            (status = 200, description = "Staking key named: the wallet owns the notes delivered under it"),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
+    )]
+    pub async fn name_staking_key<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletNameStakingKeyRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            wallet.name_staking_key(req.staking_key).await?;
+            Ok::<_, DynError>(())
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::RESCAN,
+        responses(
+            (status = 200, description = "Wallet rebuilt over the chain, from the genesis block"),
+            (status = 500, description = "Internal server error", body = ErrorBody),
+        )
+    )]
+    pub async fn rescan<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            wallet.rescan().await?;
             Ok::<_, DynError>(())
         })
     }
