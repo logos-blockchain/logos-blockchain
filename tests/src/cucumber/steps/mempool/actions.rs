@@ -5,7 +5,7 @@ use lb_core::mantle::{
     SignedOps, TxHash,
     ledger::verification_mode::StandardMode,
     traits::Hashable as _,
-    transactions::{OpProofs, states::Preverified},
+    transactions::{GasPrices, OpProofs, states::Preverified},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_storage_service::{
@@ -21,7 +21,9 @@ use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::{
-    common::wallet::{WalletTransactionError, WalletTransactionIntent},
+    common::wallet::{
+        WalletInputSelectionStrategy, WalletTransactionError, WalletTransactionIntent,
+    },
     cucumber::{
         error::StepError,
         steps::{TARGET, transactions::tracked_transactions::create_stateless_invalid_transaction},
@@ -30,6 +32,7 @@ use crate::{
             submissions::{
                 PreparedUserWalletSubmission, SignedUserWalletSubmission,
                 import_node_wallet_outputs, prepare_user_wallet_transaction_submission,
+                prepare_user_wallet_transaction_submission_with_change_and_strategy,
                 record_signed_user_wallet_submission, sign_prepared_user_wallet_transaction,
             },
             sync::genesis_utxos_for_user_wallets,
@@ -65,7 +68,7 @@ pub async fn prepare_transfer_transaction(
     .await
 }
 
-/// Prepares a transfer proven against the genesis note set roots.
+/// Prepares a transfer proven and priced against the genesis block.
 pub async fn prepare_genesis_anchored_transfer_transaction(
     world: &mut CucumberWorld,
     step: &str,
@@ -75,14 +78,33 @@ pub async fn prepare_genesis_anchored_transfer_transaction(
     receiver_wallet_name: String,
 ) -> Result<(), StepError> {
     let genesis_utxos = genesis_utxos_for_user_wallets(world, step)?;
+    let genesis = world
+        .chain
+        .genesis_block_id
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Step `{step}` error: genesis block id is not available"),
+        })?;
+    let sender = world.resolve_wallet(&sender_wallet_name)?;
+    let prices = world
+        .resolve_node_http_client(&sender.node_name)?
+        .gas_prices(Some(genesis))
+        .await?;
+    let genesis_prices = GasPrices {
+        execution_base_gas_price: prices.execution_base_gas_price,
+        storage_gas_price: prices.storage_gas_price,
+    };
+    info!(target: TARGET, ?genesis, ?genesis_prices, "Pricing genesis-anchored transfer");
     let receiver_pk = receiver_public_key(world, step, &receiver_wallet_name)?;
     let intent = transfer_intent(receiver_pk, amount)?;
-    let prepared = prepare_user_wallet_transaction_submission(
+    let prepared = prepare_user_wallet_transaction_submission_with_change_and_strategy(
         world,
         step,
         &sender_wallet_name,
         intent,
         Some(&genesis_utxos),
+        None,
+        Some(genesis_prices),
+        WalletInputSelectionStrategy::LargestFirst,
     )
     .await?;
     record_prepared_transfer(

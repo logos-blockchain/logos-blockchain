@@ -1365,6 +1365,153 @@ async fn failed_funding_does_not_release_an_inscription_step_reservation() {
 }
 
 #[tokio::test]
+async fn pre_transfer_funding_errors_preserve_prepared_claims() {
+    let (builder, channel_set, nullifier) = inscription_with_reserved_input();
+    let builder = builder.with_reservation_id([1; 32]);
+    let updater = updater();
+    let owner = ZkPublicKey::new(Fr::ONE);
+    let mut state = wallet_state(&wallet_settings(owner), &[], &updater);
+    state
+        .reserve_pending_notes([(channel_set, nullifier)], [1; 32])
+        .unwrap();
+    let unrelated = NoteNullifier(Fr::from(10u64));
+    state
+        .reserve_pending_notes([(NoteSetIndex::Sdp, unrelated)], [2; 32])
+        .unwrap();
+    state.advance_lib(tip(), 3);
+    let (signer, _kms) = signer();
+
+    // No tip response, no ledger state, and insufficient funds exercise
+    // separate pre-transfer branches of the production dispatcher.
+    for (requested_tip, chain) in [
+        (None, CryptarchiaServiceApi::new(closed_relay())),
+        (Some(tip()), chain_api()),
+        (Some(tip()), chain()),
+    ] {
+        let (resp_tx, response) = oneshot::channel();
+        handle(
+            WalletMsg::FundTx {
+                handoff: ReservationHandoff::new(),
+                tip: requested_tip,
+                tx_builder: builder.clone(),
+                change_pk: owner,
+                funding_pks: vec![owner],
+                priority_fee_percent: None,
+                max_tx_fee: None,
+                resp_tx,
+            },
+            &mut state,
+            &chain,
+            &signer,
+            &FuturesUnordered::new(),
+        )
+        .await;
+        assert!(response.await.unwrap().is_err());
+        assert!(state.validate_funding(&builder).is_ok());
+        assert!(state.is_pending_note(channel_set, &nullifier));
+        assert!(state.is_pending_note(NoteSetIndex::Sdp, &unrelated));
+    }
+    // Failed attempts have not refreshed the original age.
+    state.advance_lib(tip(), 7);
+    assert!(!state.is_pending_note(channel_set, &nullifier));
+    assert!(state.validate_funding(&builder).is_err());
+}
+
+#[tokio::test]
+async fn failed_change_persistence_keeps_prepared_claims_for_funding_retry() {
+    let key = ZkKey::new(Fr::from(7u64));
+    let fee_note = known_note(&key, 1_000_000_000_000_000_000, 1);
+    let owner = key.to_public_key();
+    let settings = wallet_settings(owner);
+    let updater = updater();
+    let mut state = wallet_state(&settings, &[fee_note], &updater);
+    let prepared = NoteNullifier(Fr::from(8u64));
+    let input = (NoteSetIndex::Ledger, prepared);
+    state.reserve_pending_notes([input], [1; 32]).unwrap();
+    let unrelated = (NoteSetIndex::Sdp, prepared);
+    state.reserve_pending_notes([unrelated], [2; 32]).unwrap();
+    let builder = MantleTxBuilder::new()
+        .with_reservation_id([1; 32])
+        .push_op(Op::Transfer(TransferOp::new(
+            [prepared].into(),
+            [Note::new(1, Fr::ONE, owner).commitment()].into(),
+            Fr::ONE,
+            0,
+        )))
+        .unwrap();
+    let (storage, mut writes) = storage_api();
+    let kms = kms_api(key);
+    let signer = TestSigner::new(kms);
+    let chain = chain();
+    let signings = FuturesUnordered::new();
+    let era = settings.era_schedule.get(Era::genesis()).unwrap();
+
+    for outcome in 0..3 {
+        let (resp_tx, mut response) = oneshot::channel();
+        let handoff = ReservationHandoff::new();
+        let mut handler = Box::pin(TestWallet::handle_wallet_message(
+            WalletMsg::FundTx {
+                handoff: handoff.clone(),
+                tip: Some(tip()),
+                tx_builder: builder.clone(),
+                change_pk: owner,
+                funding_pks: vec![owner],
+                priority_fee_percent: None,
+                max_tx_fee: None,
+                resp_tx,
+            },
+            &mut state,
+            &settings.voucher_master_key_id,
+            &storage,
+            &chain,
+            &signer,
+            &signings,
+            &settings.era_schedule,
+            era.parameters,
+        ));
+        let message = tokio::select! {
+            () = &mut handler => panic!("funding returned before change persistence: {:?}", response.try_recv()),
+            message = writes.recv() => message.unwrap(),
+        };
+        let StorageMsg::BulkStoreConfirmed { reply_channel, .. } = message else {
+            panic!("expected confirmed opening storage");
+        };
+        if outcome == 1 {
+            assert!(!handoff.cancel());
+        }
+        reply_channel
+            .send(if outcome != 0 {
+                Ok(())
+            } else {
+                Err("write failed".into())
+            })
+            .unwrap();
+        handler.await;
+        let result = response.await;
+        if outcome == 2 {
+            let result = result.unwrap();
+            let funded = result.unwrap().response;
+            assert!(state.validate_funding(&builder).is_err());
+            assert_ne!(funded.reservation_ids().collect::<Vec<_>>(), vec![[1; 32]]);
+            assert!(state.is_pending_note(input.0, &input.1));
+            state.release_transaction_notes(&builder);
+            assert!(state.is_pending_note(input.0, &input.1));
+        } else {
+            if outcome == 0 {
+                assert!(matches!(
+                    result.unwrap(),
+                    Err(WalletServiceError::PersistedState(_))
+                ));
+            } else {
+                assert!(result.is_err());
+            }
+            assert!(state.validate_funding(&builder).is_ok());
+        }
+        assert!(state.is_pending_note(unrelated.0, &unrelated.1));
+    }
+}
+
+#[tokio::test]
 async fn cancelled_funding_does_not_transfer_a_prepared_step() {
     let (builder, channel_set, nullifier) = inscription_with_reserved_input();
     let updater = updater();

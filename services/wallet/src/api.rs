@@ -232,6 +232,11 @@ where
     /// effective priority tip. The percentage is not capped at 100. A
     /// `max_tx_fee` cuts the reserve down so the whole fee stays within it,
     /// never below the mandatory fee.
+    ///
+    /// If funding fails before ownership transfers, the original builder's
+    /// reservations remain valid until explicitly released or expired. Keep a
+    /// copy of the builder to retry. Successful funding transfers ownership;
+    /// subsequent requests must use the returned builder instead.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,

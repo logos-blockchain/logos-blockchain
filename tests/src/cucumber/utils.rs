@@ -340,19 +340,32 @@ pub fn display_last_path_components(path: &Path, levels: usize) -> String {
 /// Returns a lowercase hex string representation of the given transaction hash.
 #[must_use]
 pub fn tx_hash_to_hex(tx_hash: &TxHash) -> String {
-    tx_hash
-        .to_bytes()
-        .unwrap()
-        .to_ascii_lowercase()
-        .encode_hex::<String>()
+    tx_hash.to_bytes().unwrap().encode_hex::<String>()
 }
 
 /// Returns a lowercase hex string representation of the given public key.
 #[must_use]
-pub fn pk_to_hex(tx_hash: &ZkPublicKey) -> String {
-    tx_hash
-        .to_bytes()
-        .unwrap()
-        .to_ascii_lowercase()
-        .encode_hex::<String>()
+pub fn pk_to_hex(public_key: &ZkPublicKey) -> String {
+    public_key.to_bytes().unwrap().encode_hex::<String>()
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_binary_codec::bincode::SerializeOp as _;
+
+    use super::{TxHash, ZkPublicKey, pk_to_hex, tx_hash_to_hex};
+
+    #[test]
+    fn transaction_hash_hex_preserves_ascii_uppercase_bytes() {
+        let hash = TxHash([0x41; 32]);
+        assert_eq!(tx_hash_to_hex(&hash), "41".repeat(32));
+    }
+
+    #[test]
+    fn public_key_hex_preserves_ascii_uppercase_bytes() {
+        let public_key = ZkPublicKey::new(65u8.into());
+        let bytes = public_key.to_bytes().unwrap();
+        assert!(bytes.contains(&0x41));
+        assert_eq!(hex::decode(pk_to_hex(&public_key)).unwrap(), bytes);
+    }
 }
