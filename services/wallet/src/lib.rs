@@ -968,13 +968,9 @@ where
                     Self::send_err(resp_tx, err.into());
                     return;
                 }
-                // Like a funding that fails, a request that fails before
-                // funding releases the notes `tx_builder`
-                // spends, such as a split.
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
-                        state.release_transaction_notes(&tx_builder);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -987,7 +983,6 @@ where
                 let context = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger.tx_context(era_settings.gas_profile),
                     Err(err) => {
-                        state.release_transaction_notes(&tx_builder);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -1017,7 +1012,6 @@ where
                     Self::add_change_note(&funded, change_pk, change_nonce, state, storage, kms)
                         .await
                 {
-                    state.release_transaction_notes(&funded);
                     Self::send_err(resp_tx, err);
                     return;
                 }

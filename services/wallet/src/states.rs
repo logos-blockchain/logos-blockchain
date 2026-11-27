@@ -142,6 +142,9 @@ impl PendingNotes {
                 .and_modify(|entry| {
                     entry.owner = new_owner;
                     entry.funded = funded;
+                    if funded {
+                        entry.age = 0;
+                    }
                     // A funded builder remains usable after a failed signing
                     // or proving attempt. Its owner must explicitly abandon it.
                     entry.delivered = funded;
@@ -586,15 +589,15 @@ impl<'u> ServiceState<'u> {
     /// its percentage of the final mandatory fee, including both execution and
     /// storage cost, within its maximum fee. Only the unused reserve becomes an
     /// effective priority tip, and the percentage is not capped at 100. A
-    /// funding that fails releases the notes reserved by the validated
-    /// `tx_builder`. Stale or conflicting ownership claims are rejected before
-    /// cleanup and cannot release another operation's reservations.
+    /// failed attempt preserves the builder's reservations for a retry. Stale
+    /// or conflicting ownership claims cannot release another operation's
+    /// reservations.
     #[expect(
         clippy::too_many_arguments,
         reason = "thin passthrough to `Wallet::fund_tx` plus the reservations"
     )]
     pub fn fund_tx(
-        &mut self,
+        &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -604,7 +607,7 @@ impl<'u> ServiceState<'u> {
         priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.pending_notes.validate_claims(tx_builder, true)?;
-        let funded = self.wallet.fund_tx(
+        self.wallet.fund_tx(
             tip,
             tx_builder,
             change_pk,
@@ -613,11 +616,7 @@ impl<'u> ServiceState<'u> {
             context,
             &self.pending_notes.nullifiers(NoteSetIndex::Ledger),
             priority_fee,
-        );
-        if funded.is_err() {
-            self.release_transaction_notes(tx_builder);
-        }
-        funded
+        )
     }
 
     // A Transfer giving `owner` a note of exactly `value` and the rest back to
@@ -979,6 +978,75 @@ mod tests {
     }
 
     #[test]
+    fn funding_resets_all_transferred_reservation_ages() {
+        use lb_core::mantle::Op;
+
+        let first = NoteNullifier(Fr::ONE);
+        let second = NoteNullifier(Fr::from(2u64));
+        let newly_funded = NoteNullifier(Fr::from(3u64));
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
+            .with_additional_reservation_id([2; 32])
+            .push_op(Op::Transfer(TransferOp::new(
+                [first, second, newly_funded].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        let first_input = (NoteSetIndex::Ledger, first);
+        let second_input = (NoteSetIndex::Ledger, second);
+        let new_input = (NoteSetIndex::Ledger, newly_funded);
+        pending.reserve([first_input], [1; 32]).unwrap();
+        pending.evict_expired(1, EXPIRY_BLOCKS);
+        pending.reserve([second_input], [2; 32]).unwrap();
+        pending.evict_expired(2, EXPIRY_BLOCKS);
+
+        // A conflicting target owner rejects the whole transition without
+        // refreshing either existing claim or acquiring the new input.
+        assert!(pending.transfer(&builder, [1; 32], true).is_err());
+        assert_eq!(pending.notes[&first_input].age, 3);
+        assert_eq!(pending.notes[&second_input].age, 2);
+        assert!(!pending.notes.contains_key(&new_input));
+
+        pending.transfer(&builder, [3; 32], true).unwrap();
+        for input in [first_input, second_input, new_input] {
+            assert_eq!(pending.notes[&input].owner, [3; 32]);
+            assert_eq!(pending.notes[&input].age, 0);
+        }
+        assert!(pending.validate_claims(&builder, true).is_err());
+        pending.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        assert_eq!(pending.notes.len(), 3);
+        pending.evict_expired(1, EXPIRY_BLOCKS);
+        assert!(pending.notes.is_empty());
+    }
+
+    #[test]
+    fn unfunded_transfer_does_not_refresh_reservation_age() {
+        use lb_core::mantle::Op;
+
+        let nullifier = NoteNullifier(Fr::ONE);
+        let input = (NoteSetIndex::Ledger, nullifier);
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
+            .push_op(Op::Transfer(TransferOp::new(
+                [nullifier].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending.reserve([input], [1; 32]).unwrap();
+        pending.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        pending.transfer(&builder, [2; 32], false).unwrap();
+        assert_eq!(pending.notes[&input].age, EXPIRY_BLOCKS - 1);
+        pending.evict_expired(1, EXPIRY_BLOCKS);
+        assert!(pending.notes.is_empty());
+    }
+
+    #[test]
     fn overlapping_jobs_and_stale_completions_do_not_release_live_reservations() {
         use lb_core::mantle::{Op, notes::NoteCommitment};
 
@@ -1172,7 +1240,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_funding_releases_the_notes_of_its_builder_alone() {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The test follows the prepared reservation through failure, retry and abandonment"
+    )]
+    fn a_failed_funding_keeps_prepared_reservations_for_retry() {
         use std::sync::Arc;
 
         use lb_core::mantle::{
@@ -1180,9 +1252,12 @@ mod tests {
             ops::sdp::SDPWithdrawOp,
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         };
+        use lb_cryptarchia_engine::Epoch;
+        use lb_key_management_system_service::keys::ZkKey;
         use lb_services_utils::overwatch::RecoveryData;
 
-        let funding_pk = ZkPublicKey::new(Fr::ONE);
+        let key = ZkKey::new(Fr::from(7u64));
+        let funding_pk = key.to_public_key();
         let settings = WalletServiceSettings {
             known_keys: HashMap::from([("funding".into(), funding_pk)]),
             voucher_master_key_id: "voucher-master".into(),
@@ -1213,6 +1288,7 @@ mod tests {
         state
             .reserve_pending_notes([(NoteSetIndex::Ledger, in_flight)], [2; 32])
             .unwrap();
+        state.pending_notes.evict_expired(3, 10);
         let tx_builder = MantleTxBuilder::new()
             .with_reservation_id([1; 32])
             .push_op(Op::Transfer(TransferOp::new(
@@ -1241,7 +1317,11 @@ mod tests {
         assert_eq!(error, WalletError::InsufficientFunds { available: 0 });
         assert_eq!(
             state.pending_notes.nullifiers(NoteSetIndex::Ledger),
-            HashSet::from([in_flight])
+            HashSet::from([split_input, in_flight])
+        );
+        assert_eq!(
+            state.pending_notes.notes[&(NoteSetIndex::Ledger, split_input)].age,
+            3
         );
 
         let sdp = MantleTxBuilder::new()
@@ -1268,11 +1348,76 @@ mod tests {
                 .is_err()
         );
         assert!(state.is_pending_note(NoteSetIndex::Ledger, &in_flight));
-        assert!(!state.is_pending_note(NoteSetIndex::Sdp, &in_flight));
+        assert!(state.is_pending_note(NoteSetIndex::Sdp, &in_flight));
         assert_eq!(
             state.pending_notes.nullifiers(NoteSetIndex::Sdp),
-            HashSet::new()
+            HashSet::from([in_flight])
         );
+
+        // A later block supplies a Ledger funding note. The original builder
+        // can be retried with the same reservation capability.
+        let fee_note = crate::tests::known_note(&key, 100_000, 8);
+        state.wallet.add_known_notes([fee_note]);
+        let child = HeaderId::from([1; 32]);
+        state
+            .apply_block(&WalletBlock {
+                id: child,
+                parent: genesis,
+                epoch: Epoch::new(0),
+                revealed: vec![],
+                withdrawals: vec![],
+                updates: vec![lb_core::mantle::note_set::NoteSetUpdate {
+                    note_set: NoteSetIndex::Ledger,
+                    nullifiers: vec![],
+                    commitments: vec![fee_note.note.commitment()],
+                }],
+            })
+            .unwrap();
+        let mut spend_tip = child;
+        for number in 2..=5 {
+            let next = HeaderId::from([number; 32]);
+            state
+                .apply_block(&WalletBlock {
+                    id: next,
+                    parent: spend_tip,
+                    epoch: Epoch::new(0),
+                    revealed: vec![],
+                    withdrawals: vec![],
+                    updates: vec![],
+                })
+                .unwrap();
+            spend_tip = next;
+        }
+        let funded = state
+            .fund_tx(
+                spend_tip,
+                &tx_builder,
+                funding_pk,
+                Fr::ONE,
+                [funding_pk],
+                &context,
+                0,
+            )
+            .unwrap();
+        state.transfer_reservations(&funded, [4; 32], true).unwrap();
+        assert!(state.validate_funding(&tx_builder).is_err());
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &split_input));
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &in_flight));
+        assert!(state.is_pending_note(NoteSetIndex::Sdp, &in_flight));
+        assert!(state.release_reservation([3; 32]));
+        assert!(matches!(
+            state.fund_tx(
+                spend_tip,
+                &sdp,
+                funding_pk,
+                Fr::ONE,
+                [funding_pk],
+                &context,
+                0
+            ),
+            Err(WalletError::InputReserved)
+        ));
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &in_flight));
     }
 
     /// Regression test for the wallet-service crash seen the first time a
