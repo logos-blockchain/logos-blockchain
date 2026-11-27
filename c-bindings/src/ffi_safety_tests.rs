@@ -779,10 +779,17 @@ mod with_node {
                 string_result("get_chain_id", get_chain_id(node)),
                 OperationStatusCode::Ok
             );
-            assert_eq!(
-                string_result("get_fork_digest", get_fork_digest(node)),
-                OperationStatusCode::Ok
+            // The test deployment's genesis era is not a legacy one, so a
+            // transaction signed now carries a fork digest.
+            let result = get_fork_digest(node);
+            assert!(result.is_ok());
+            assert!(
+                result.value.is_some,
+                "get_fork_digest: no digest outside a legacy era"
             );
+            let fork_digest = result.value.value;
+            assert_eq!(CStr::from_ptr(fork_digest).to_bytes().len(), 64);
+            assert!(free_cstring(fork_digest).is_ok());
 
             let result = get_time_info(node);
             assert!(result.is_ok());

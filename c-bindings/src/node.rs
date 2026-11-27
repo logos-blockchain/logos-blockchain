@@ -1,6 +1,6 @@
 use std::ffi::CString;
 
-use lb_core::era::{Era, ForkDigest};
+use lb_core::era::ForkDigest;
 use lb_node::{RuntimeServiceId, TimeService, config::DeploymentSettings};
 use lb_time_service::TimeServiceMessage;
 use overwatch::overwatch::{Overwatch, OverwatchHandle, ServicePanic};
@@ -63,16 +63,9 @@ impl LogosBlockchainNode {
         &self.deployment
     }
 
-    fn fork_digest(&self, era: Era) -> Option<ForkDigest> {
-        self.deployment
-            .era_schedule()
-            .get(era)
-            .map(|entry| entry.parameters.fork_digest)
-    }
-
-    /// The fork digest of the era the node's clock is in, which a transaction
-    /// signed now carries.
-    pub(crate) async fn fork_digest_in_force(&self) -> StatusResult<ForkDigest> {
+    /// The fork digest a transaction signed now carries: that of the era the
+    /// node's clock is in, or none in a legacy era.
+    pub(crate) async fn fork_digest_in_force(&self) -> StatusResult<Option<ForkDigest>> {
         let relay = self
             .get_overwatch_handle()
             .relay::<TimeService>()
@@ -105,12 +98,13 @@ impl LogosBlockchainNode {
             })?
             .era;
 
-        self.fork_digest(era).ok_or_else(|| {
+        let era_definition = self.deployment.era_schedule().get(era).ok_or_else(|| {
             OperationStatus::error(
                 OperationStatusCode::ConfigurationError,
                 format!("The deployment has no era {}", era.into_inner()),
             )
-        })
+        })?;
+        Ok(era_definition.parameters.tx_fork_digest())
     }
 
     /// Fetch the chain ID of the deployment this node runs.

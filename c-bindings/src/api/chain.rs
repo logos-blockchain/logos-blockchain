@@ -3,8 +3,8 @@ use std::ffi::{CString, c_char};
 use lb_c_macros::panic_to_error;
 
 use crate::{
-    LogosBlockchainNode, OperationStatus, errors::OperationStatusCode, result::FfiStatusResult,
-    return_error_if_null_pointer, unwrap_or_return_error,
+    LogosBlockchainNode, OperationStatus, errors::OperationStatusCode, option::FfiOption,
+    result::FfiStatusResult, return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 /// Result type for [`get_chain_id`]. On success, `value` is a pointer to a
@@ -51,13 +51,17 @@ pub unsafe extern "C" fn get_chain_id(node: *const LogosBlockchainNode) -> FfiGe
     FfiGetChainIdResult::ok(chain_id.into_raw())
 }
 
-/// Result type for [`get_fork_digest`]. On success, `value` is a pointer to a
-/// NUL-terminated C string holding the fork digest in lowercase hexadecimal.
-pub type FfiGetForkDigestResult = FfiStatusResult<*mut c_char>;
+/// Result type for [`get_fork_digest`].
+///
+/// On success, `value` holds a pointer to a NUL-terminated C string with the
+/// fork digest in lowercase hexadecimal, or nothing in a legacy era, whose
+/// transactions carry no fork digest.
+pub type FfiGetForkDigestResult = FfiStatusResult<FfiOption<*mut c_char>>;
 
 /// Returns the fork digest a transaction signed now must carry: that of the era
 /// the node's clock is in, in lowercase hexadecimal, as a transaction's JSON
-/// carries it.
+/// carries it. In a legacy era, whose transactions carry no fork digest, the
+/// value is not set.
 ///
 /// The fork digest changes when an era starts, so a caller asks for it right
 /// before signing a transaction rather than keeping it.
@@ -69,8 +73,9 @@ pub type FfiGetForkDigestResult = FfiStatusResult<*mut c_char>;
 ///
 /// # Returns
 ///
-/// A [`FfiGetForkDigestResult`] containing a pointer to an allocated C string
-/// on success, or an [`OperationStatus`] error on failure.
+/// A [`FfiGetForkDigestResult`] containing a pointer to an allocated C string,
+/// or no value in a legacy era, on success, or an [`OperationStatus`] error on
+/// failure.
 ///
 /// # Safety
 ///
@@ -79,8 +84,9 @@ pub type FfiGetForkDigestResult = FfiStatusResult<*mut c_char>;
 ///
 /// # Memory Management
 ///
-/// This function allocates memory for the output C string. The caller must
-/// free this memory using the [`free_cstring`](super::free_cstring) function.
+/// This function allocates memory for the output C string when the value is
+/// set. The caller must free this memory using the
+/// [`free_cstring`](super::free_cstring) function.
 #[must_use]
 #[panic_to_error]
 #[unsafe(no_mangle)]
@@ -91,9 +97,12 @@ pub unsafe extern "C" fn get_fork_digest(
     let node = unsafe { &*node };
     let runtime_handle = unwrap_or_return_error!(node.get_runtime_handle());
     let fork_digest = unwrap_or_return_error!(runtime_handle.block_on(node.fork_digest_in_force()));
+    let Some(fork_digest) = fork_digest else {
+        return FfiGetForkDigestResult::ok(None.into());
+    };
 
     match CString::new(hex::encode(<[u8; 32]>::from(fork_digest))) {
-        Ok(fork_digest) => FfiGetForkDigestResult::ok(fork_digest.into_raw()),
+        Ok(fork_digest) => FfiGetForkDigestResult::ok(Some(fork_digest.into_raw()).into()),
         Err(error) => FfiGetForkDigestResult::err(OperationStatus::error(
             OperationStatusCode::RuntimeError,
             format!("Failed to create CString: {error}"),
