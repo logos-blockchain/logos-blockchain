@@ -12,8 +12,8 @@ pub struct ChainIdResponseBody {
 }
 
 /// The fork the node's clock is in: the fork digest a transaction signed now
-/// carries.
+/// carries, or none in a legacy era, whose transactions carry no fork digest.
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct ChainForkResponseBody {
-    pub fork_digest: ForkDigest,
+    pub fork_digest: Option<ForkDigest>,
 }

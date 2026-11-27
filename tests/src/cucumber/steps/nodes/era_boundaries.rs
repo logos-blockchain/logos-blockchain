@@ -605,7 +605,7 @@ async fn verify_target_era_fork_digest(world: &mut CucumberWorld, seconds: u64) 
                 })?
                 .map_err(|error| failure(format!("Node `{name}` fork query failed: {error}")))?;
             match fork {
-                fork if format!("{fork:?}") == proof.target_fork => {
+                Some(fork) if format!("{fork:?}") == proof.target_fork => {
                     last_observations
                         .insert(name.clone(), format!("active target fork digest {fork:?}"));
                     observed_fork_digests.insert(name.clone(), format!("{fork:?}"));

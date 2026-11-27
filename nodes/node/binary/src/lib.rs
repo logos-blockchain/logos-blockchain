@@ -226,7 +226,10 @@ pub fn run_node_from_config(
     let api_config = ApiConfig {
         user: config.user.api,
         chain_id,
-        fork_digests: eras.iter().map(|era| era.parameters.fork_digest).collect(),
+        fork_digests: eras
+            .iter()
+            .map(|era| era.parameters.tx_fork_digest())
+            .collect(),
     };
 
     let http_config = api_config.backend_settings();

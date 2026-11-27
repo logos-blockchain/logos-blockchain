@@ -497,7 +497,7 @@ pub async fn chain_id(Extension(chain_id): Extension<ChainId>) -> Response {
 )]
 pub async fn chain_fork<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Extension(fork_digests): Extension<Vec<ForkDigest>>,
+    Extension(fork_digests): Extension<Vec<Option<ForkDigest>>>,
 ) -> Response
 where
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
@@ -508,12 +508,12 @@ where
     })
 }
 
-/// The fork digest, of `fork_digests`, of the era the time service's clock is
-/// in.
+/// The fork digest, of `fork_digests`, that a transaction carries in the era
+/// the time service's clock is in: none in a legacy era.
 async fn fork_digest_in_force<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
-    fork_digests: &[ForkDigest],
-) -> Result<ForkDigest, DynError>
+    fork_digests: &[Option<ForkDigest>],
+) -> Result<Option<ForkDigest>, DynError>
 where
     RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
 {
@@ -2412,7 +2412,7 @@ pub mod wallet {
     )]
     pub async fn fund<WalletService, StorageAdapter, RuntimeServiceId>(
         State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-        Extension(fork_digests): Extension<Vec<ForkDigest>>,
+        Extension(fork_digests): Extension<Vec<Option<ForkDigest>>>,
         Json(req): Json<WalletFundRequestBody>,
     ) -> Response
     where

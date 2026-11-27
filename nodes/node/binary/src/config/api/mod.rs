@@ -10,9 +10,9 @@ pub struct ServiceConfig {
     pub user: Config,
     /// The chain this node runs on, taken from the deployment settings.
     pub chain_id: ChainId,
-    /// The fork digest of every era of the deployment, era `n` at position
-    /// `n`.
-    pub fork_digests: Vec<ForkDigest>,
+    /// The fork digest the transactions of every era of the deployment carry,
+    /// era `n` at position `n`: none for a legacy era.
+    pub fork_digests: Vec<Option<ForkDigest>>,
 }
 
 impl ServiceConfig {
