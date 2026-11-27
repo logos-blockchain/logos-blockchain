@@ -111,7 +111,7 @@
 
           logosBlockchainDependencies = craneLib.buildDepsOnly commonArgs;
 
-          logosBlockChainC = craneLib.buildPackage (
+          logosBlockchainC = craneLib.buildPackage (
             commonArgs
             // {
               cargoArtifacts = logosBlockchainDependencies;
@@ -174,7 +174,7 @@
             RAPIDSNARK_LIB_DIR = "${logos-blockchain-rapidsnark.packages.${system}.windows-x86_64}/lib";
           };
 
-          logosBlockChainCWindows = windowsCraneLib.buildPackage (
+          logosBlockchainCWindows = windowsCraneLib.buildPackage (
             windowsArgs
             // {
               cargoArtifacts = windowsCraneLib.buildDepsOnly windowsArgs;
@@ -185,13 +185,26 @@
               '';
             }
           );
+
+          logosBlockchainNodeWindowsArgs = windowsArgs // {
+            pname = "logos-blockchain-node-windows-x86_64";
+            cargoExtraArgs = "-p logos-blockchain-node";
+          };
+
+          logosBlockchainNodeWindows = windowsCraneLib.buildPackage (
+            logosBlockchainNodeWindowsArgs
+            // {
+              cargoArtifacts = windowsCraneLib.buildDepsOnly logosBlockchainNodeWindowsArgs;
+            }
+          );
         in
         {
-          logos-blockchain-c = logosBlockChainC;
-          default = logosBlockChainC;
+          logos-blockchain-c = logosBlockchainC;
+          default = logosBlockchainC;
         }
         // pkgs.lib.optionalAttrs (system == "x86_64-linux") {
-          logos-blockchain-c-windows-x86_64 = logosBlockChainCWindows;
+          logos-blockchain-c-windows-x86_64 = logosBlockchainCWindows;
+          logos-blockchain-node-windows-x86_64 = logosBlockchainNodeWindows;
         }
       );
 
