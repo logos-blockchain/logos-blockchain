@@ -97,6 +97,34 @@ jobs:
           path: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz
           if-no-files-found: error
 
+  build-windows:
+    name: Build and tar binaries for Windows (x86_64)
+    needs: configure-version
+    runs-on: ubuntu-24.04
+    env:
+      BINARY_NAME: logos-blockchain-node-windows-x86_64-${{ needs.configure-version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086  # Version 31.11.5
+
+      # Windows is cross-built from Linux with the Logos toolchain.
+      - name: Build node binary
+        run: nix build .#logos-blockchain-node-windows-x86_64
+
+      - name: Tar node binary
+        run: tar -czf ${{ env.BINARY_NAME }}.tar.gz -C result/bin logos-blockchain-node.exe
+
+      - name: Upload binary tar (x86_64)
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        with:
+          name: ${{ env.BINARY_NAME }}
+          path: ${{ env.BINARY_NAME }}.tar.gz
+          if-no-files-found: error
+
   create-draft-release:
     name: Create draft release
     needs:
