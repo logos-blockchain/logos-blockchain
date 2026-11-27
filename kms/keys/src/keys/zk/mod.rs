@@ -4,8 +4,8 @@ use std::hash::{Hash, Hasher};
 use lb_groth16::Fr;
 use lb_zktransfer::{Unsigned, ZkTransferProof, ZkTransferWitnessBuilder};
 use num_bigint::BigUint;
-use serde::Deserialize;
-use zeroize::ZeroizeOnDrop;
+use serde::{Deserialize, Deserializer};
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::keys::{errors::KeyError, secured_key::SecuredKey};
 
@@ -19,46 +19,117 @@ pub use self::public::PublicKey;
 // keys of the KMS complete.
 pub type ZkTransferPayload = ZkTransferWitnessBuilder<Unsigned>;
 
-/// An hardened ZK secret key that only exposes methods to retrieve public
-/// information.
+/// A secured ZK credential used by the KMS.
 ///
-/// It is a secured variant of a [`UnsecuredZkKey`] and used within the set of
-/// supported KMS keys.
+/// In-process operators are trusted with its secret material; this type does
+/// not establish confidentiality against arbitrary operator implementations.
+#[derive(ZeroizeOnDrop, Clone, PartialEq, Eq)]
+pub struct ZkKey(ZkKeyMaterial);
+
+/// The untagged spending variant preserves the existing serialized format.
+/// A directly supplied credential has an explicit, distinct representation.
 #[derive(Deserialize, ZeroizeOnDrop, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "unsafe", derive(serde::Serialize))]
-pub struct ZkKey(UnsecuredZkKey);
+#[serde(untagged)]
+enum ZkKeyMaterial {
+    Spending(UnsecuredZkKey),
+    Direct { direct: UnsecuredZkKey },
+}
+
+// Binary spending keys keep their previous fixed-width representation. The
+// field modulus leaves the high bit clear, so it distinguishes direct keys
+// without changing the old spending encoding.
+impl<'de> Deserialize<'de> for ZkKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if deserializer.is_human_readable() {
+            return ZkKeyMaterial::deserialize(deserializer).map(Self);
+        }
+        let mut bytes = Zeroizing::new(lb_utils::serde::deserialize_bytes_array::<32, _>(
+            deserializer,
+        )?);
+        let direct = bytes[31] & 0x80 != 0;
+        bytes[31] &= 0x7f;
+        let secret = lb_groth16::fr_from_bytes(bytes.as_ref())
+            .map_err(|_| serde::de::Error::custom("invalid ZK credential"))?;
+        Ok(if direct {
+            Self::from_direct_secret(secret)
+        } else {
+            Self::new(secret)
+        })
+    }
+}
+
+#[cfg(feature = "unsafe")]
+impl serde::Serialize for ZkKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            return serde::Serialize::serialize(&self.0, serializer);
+        }
+        let mut bytes = Zeroizing::new(lb_groth16::fr_to_bytes(self.as_fr()));
+        if !self.is_spending_key() {
+            bytes[31] |= 0x80;
+        }
+        lb_utils::serde::serialize_bytes_array(*bytes, serializer)
+    }
+}
 
 impl ZkKey {
     #[must_use]
     pub const fn new(secret_key: Fr) -> Self {
-        Self(UnsecuredZkKey::new(secret_key))
+        Self(ZkKeyMaterial::Spending(UnsecuredZkKey::new(secret_key)))
     }
 
     #[must_use]
     pub const fn zero() -> Self {
-        Self(UnsecuredZkKey::zero())
+        Self(ZkKeyMaterial::Spending(UnsecuredZkKey::zero()))
     }
 
+    /// Import a secret used directly for its public-key derivation. It is not
+    /// a spending credential and cannot sign transactions.
+    #[must_use]
+    pub const fn from_direct_secret(secret: Fr) -> Self {
+        Self(ZkKeyMaterial::Direct {
+            direct: UnsecuredZkKey::new(secret),
+        })
+    }
+
+    #[must_use]
+    pub const fn is_spending_key(&self) -> bool {
+        matches!(self.0, ZkKeyMaterial::Spending(_))
+    }
+
+    /// Trusted in-process KMS operators can access the underlying material.
+    /// This interface does not protect secrets from an operator implementation.
     #[must_use]
     pub const fn as_fr(&self) -> &Fr {
-        self.0.as_fr()
+        match &self.0 {
+            ZkKeyMaterial::Spending(key) | ZkKeyMaterial::Direct { direct: key } => key.as_fr(),
+        }
     }
 
-    /// The nullifier key of the notes of this spending secret key.
+    /// The derived nullifier key for spending credentials, or the directly
+    /// supplied material for a direct credential. Operators are trusted with
+    /// this material, as with [`Self::as_fr`].
     #[must_use]
     pub fn nullifier_key(&self) -> Fr {
-        self.0.nullifier_key()
+        match &self.0 {
+            ZkKeyMaterial::Spending(key) => key.nullifier_key(),
+            ZkKeyMaterial::Direct { direct } => *direct.as_fr(),
+        }
     }
 
     #[must_use]
     pub fn to_public_key(&self) -> PublicKey {
-        self.0.to_public_key()
+        kdf_public_key(&self.nullifier_key())
     }
 
     #[cfg(feature = "unsafe")]
     #[must_use]
-    pub fn into_unsecured(self) -> UnsecuredZkKey {
-        self.0.clone()
+    pub fn into_unsecured(self) -> Option<UnsecuredZkKey> {
+        match &self.0 {
+            ZkKeyMaterial::Spending(key) => Some(key.clone()),
+            ZkKeyMaterial::Direct { .. } => None,
+        }
     }
 }
 
@@ -71,7 +142,10 @@ impl Hash for ZkKey {
 impl Debug for ZkKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         #[cfg(feature = "unsafe")]
-        write!(f, "ZkKey({:?})", self.0)?;
+        match &self.0 {
+            ZkKeyMaterial::Spending(key) => write!(f, "ZkKey({key:?})")?,
+            ZkKeyMaterial::Direct { .. } => write!(f, "ZkKey(Direct(<redacted>))")?,
+        }
 
         #[cfg(not(feature = "unsafe"))]
         write!(f, "ZkKey(<redacted>)")?;
@@ -82,19 +156,19 @@ impl Debug for ZkKey {
 
 impl From<Fr> for ZkKey {
     fn from(value: Fr) -> Self {
-        Self(UnsecuredZkKey::new(value))
+        Self::new(value)
     }
 }
 
 impl From<BigUint> for ZkKey {
     fn from(value: BigUint) -> Self {
-        Self(value.into())
+        Self(ZkKeyMaterial::Spending(value.into()))
     }
 }
 
 impl From<UnsecuredZkKey> for ZkKey {
     fn from(value: UnsecuredZkKey) -> Self {
-        Self(value)
+        Self(ZkKeyMaterial::Spending(value))
     }
 }
 
@@ -107,7 +181,12 @@ impl SecuredKey for ZkKey {
 
     // Every input is proven with this key.
     fn sign(&self, payload: &Self::Payload) -> Result<Self::Signature, Self::Error> {
-        self.0.prove_transfer_alone(payload.clone())
+        match &self.0 {
+            ZkKeyMaterial::Spending(key) => key.prove_transfer_alone(payload.clone()),
+            ZkKeyMaterial::Direct { .. } => Err(KeyError::UnsupportedKey(
+                "Direct ZK credentials cannot sign transfers".into(),
+            )),
+        }
     }
 
     // The i-th input is proven with the i-th key.
@@ -115,14 +194,20 @@ impl SecuredKey for ZkKey {
         keys: &[&Self],
         payload: &Self::Payload,
     ) -> Result<Self::Signature, Self::Error> {
-        UnsecuredZkKey::prove_transfer(
-            &keys.iter().map(|key| key.0.clone()).collect::<Vec<_>>(),
-            payload.clone(),
-        )
+        let spending_keys = keys
+            .iter()
+            .map(|key| match &key.0 {
+                ZkKeyMaterial::Spending(key) => Ok(key.clone()),
+                ZkKeyMaterial::Direct { .. } => Err(KeyError::UnsupportedKey(
+                    "Direct ZK credentials cannot sign transfers".into(),
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        UnsecuredZkKey::prove_transfer(&spending_keys, payload.clone())
     }
 
     fn as_public_key(&self) -> Self::PublicKey {
-        self.0.to_public_key()
+        self.to_public_key()
     }
 }
 
@@ -179,5 +264,79 @@ mod tests {
             ZkKey::sign_multiple(&[&keys[0]], &payload),
             Err(KeyError::UnsupportedMultisignatureSize(2, 1))
         ));
+    }
+
+    #[test]
+    fn direct_credentials_use_the_secret_without_a_second_derivation_and_cannot_sign() {
+        let secret = Fr::from(7u64);
+        let direct = ZkKey::from_direct_secret(secret);
+        let spending = ZkKey::new(secret);
+        assert_eq!(direct.to_public_key(), kdf_public_key(&secret));
+        assert_eq!(direct.nullifier_key(), secret);
+        assert_ne!(direct.to_public_key(), spending.to_public_key());
+        let (payload, _) = sample_unsigned_witness();
+        assert!(matches!(
+            direct.sign(&payload),
+            Err(KeyError::UnsupportedKey(_))
+        ));
+        assert!(matches!(
+            ZkKey::sign_multiple(&[&spending, &direct], &payload),
+            Err(KeyError::UnsupportedKey(_))
+        ));
+        assert!(matches!(
+            ZkKey::sign_multiple(&[&direct, &spending], &payload),
+            Err(KeyError::UnsupportedKey(_))
+        ));
+        assert!(!format!("{direct:?}").contains(&format!("{secret:?}")));
+        #[cfg(feature = "unsafe")]
+        assert!(direct.into_unsecured().is_none());
+    }
+
+    #[test]
+    fn legacy_spending_and_explicit_direct_credentials_deserialize() {
+        let secret = Fr::from(42u64);
+        let legacy = serde_json::to_value(super::UnsecuredZkKey::new(secret)).unwrap();
+        let spending: ZkKey = serde_json::from_value(legacy.clone()).unwrap();
+        let direct: ZkKey = serde_json::from_value(serde_json::json!({"direct": legacy})).unwrap();
+        assert_eq!(spending, ZkKey::new(secret));
+        assert_eq!(direct, ZkKey::from_direct_secret(secret));
+        #[cfg(feature = "unsafe")]
+        {
+            let spending_json = serde_json::to_value(&spending).unwrap();
+            let direct_json = serde_json::to_value(&direct).unwrap();
+            assert_eq!(
+                serde_json::from_value::<ZkKey>(spending_json).unwrap(),
+                spending
+            );
+            assert_eq!(
+                serde_json::from_value::<ZkKey>(direct_json).unwrap(),
+                direct
+            );
+            let spending_binary = bincode::serialize(&spending).unwrap();
+            assert_eq!(
+                spending_binary,
+                bincode::serialize(&super::UnsecuredZkKey::new(secret)).unwrap()
+            );
+            assert_eq!(
+                bincode::deserialize::<ZkKey>(&spending_binary).unwrap(),
+                spending
+            );
+            let direct_binary = bincode::serialize(&direct).unwrap();
+            assert_eq!(
+                bincode::deserialize::<ZkKey>(&direct_binary).unwrap(),
+                direct
+            );
+        }
+    }
+
+    #[test]
+    fn binary_and_direct_credentials_reject_noncanonical_field_elements() {
+        let mut invalid = [0xff; 32];
+        invalid[31] = 0x7f;
+        assert!(bincode::deserialize::<ZkKey>(&invalid).is_err());
+        invalid[31] |= 0x80;
+        assert!(bincode::deserialize::<ZkKey>(&invalid).is_err());
+        let direct = serde_json::json!({"direct": hex::encode([0xff; 32])});
+        assert!(serde_json::from_value::<ZkKey>(direct).is_err());
     }
 }

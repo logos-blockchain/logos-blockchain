@@ -63,6 +63,7 @@ where
     Kms::Backend: KMSBackend<KeyId: Send, Key: Send, Error: Send + Debug>,
     KmsBackendKey<Kms>: SecuredKey<Payload: Send, PublicKey: Send, Signature: Send>,
     KmsKeyOperations<Kms>: Send,
+    <Kms::Backend as KMSBackend>::MultiKeyOperations: Send,
     RuntimeServiceId: AsServiceId<Kms> + Debug + Display + Sync,
 {
     #[must_use]
@@ -180,5 +181,24 @@ where
             .map_err(KmsExecuteError::Backend)?;
 
         Ok(())
+    }
+
+    pub async fn execute_multiple(
+        &self,
+        key_ids: Vec<<Kms::Backend as KMSBackend>::KeyId>,
+        operator: <Kms::Backend as KMSBackend>::MultiKeyOperations,
+    ) -> Result<(), KmsExecuteError<<Kms::Backend as KMSBackend>::Error>> {
+        let (reply_channel, rx) = oneshot::channel();
+        self.relay
+            .send(KMSMessage::ExecuteMultiple {
+                key_ids,
+                operator,
+                reply_channel,
+            })
+            .await
+            .map_err(|_| KmsExecuteError::SendRequest)?;
+        rx.await
+            .map_err(|_| KmsExecuteError::ReceiveResponse)?
+            .map_err(KmsExecuteError::Backend)
     }
 }

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use lb_key_management_system_keys::keys::{
-    Key, KeyOperators, errors::KeyError, secured_key::SecuredKey,
+    Key, KeyMultiOperators, KeyOperators, errors::KeyError, secured_key::SecuredKey,
 };
 use serde::Deserialize;
 
@@ -40,6 +40,7 @@ impl KMSBackend for PreloadKMSBackend {
     type KeyId = KeyId;
     type Key = Key;
     type KeyOperations = KeyOperators;
+    type MultiKeyOperations = KeyMultiOperators;
     type Settings = PreloadKMSBackendSettings;
     type Error = PreloadBackendError;
 
@@ -111,6 +112,24 @@ impl KMSBackend for PreloadKMSBackend {
             .ok_or_else(|| PreloadBackendError::NotRegisteredKeyId(key_id.to_owned()))?;
 
         key.execute(operator)
+            .await
+            .map_err(PreloadBackendError::KeyError)
+    }
+
+    async fn execute_multiple(
+        &self,
+        key_ids: &[Self::KeyId],
+        operator: Self::MultiKeyOperations,
+    ) -> Result<(), Self::Error> {
+        let keys = key_ids
+            .iter()
+            .map(|id| {
+                self.keys
+                    .get(id)
+                    .ok_or_else(|| PreloadBackendError::NotRegisteredKeyId(id.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::Key::execute_multiple(&keys, operator)
             .await
             .map_err(PreloadBackendError::KeyError)
     }
@@ -247,6 +266,10 @@ mod tests {
                     "test2".into(),
                     Key::Zk(ZkKey::new(BigUint::from_bytes_le(&[1u8; 32]).into())),
                 ),
+                (
+                    "direct".into(),
+                    Key::Zk(ZkKey::from_direct_secret(BigUint::from(5u64).into())),
+                ),
             ]
             .into(),
         };
@@ -257,8 +280,6 @@ mod tests {
         let deserialized_keys: PreloadKMSBackendSettings =
             serde_yaml::from_slice(&serialized_ouput).unwrap();
 
-        assert_eq!(preloaded_keys.keys.len(), deserialized_keys.keys.len());
-        let original_key = preloaded_keys.keys.keys().next().unwrap();
-        assert!(deserialized_keys.keys.contains_key(original_key));
+        assert_eq!(preloaded_keys.keys, deserialized_keys.keys);
     }
 }

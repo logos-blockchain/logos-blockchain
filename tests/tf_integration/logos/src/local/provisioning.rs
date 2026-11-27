@@ -17,7 +17,7 @@ use lb_libp2p::Multiaddr;
 use lb_node::{
     UserConfig,
     config::{
-        self, RunConfig,
+        self, RunConfig, check_wallet_spending_keys,
         deployment::DeploymentSettings,
         sdp::serde::ActiveMessageTrackerConfig,
         tracing::serde::{
@@ -548,7 +548,7 @@ fn build_dynamic_node_config(
         &plan,
         options.config_override.as_ref().map(|c| &c.run_config),
         template_config.map(|c| &c.run_config),
-    );
+    )?;
     let mut network_port = config.user.network.backend.swarm.port;
 
     match plan.port_strategy {
@@ -682,30 +682,34 @@ pub fn build_node_run_config(
         .clone()
         .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
     let deployment_settings = deployment_settings_for_topology(&genesis_block, topology.config());
-    Ok(build_run_config(node.general.clone(), &deployment_settings))
+    build_run_config(node.general.clone(), &deployment_settings)
 }
 
 fn finalize_dynamic_run_config(
     plan: &PlannedLocalNodeConfig,
     runtime_override: Option<&RunConfig>,
     template_config: Option<&RunConfig>,
-) -> RunConfig {
+) -> Result<RunConfig, DynError> {
     if let Some(override_config) = runtime_override {
-        return override_config.clone();
+        return Ok(override_config.clone());
     }
 
     if let Some(template_config) = template_config {
-        return template_config.clone();
+        return Ok(template_config.clone());
     }
 
     if let Some(override_config) = &plan.descriptor_override {
-        return override_config.clone();
+        return Ok(override_config.clone());
     }
 
     build_run_config(plan.config.clone(), &plan.deployment_settings)
 }
 
-fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) -> RunConfig {
+fn build_run_config(
+    config: Config,
+    deployment_settings: &DeploymentSettings,
+) -> Result<RunConfig, DynError> {
+    config.consensus_config.validate_spending_keys()?;
     let mut tracing = config.tracing_config.tracing_settings;
     tracing.level = Level::INFO;
 
@@ -734,40 +738,38 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
             },
         },
         wallet: {
-            let known_keys: HashMap<_, _> = [
-                (
-                    key_id_for_preload_backend(&Key::Zk(config.consensus_config.known_key.clone())),
-                    config.consensus_config.known_key.as_public_key(),
-                ),
-                (
-                    key_id_for_preload_backend(&Key::Zk(
-                        config.consensus_config.funding_sk.clone(),
-                    )),
-                    config.consensus_config.funding_sk.as_public_key(),
-                ),
-            ]
-            .into_iter()
-            .chain(config.consensus_config.other_keys.iter().map(|sk| {
-                (
-                    key_id_for_preload_backend(&sk.clone().into()),
-                    sk.as_public_key(),
-                )
-            }))
-            .chain(
-                config
-                    .kms_config
-                    .backend
-                    .keys
-                    .values()
-                    .filter_map(|key| match key {
-                        Key::Zk(sk) => Some((
-                            key_id_for_preload_backend(&Key::Zk(sk.clone())),
-                            sk.as_public_key(),
+            let known_keys: HashMap<_, _> = config
+                .kms_config
+                .backend
+                .keys
+                .iter()
+                .filter_map(|(key_id, key)| match key {
+                    Key::Zk(sk) if sk.is_spending_key() => {
+                        Some((key_id.clone(), sk.as_public_key()))
+                    }
+                    _ => None,
+                })
+                .chain([
+                    (
+                        key_id_for_preload_backend(&Key::Zk(
+                            config.consensus_config.known_key.clone(),
                         )),
-                        Key::Ed25519(_) => None,
-                    }),
-            )
-            .collect();
+                        config.consensus_config.known_key.as_public_key(),
+                    ),
+                    (
+                        key_id_for_preload_backend(&Key::Zk(
+                            config.consensus_config.funding_sk.clone(),
+                        )),
+                        config.consensus_config.funding_sk.as_public_key(),
+                    ),
+                ])
+                .chain(config.consensus_config.other_keys.iter().map(|sk| {
+                    (
+                        key_id_for_preload_backend(&sk.clone().into()),
+                        sk.as_public_key(),
+                    )
+                }))
+                .collect();
 
             wallet::serde::Config {
                 known_keys,
@@ -791,10 +793,11 @@ fn build_run_config(config: Config, deployment_settings: &DeploymentSettings) ->
         state: state::Config::default(),
     };
 
-    RunConfig {
+    check_wallet_spending_keys(&user_config).map_err(|error| error.to_string())?;
+    Ok(RunConfig {
         deployment: deployment_settings.clone(),
         user: user_config,
-    }
+    })
 }
 
 fn build_cryptarchia_user_config(
@@ -913,9 +916,108 @@ fn initial_peers_for_dynamic_node(
 #[cfg(test)]
 mod tests {
     use flate2::{Compression, write::GzEncoder};
+    use lb_key_management_system_service::keys::ZkKey;
 
     use super::*;
     use crate::config::deployment::DeploymentBuilder;
+
+    #[test]
+    fn local_provisioning_keeps_direct_credentials_out_of_wallet_spending_keys() {
+        let topology = DeploymentBuilder::new(TopologyConfig::with_node_numbers(1))
+            .build()
+            .unwrap();
+        let mut config = topology.nodes()[0].general.clone();
+        let spending = ZkKey::new(123u64.into());
+        let direct = ZkKey::from_direct_secret(spending.nullifier_key());
+        let spending_key = Key::Zk(spending.clone());
+        let direct_key = Key::Zk(direct);
+        let spending_id = key_id_for_preload_backend(&spending_key);
+        let direct_id = key_id_for_preload_backend(&direct_key);
+        config
+            .kms_config
+            .backend
+            .keys
+            .insert(spending_id.clone(), spending_key.clone());
+        config
+            .kms_config
+            .backend
+            .keys
+            .insert(direct_id.clone(), direct_key.clone());
+        let alias = ZkKey::new(456u64.into());
+        config
+            .kms_config
+            .backend
+            .keys
+            .insert("explicit-spending".into(), Key::Zk(alias.clone()));
+        config
+            .kms_config
+            .backend
+            .keys
+            .insert("explicit-direct".into(), direct_key.clone());
+        let genesis = topology.config().genesis_block.as_ref().unwrap();
+        let deployment = deployment_settings_for_topology(genesis, topology.config());
+        let consensus_id =
+            key_id_for_preload_backend(&Key::Zk(config.consensus_config.known_key.clone()));
+        let consensus_key = Key::Zk(config.consensus_config.known_key.clone());
+        let mut missing = config.clone();
+        missing.kms_config.backend.keys.remove(&consensus_id);
+        missing
+            .kms_config
+            .backend
+            .keys
+            .insert("consensus-alias".into(), consensus_key.clone());
+        let error = build_run_config(missing, &deployment)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains(&consensus_id) && error.contains("missing"),
+            "{error}"
+        );
+        let mut mismatched = config.clone();
+        mismatched
+            .kms_config
+            .backend
+            .keys
+            .insert(consensus_id.clone(), Key::Zk(ZkKey::new(987u64.into())));
+        let error = build_run_config(mismatched, &deployment)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            error.contains(&consensus_id) && error.contains("does not match"),
+            "{error}"
+        );
+        let mut invalid = config.clone();
+        invalid
+            .consensus_config
+            .other_keys
+            .push(ZkKey::from_direct_secret(spending.nullifier_key()));
+        invalid.kms_config.backend.keys.remove(&direct_id);
+        assert!(build_run_config(invalid, &deployment).is_err());
+        let run = build_run_config(config, &deployment).unwrap();
+        assert_eq!(run.user.wallet.voucher_master_key_id, consensus_id);
+        assert_eq!(
+            run.user.kms.backend.keys.get(&consensus_id),
+            Some(&consensus_key)
+        );
+        assert!(run.user.wallet.known_keys.contains_key(&consensus_id));
+        assert_eq!(
+            run.user.kms.backend.keys.get(&spending_id),
+            Some(&spending_key)
+        );
+        assert_eq!(run.user.kms.backend.keys.get(&direct_id), Some(&direct_key));
+        assert_eq!(
+            run.user.wallet.known_keys.get(&spending_id),
+            Some(&spending.to_public_key())
+        );
+        assert_eq!(
+            run.user.wallet.known_keys.get("explicit-spending"),
+            Some(&alias.to_public_key())
+        );
+        assert!(!run.user.wallet.known_keys.contains_key(&direct_id));
+        assert!(!run.user.wallet.known_keys.contains_key("explicit-direct"));
+    }
 
     #[test]
     fn external_profile_override_takes_precedence() {

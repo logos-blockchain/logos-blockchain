@@ -66,6 +66,7 @@ where
     <Backend::Key as SecuredKey>::Signature: Send + 'static,
     <Backend::Key as SecuredKey>::PublicKey: Send,
     Backend::KeyOperations: Send,
+    Backend::MultiKeyOperations: Send,
     Backend::Settings: Clone + Send + Sync,
     Backend::Error: Debug + Send + 'static,
     RuntimeServiceId: AsServiceId<Self> + Display + Send,
@@ -153,6 +154,21 @@ where
                 operator,
                 reply_channel,
             } => Self::handle_execute(key_id, operator, reply_channel, backend).await,
+            KMSMessage::ExecuteMultiple {
+                key_ids,
+                operator,
+                reply_channel,
+            } => {
+                metrics::kms_execute_requests();
+                let result = backend.execute_multiple(&key_ids, operator).await;
+                if let Err(error) = &result {
+                    metrics::kms_execute_failures();
+                    error!(target: LOG_TARGET, "Failed to execute operator with key IDs {key_ids:?}: {error:?}");
+                }
+                if reply_channel.send(result).is_err() {
+                    debug!(target: LOG_TARGET, "Could not reply to the execute request channel");
+                }
+            }
         }
     }
 
@@ -264,14 +280,22 @@ where
 mod tests {
     use std::{
         collections::HashMap,
-        sync::{Mutex, mpsc},
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
         time::Duration,
     };
 
     use bytes::Bytes;
     use lb_key_management_system_keys::keys::{
-        Ed25519Key, Key, KeyOperators, PayloadEncoding, PublicKeyEncoding, SignatureEncoding,
+        Ed25519Key, Key, KeyMultiOperators, KeyOperators, PayloadEncoding, PublicKeyEncoding,
+        SignatureEncoding, ZkKey, ZkPublicKey, errors::KeyError,
+        secured_key::SecureMultiKeyOperator,
     };
+    use lb_zktransfer::test_utils::sample_unsigned_witness;
+    use overwatch::services::relay::OutboundRelay;
     use rand::rngs::OsRng;
 
     use super::*;
@@ -295,6 +319,7 @@ mod tests {
         type KeyId = KeyId;
         type Key = Key;
         type KeyOperations = KeyOperators;
+        type MultiKeyOperations = KeyMultiOperators;
         type Settings = (PreloadKMSBackendSettings, Arc<Mutex<mpsc::Receiver<()>>>);
         type Error = PreloadBackendError;
 
@@ -337,9 +362,173 @@ mod tests {
         async fn execute(&self, key_id: &KeyId, operator: KeyOperators) -> Result<(), Self::Error> {
             self.keys.execute(key_id, operator).await
         }
+
+        async fn execute_multiple(
+            &self,
+            key_ids: &[KeyId],
+            operator: KeyMultiOperators,
+        ) -> Result<(), Self::Error> {
+            self.keys.execute_multiple(key_ids, operator).await
+        }
     }
 
     type Service = KMSService<StalledSigningBackend, ()>;
+
+    #[derive(Clone, Copy, Debug)]
+    struct TestServiceId;
+
+    impl Display for TestServiceId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "test-kms")
+        }
+    }
+
+    type RealService = KMSService<PreloadKMSBackend, TestServiceId>;
+    impl AsServiceId<RealService> for TestServiceId {
+        const SERVICE_ID: Self = Self;
+    }
+
+    #[derive(Debug)]
+    struct ObserveKeys {
+        calls: Arc<AtomicUsize>,
+        result: oneshot::Sender<Vec<ZkPublicKey>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SecureMultiKeyOperator for ObserveKeys {
+        type Key = ZkKey;
+        type Error = KeyError;
+
+        fn validate_key_count(&self, count: usize) -> Result<(), Self::Error> {
+            if count == 2 {
+                Ok(())
+            } else {
+                Err(KeyError::UnsupportedKey(format!(
+                    "expected 2 keys, got {count}"
+                )))
+            }
+        }
+
+        async fn execute(self: Box<Self>, keys: &[&ZkKey]) -> Result<(), Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            drop(
+                self.result
+                    .send(keys.iter().map(|key| key.to_public_key()).collect()),
+            );
+            Ok(())
+        }
+    }
+
+    #[expect(clippy::too_many_lines, reason = "Test function.")]
+    #[tokio::test]
+    async fn multiple_key_execution_resolves_and_validates_before_the_service_operator_runs() {
+        use crate::api::KmsServiceApi;
+
+        let first = ZkKey::new(7u64.into());
+        let second = ZkKey::from_direct_secret(11u64.into());
+        let third = ZkKey::from_direct_secret(13u64.into());
+        let settings = PreloadKMSBackendSettings {
+            keys: HashMap::from([
+                ("first".to_owned(), Key::Zk(first.clone())),
+                ("second".to_owned(), Key::Zk(second.clone())),
+                ("third".to_owned(), Key::Zk(third.clone())),
+                (
+                    "other".to_owned(),
+                    Key::Ed25519(Ed25519Key::generate(&mut OsRng)),
+                ),
+            ]),
+        };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+        let api = KmsServiceApi::<RealService, TestServiceId>::new(OutboundRelay::new(sender));
+        let task = tokio::spawn(async move {
+            let mut backend = Arc::new(PreloadKMSBackend::new(settings));
+            while let Some(message) = receiver.recv().await {
+                RealService::handle_kms_message(message, &mut backend).await;
+            }
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        for (ids, expected) in [
+            (
+                vec!["first", "second"],
+                vec![first.to_public_key(), second.to_public_key()],
+            ),
+            (
+                vec!["second", "first"],
+                vec![second.to_public_key(), first.to_public_key()],
+            ),
+            (
+                vec!["first", "first"],
+                vec![first.to_public_key(), first.to_public_key()],
+            ),
+            (
+                vec!["second", "third"],
+                vec![second.to_public_key(), third.to_public_key()],
+            ),
+            (
+                vec!["second", "second"],
+                vec![second.to_public_key(), second.to_public_key()],
+            ),
+        ] {
+            let (result, received) = oneshot::channel();
+            api.execute_multiple(
+                ids.into_iter().map(str::to_owned).collect(),
+                KeyMultiOperators::Zk(Box::new(ObserveKeys {
+                    calls: Arc::clone(&calls),
+                    result,
+                })),
+            )
+            .await
+            .unwrap();
+            assert_eq!(received.await.unwrap(), expected);
+        }
+        for ids in [
+            vec!["first", "missing"],
+            vec!["first", "other"],
+            vec!["first"],
+            vec!["first", "first", "first"],
+            vec![],
+        ] {
+            let (result, received) = oneshot::channel();
+            assert!(
+                api.execute_multiple(
+                    ids.into_iter().map(str::to_owned).collect(),
+                    KeyMultiOperators::Zk(Box::new(ObserveKeys {
+                        calls: Arc::clone(&calls),
+                        result
+                    }))
+                )
+                .await
+                .is_err()
+            );
+            assert!(received.await.is_err());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+        let (payload, _) = sample_unsigned_witness();
+        assert!(
+            api.sign("second".into(), PayloadEncoding::Zk(payload.clone()))
+                .await
+                .is_err()
+        );
+        assert!(
+            api.sign_multiple(
+                vec!["first".into(), "second".into()],
+                PayloadEncoding::Zk(payload)
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            api.register("first".into(), Key::Zk(second.clone()))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            api.public_key("first".into()).await.unwrap(),
+            PublicKeyEncoding::Zk(first.to_public_key())
+        );
+        drop(api);
+        task.await.unwrap();
+    }
 
     #[tokio::test]
     async fn a_signature_in_flight_leaves_the_service_free() {

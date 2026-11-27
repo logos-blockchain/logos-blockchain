@@ -57,7 +57,8 @@ use lb_key_management_system_service::{
     backend::{KMSBackend, preload::PreloadKMSBackend},
     keys::{
         ED25519_PUBLIC_KEY_SIZE, Ed25519Key, Ed25519PublicKey, Ed25519Signature, Key, KeyOperators,
-        PayloadEncoding, SignatureEncoding, ZkKey, ZkPublicKey, secured_key::SecuredKey,
+        PayloadEncoding, PublicKeyEncoding, SignatureEncoding, ZkKey, ZkPublicKey,
+        secured_key::SecuredKey,
     },
     operators::zk::{nullifier::DeriveNullifier, voucher::UnsafeVoucherOperator},
 };
@@ -440,6 +441,7 @@ where
 {
     kms: KmsServiceApi<Kms, RuntimeServiceId>,
     permits: Arc<Semaphore>,
+    known_keys: HashMap<ZkPublicKey, KeyId>,
 }
 
 impl<Kms, RuntimeServiceId> Clone for TxSigner<Kms, RuntimeServiceId>
@@ -450,6 +452,7 @@ where
         Self {
             kms: self.kms.clone(),
             permits: Arc::clone(&self.permits),
+            known_keys: self.known_keys.clone(),
         }
     }
 }
@@ -462,6 +465,15 @@ where
         Self {
             kms,
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_SIGNINGS)),
+            known_keys: HashMap::new(),
+        }
+    }
+
+    fn with_known_keys(&self, known_keys: &HashMap<ZkPublicKey, KeyId>) -> Self {
+        Self {
+            kms: self.kms.clone(),
+            permits: Arc::clone(&self.permits),
+            known_keys: known_keys.clone(),
         }
     }
 }
@@ -1092,7 +1104,7 @@ where
                             job_reservations,
                             reservation_id,
                             handoff,
-                            signer,
+                            &signer.with_known_keys(state.wallet().known_keys()),
                             resp_tx,
                         ));
                     }
@@ -1160,7 +1172,7 @@ where
                             job_reservations,
                             reservation_id,
                             handoff,
-                            signer,
+                            &signer.with_known_keys(state.wallet().known_keys()),
                             resp_tx,
                         ));
                     }
@@ -1381,7 +1393,7 @@ where
                             tip,
                             spent,
                             owner,
-                            signer,
+                            &signer.with_known_keys(state.wallet().known_keys()),
                             resp_tx,
                         ));
                     }
@@ -1556,7 +1568,7 @@ where
         let signer = signer.clone();
         Box::pin(async move {
             let permit = signing_permit(&signer.permits).await;
-            let resp = Box::pin(Self::sign_tx(job, &signer.kms))
+            let resp = Box::pin(Self::sign_tx(job, &signer.kms, &signer.known_keys))
                 .await
                 .map(|signed_tx| TipResponse {
                     tip,
@@ -1585,6 +1597,7 @@ where
     async fn sign_tx(
         job: TxSigningRequest,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        known_keys: &HashMap<ZkPublicKey, KeyId>,
     ) -> Result<SignedOps<Preverified, StandardMode>, WalletServiceError> {
         let TxSigningRequest {
             ops,
@@ -1596,7 +1609,10 @@ where
 
         let mut zk_proofs = HashMap::new();
         for witness in witnesses {
-            zk_proofs.insert(witness.op_index, Self::prove_witness(witness, kms).await?);
+            zk_proofs.insert(
+                witness.op_index,
+                Self::prove_witness(witness, kms, known_keys).await?,
+            );
         }
 
         let mut op_proofs = OpProofs::empty();
@@ -1669,7 +1685,7 @@ where
             let proof = match witness {
                 Some(witness) => {
                     let permit = signing_permit(&signer.permits).await;
-                    let proof = Self::prove_witness(witness, &signer.kms).await;
+                    let proof = Self::prove_witness(witness, &signer.kms, &signer.known_keys).await;
                     drop(permit);
                     proof.map(|proof| Some(OpProof::ZkTransfer(proof)))
                 }
@@ -1745,13 +1761,18 @@ where
     async fn prove_witness(
         witness: OpWitness,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        known_keys: &HashMap<ZkPublicKey, KeyId>,
     ) -> Result<ZkTransferProof, WalletServiceError> {
-        // Use hex-encoded public key as key_id for now
         let key_ids = witness
             .signers
             .iter()
-            .map(|pk| hex::encode(lb_groth16::fr_to_bytes(pk.as_fr())))
-            .collect();
+            .map(|pk| {
+                known_keys
+                    .get(pk)
+                    .cloned()
+                    .ok_or(WalletServiceError::UnknownKey(*pk))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Pinned to keep the future off the stack: a KMS message can carry a
         // ZkTransfer witness.
@@ -1924,11 +1945,31 @@ where
         // Pinned to keep the futures off the stack: a KMS message can carry a
         // ZkTransfer witness.
         if let Err(error) = Box::pin(kms.register(key_id.clone(), Key::Zk(key))).await {
-            // The KMS refuses a key id it already holds: the key of this
-            // index, registered before.
-            Box::pin(kms.public_key(key_id.clone()))
+            // An existing identifier is reusable only when it is the same
+            // public key and still carries spending authority.
+            let existing = Box::pin(kms.public_key(key_id.clone()))
                 .await
                 .map_err(|_| WalletServiceError::KmsApi(error))?;
+            if existing != PublicKeyEncoding::Zk(pk) {
+                return Err(WalletServiceError::KmsApi(
+                    "Existing reward key has a different public key".into(),
+                ));
+            }
+            let (output_tx, output_rx) = oneshot::channel();
+            Box::pin(kms.execute(
+                key_id.clone(),
+                KeyOperators::Zk(Box::new(DeriveNullifier::new(
+                    NoteCommitment(Fr::from(0u64)),
+                    output_tx,
+                ))),
+            ))
+            .await
+            .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+            output_rx.await.map_err(|_| {
+                WalletServiceError::KmsApi(
+                    "KMS did not confirm reward-key spending authority".into(),
+                )
+            })?;
         }
         state.add_known_key(pk, key_id);
         Ok(pk)
@@ -2025,7 +2066,7 @@ where
         let signer = signer.clone();
         Box::pin(async move {
             let permit = signing_permit(&signer.permits).await;
-            let proof = Self::prove_witness(witness, &signer.kms).await;
+            let proof = Self::prove_witness(witness, &signer.kms, &signer.known_keys).await;
             drop(permit);
             let resp = proof.map(|proof| TipResponse {
                 tip,

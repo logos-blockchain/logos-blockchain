@@ -28,6 +28,7 @@ tracing                            = { workspace = true }
 [dev-dependencies]
 bytes                         = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
+lb-zktransfer                 = { features = ["test-utils"], workspace = true }
 num-bigint                    = { workspace = true }
 rand                          = { features = ["getrandom"], workspace = true }
 serde                         = { features = ["std"], workspace = true }

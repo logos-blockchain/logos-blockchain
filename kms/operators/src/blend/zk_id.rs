@@ -45,3 +45,22 @@ impl SecureKeyOperator for ZkIdOperator {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::secured_key::SecuredKey as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn direct_credential_supports_a_secured_public_derivation() {
+        let secret = Fr::from(7u64);
+        let (sender, receiver) = oneshot::channel();
+        ZkKey::from_direct_secret(secret)
+            .execute(ZkIdOperator::new(sender))
+            .await
+            .unwrap();
+        assert_eq!(receiver.await.unwrap(), kdf_public_key(&secret));
+    }
+}

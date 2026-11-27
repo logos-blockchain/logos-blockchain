@@ -103,7 +103,7 @@ impl AddKeyArgs {
     ) -> Self {
         let (ed25519_key, zk_key) = match key {
             Key::Ed25519(key) => (Some(key.clone().into_unsecured()), None),
-            Key::Zk(key) => (None, Some(key.clone().into_unsecured())),
+            Key::Zk(key) => (None, key.clone().into_unsecured()),
         };
 
         Self {

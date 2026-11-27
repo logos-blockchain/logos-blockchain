@@ -138,6 +138,7 @@ pub fn run_node_from_config(
     config: RunConfig,
     handle: Option<runtime::Handle>,
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+    config::check_wallet_spending_keys(&config.user).map_err(|error| error.to_string())?;
     // Read before the deployment settings are consumed piecewise below. The
     // chain ID is fixed by the deployment, so the API backend is handed it up
     // front rather than querying a service for a value that cannot change.

@@ -140,6 +140,29 @@ pub struct GeneralConsensusConfig {
     pub prolonged_bootstrap_period: Duration,
 }
 
+impl GeneralConsensusConfig {
+    /// Reject direct credentials in fields that explicitly require spending
+    /// keys.
+    pub fn validate_spending_keys(&self) -> Result<(), String> {
+        if !self.known_key.is_spending_key() {
+            return Err("consensus known_key must be a spending key".into());
+        }
+        if !self.funding_sk.is_spending_key() {
+            return Err("consensus funding_sk must be a spending key".into());
+        }
+        if let Some(index) = self
+            .other_keys
+            .iter()
+            .position(|key| !key.is_spending_key())
+        {
+            return Err(format!(
+                "consensus other_keys[{index}] must be a spending key"
+            ));
+        }
+        Ok(())
+    }
+}
+
 // The key of a genesis service note, with its secret key.
 #[derive(Clone, Debug)]
 pub struct ServiceNote {

@@ -626,7 +626,8 @@ mod tests {
                 .into_iter()
                 .next()
                 .expect("test config should include one node"),
-        );
+        )
+        .expect("generated spending keys should be valid");
 
         RunConfig { deployment, user }
     }
