@@ -688,3 +688,43 @@ fn partial_blend_backend_keeps_the_peering_degree_check_default() {
         Some(std::time::Duration::from_mins(1))
     );
 }
+
+#[test]
+fn keystore_wires_leadership_credentials_without_adding_a_spending_key() {
+    use lb_key_management_system_service::keys::{Key, ZkKey, secured_key::SecuredKey as _};
+    use lb_wallet_service::{LeadershipCredentials, LeadershipKeyIds, LeadershipPublicKeys};
+
+    let nf = ZkKey::from_direct_secret(7u64.into());
+    let stake = ZkKey::from_direct_secret(19u64.into());
+    let public = LeadershipPublicKeys {
+        nullifier_public_key: nf.as_public_key(),
+        staking_public_key: stake.as_public_key(),
+    };
+    let mut keystore = Keystore::default();
+    keystore.set("delegated-nf", Key::Zk(nf));
+    keystore.set("delegated-stake", Key::Zk(stake));
+    let (nf_id, _) = keystore.get("delegated-nf").unwrap();
+    let (stake_id, _) = keystore.get("delegated-stake").unwrap();
+    let config = keystore.config_values().unwrap();
+    let mapping = LeadershipCredentials {
+        keys: LeadershipKeyIds {
+            nullifier: nf_id.clone(),
+            staking: stake_id.clone(),
+        },
+        public,
+    };
+    let mut wallet = crate::config::wallet::serde::Config::with_required_values(
+        crate::config::wallet::serde::RequiredValues {
+            voucher_master_key_id: "voucher-master".into(),
+        },
+    );
+    wallet.leadership_keys.push(mapping.clone());
+    let encoded = serde_yaml::to_string(&wallet).unwrap();
+    let decoded: crate::config::wallet::serde::Config = serde_yaml::from_str(&encoded).unwrap();
+    assert_eq!(decoded.leadership_keys[0].keys, mapping.keys);
+    assert_eq!(decoded.leadership_keys[0].public, mapping.public);
+    for id in [nf_id, stake_id] {
+        assert!(config["wallet"]["known_keys"].get(&id).is_none());
+        assert!(config["kms"]["backend"]["keys"].get(&id).is_some());
+    }
+}

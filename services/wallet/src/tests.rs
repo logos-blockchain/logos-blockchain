@@ -1,6 +1,5 @@
 use core::num::NonZeroU32;
 use std::{
-    collections::HashSet,
     fmt::{self, Display, Formatter},
     time::Duration,
 };
@@ -45,6 +44,7 @@ use lb_ledger::{
 use lb_storage_service::api::requests::StorageMsg;
 use lb_time::era::{Era, EraEntriesAfterGenesis, EraTiming};
 use lb_utils::math::{NonNegativeRatio, PositiveRatio, ProperFraction};
+use lb_wallet::KnownNotes;
 use overwatch::services::{
     relay::{InboundRelay, OutboundRelay, Relay},
     state::{NoOperator, NoState},
@@ -56,6 +56,31 @@ use tokio::{
 };
 
 use super::*;
+
+pub fn state_from_genesis<'u>(
+    known_notes: KnownNotes,
+    reward_count: u64,
+    settings: &WalletServiceSettings,
+    genesis: HeaderId,
+    notes: &[Note],
+    service_notes: &[Note],
+    updater: &'u StateUpdater<Option<RecoveryState>>,
+) -> Result<ServiceState<'u>, WalletError> {
+    ServiceState::from_genesis(
+        RecoveredOpenings {
+            spending: known_notes,
+            leadership: KnownNotes::new_sync(),
+            reward_key_count: reward_count,
+        },
+        settings,
+        genesis,
+        notes,
+        service_notes,
+        [],
+        [],
+        updater,
+    )
+}
 
 #[test]
 fn op_proof_pairs_each_operation_with_its_proof_type() {
@@ -454,7 +479,7 @@ async fn identical_openings_survive_storage_and_lib_checkpoint_restore() {
         .unwrap();
     assert_eq!(restored_openings.size(), 2);
     let genesis = HeaderId::from([0; 32]);
-    let mut state = ServiceState::from_genesis(
+    let mut state = state_from_genesis(
         restored_openings.clone(),
         0,
         &settings,
@@ -480,12 +505,16 @@ async fn identical_openings_survive_storage_and_lib_checkpoint_restore() {
     state.advance_lib(block.id, 1);
     let bytes = receiver.borrow().clone().unwrap().to_bytes().unwrap();
     let mut recovered = RecoveryState::from_bytes(&bytes).unwrap();
-    let (lib, lib_state) = recovered.take_lib_wallet_state().unwrap();
+    let (lib, lib_state, leadership_state) = recovered.take_lib_wallet_state().unwrap();
     let restored = ServiceState::from_lib_wallet_state(
-        restored_openings,
-        0,
+        RecoveredOpenings {
+            spending: restored_openings,
+            leadership: KnownNotes::new_sync(),
+            reward_key_count: 0,
+        },
         lib,
         lib_state,
+        leadership_state,
         &settings,
         &updater,
     );
@@ -883,7 +912,7 @@ async fn assert_restored_notes_are_spendable(
     )
     .await
     .unwrap();
-    let from_genesis = ServiceState::from_genesis(
+    let from_genesis = state_from_genesis(
         storage.load_wallet_known_notes().await.unwrap(),
         0,
         settings,
@@ -976,6 +1005,10 @@ impl AsServiceId<TestKms> for TestRuntimeServiceId {
     const SERVICE_ID: Self = Self;
 }
 
+impl AsServiceId<TestWallet> for TestRuntimeServiceId {
+    const SERVICE_ID: Self = Self;
+}
+
 impl Display for TestRuntimeServiceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "TestRuntimeServiceId")
@@ -1064,11 +1097,195 @@ fn kms_api(key: ZkKey) -> KmsServiceApi<TestKms, TestRuntimeServiceId> {
                     keys.insert(key_id.clone(), key_type);
                     reply_channel.send(Ok((key_id, public_key))).unwrap();
                 }
+                KMSMessage::PublicKey {
+                    key_id,
+                    reply_channel,
+                } => {
+                    reply_channel
+                        .send(Ok(keys[&key_id].as_public_key()))
+                        .unwrap();
+                }
                 _ => panic!("unexpected KMS request"),
             }
         }
     });
     KmsServiceApi::new(OutboundRelay::new(sender))
+}
+
+fn configured_kms(keys: HashMap<KeyId, Key>) -> KmsServiceApi<TestKms, TestRuntimeServiceId> {
+    use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
+    let backend = KmsBackend::new(PreloadKMSBackendSettings { keys });
+    let (sender, mut receiver) = mpsc::channel(8);
+    tokio::spawn(async move {
+        while let Some(message) = receiver.recv().await {
+            match message {
+                KMSMessage::PublicKey {
+                    key_id,
+                    reply_channel,
+                } => {
+                    drop(reply_channel.send(backend.public_key(&key_id)));
+                }
+                KMSMessage::Execute {
+                    key_id,
+                    operator,
+                    reply_channel,
+                } => {
+                    drop(reply_channel.send(backend.execute(&key_id, operator).await));
+                }
+                _ => panic!("unexpected KMS request"),
+            }
+        }
+    });
+    KmsServiceApi::new(OutboundRelay::new(sender))
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Covers the configured and default credential cases"
+)]
+async fn explicit_leadership_credentials_are_validated_before_defaults() {
+    let spending = ZkKey::new(Fr::from(7u64));
+    let nf = ZkKey::from_direct_secret(spending.nullifier_key());
+    let stake = ZkKey::from_direct_secret(Fr::from(19u64));
+    let public = LeadershipPublicKeys {
+        nullifier_public_key: nf.to_public_key(),
+        staking_public_key: stake.to_public_key(),
+    };
+    let ids = LeadershipKeyIds {
+        nullifier: "nf".into(),
+        staking: "stake".into(),
+    };
+    let keys = HashMap::from([
+        (ids.nullifier.clone(), Key::Zk(nf.clone())),
+        (ids.staking.clone(), Key::Zk(stake.clone())),
+    ]);
+    for (configured, actual_keys) in [
+        (public, HashMap::new()),
+        (
+            public,
+            HashMap::from([
+                ("nf".into(), Key::Ed25519(Ed25519Key::from_bytes(&[7; 32]))),
+                ("stake".into(), Key::Zk(stake.clone())),
+            ]),
+        ),
+        (
+            LeadershipPublicKeys {
+                nullifier_public_key: stake.to_public_key(),
+                ..public
+            },
+            keys.clone(),
+        ),
+        (
+            LeadershipPublicKeys {
+                staking_public_key: nf.to_public_key(),
+                ..public
+            },
+            keys.clone(),
+        ),
+        (
+            LeadershipPublicKeys {
+                staking_public_key: ZkPublicKey::zero(),
+                ..public
+            },
+            keys.clone(),
+        ),
+    ] {
+        let mut settings = wallet_settings(spending.to_public_key());
+        settings.leadership_keys = vec![LeadershipCredentials {
+            keys: ids.clone(),
+            public: configured,
+        }];
+        assert!(matches!(
+            TestWallet::setup_leadership_credentials(&mut settings, &configured_kms(actual_keys))
+                .await,
+            Err(WalletServiceError::InvalidLeadershipCredential { .. })
+        ));
+        assert_eq!(settings.leadership_keys.len(), 1);
+    }
+    let mut duplicate = wallet_settings(spending.to_public_key());
+    duplicate.known_keys.clear();
+    duplicate.leadership_keys = vec![
+        LeadershipCredentials {
+            keys: ids.clone(),
+            public,
+        },
+        LeadershipCredentials {
+            keys: ids.clone(),
+            public,
+        },
+    ];
+    assert!(
+        TestWallet::setup_leadership_credentials(&mut duplicate, &configured_kms(keys.clone()))
+            .await
+            .is_err()
+    );
+    let mut valid = wallet_settings(spending.to_public_key());
+    valid.known_keys.clear();
+    valid.leadership_keys = vec![LeadershipCredentials { keys: ids, public }];
+    TestWallet::setup_leadership_credentials(&mut valid, &configured_kms(keys))
+        .await
+        .unwrap();
+    assert_eq!(valid.leadership_keys.len(), 1);
+    let program_nf = ZkKey::from_direct_secret(ZkKey::zero().nullifier_key());
+    assert_eq!(program_nf.to_public_key(), *PK0);
+    let mut program = wallet_settings(spending.to_public_key());
+    program.known_keys.clear();
+    program.leadership_keys = vec![LeadershipCredentials {
+        keys: LeadershipKeyIds {
+            nullifier: "pk0".into(),
+            staking: "stake".into(),
+        },
+        public: LeadershipPublicKeys {
+            nullifier_public_key: *PK0,
+            staking_public_key: stake.to_public_key(),
+        },
+    }];
+    let program_keys = HashMap::from([
+        ("pk0".into(), Key::Zk(program_nf)),
+        ("stake".into(), Key::Zk(stake)),
+    ]);
+    TestWallet::setup_leadership_credentials(&mut program, &configured_kms(program_keys))
+        .await
+        .unwrap();
+    let mut invalid_same = wallet_settings(spending.to_public_key());
+    invalid_same.leadership_keys = vec![LeadershipCredentials {
+        keys: LeadershipKeyIds {
+            nullifier: "missing".into(),
+            staking: "missing".into(),
+        },
+        public: LeadershipPublicKeys {
+            nullifier_public_key: spending.to_public_key(),
+            staking_public_key: spending.to_public_key(),
+        },
+    }];
+    assert!(
+        TestWallet::setup_leadership_credentials(
+            &mut invalid_same,
+            &configured_kms(HashMap::from([("owner".into(), Key::Zk(spending.clone()))]))
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(invalid_same.leadership_keys.len(), 1);
+    let mut defaults = wallet_settings(spending.to_public_key());
+    defaults.known_keys = HashMap::from([
+        ("owner".into(), spending.to_public_key()),
+        ("alias".into(), spending.to_public_key()),
+    ]);
+    let aliases = HashMap::from([
+        ("owner".into(), Key::Zk(spending.clone())),
+        ("alias".into(), Key::Zk(spending)),
+    ]);
+    TestWallet::setup_leadership_credentials(&mut defaults, &configured_kms(aliases))
+        .await
+        .unwrap();
+    assert_eq!(defaults.leadership_keys.len(), 1);
+    let mut unavailable = wallet_settings(public.nullifier_public_key);
+    TestWallet::setup_leadership_credentials(&mut unavailable, &configured_kms(HashMap::new()))
+        .await
+        .unwrap();
+    assert!(unavailable.leadership_keys.is_empty());
 }
 
 // Shared note, wallet and era data.
@@ -1084,6 +1301,7 @@ pub fn known_note(key: &ZkKey, value: Value, nonce: u64) -> KnownNote {
 
 fn wallet_settings(owner: ZkPublicKey) -> WalletServiceSettings {
     WalletServiceSettings {
+        leadership_keys: Vec::new(),
         known_keys: HashMap::from([("owner".into(), owner)]),
         voucher_master_key_id: "voucher-master".into(),
         recovery_data: RecoveryData::default(),
@@ -1100,7 +1318,7 @@ fn wallet_state<'u>(
 ) -> ServiceState<'u> {
     let known_notes = notes.iter().map(|note| (note.id(), *note)).collect();
     let genesis_notes = notes.iter().map(|note| note.note).collect::<Vec<_>>();
-    ServiceState::from_genesis(
+    state_from_genesis(
         known_notes,
         0,
         settings,
@@ -1170,7 +1388,7 @@ fn wallet_for_backfill<'u>(
     known_note: KnownNote,
     updater: &'u StateUpdater<Option<RecoveryState>>,
 ) -> ServiceState<'u> {
-    ServiceState::from_genesis(
+    state_from_genesis(
         KnownNotes::from_iter([(known_note.id(), known_note)]),
         0,
         settings,
@@ -1929,7 +2147,7 @@ async fn failed_channel_step_proof_releases_its_set_aware_reservation() {
     let owner = key.to_public_key();
     let settings = wallet_settings(owner);
     let updater = updater();
-    let mut state = ServiceState::from_genesis(
+    let mut state = state_from_genesis(
         [
             (ledger_note.id(), ledger_note),
             (channel_note.id(), channel_note),
@@ -2430,4 +2648,879 @@ fn unsignable_job() -> TxSigningRequest {
 /// The note funding a signing's transaction.
 fn funded_notes() -> Vec<((NoteSetIndex, NoteNullifier), [u8; 32])> {
     vec![((NoteSetIndex::Ledger, NoteNullifier(Fr::ONE)), [1; 32])]
+}
+
+#[tokio::test]
+async fn delegated_sdp_service_note_builds_a_verifiable_leadership_proof() {
+    assert_leadership_proof(
+        Fr::from(7u64),
+        Fr::from(0u64),
+        NoteSetIndex::Sdp,
+        false,
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn program_leadership_uses_nf_sk0_without_spending_authority() {
+    use lb_key_management_system_service::keys::kdf_public_key;
+    let nf_sk0 = ZkKey::zero().nullifier_key();
+    assert_eq!(kdf_public_key(&nf_sk0), *PK0);
+    assert_leadership_proof(
+        nf_sk0,
+        Fr::from(42u64),
+        NoteSetIndex::Channel(ChannelId::from([8; 32])),
+        false,
+        false,
+    )
+    .await;
+}
+
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "proof verification includes wallet and KMS"
+)]
+async fn assert_leadership_proof(
+    nf_sk: Fr,
+    program: Fr,
+    note_set: NoteSetIndex,
+    collision: bool,
+    same_secret: bool,
+) {
+    use lb_core::{
+        mantle::note_set::NoteSets,
+        proofs::leader_proof::{LeaderPublic, pol_wallet_inputs},
+    };
+    use lb_key_management_system_service::{
+        backend::preload::PreloadKMSBackendSettings,
+        keys::{KeyMultiOperators, kdf_public_key},
+        operators::zk::leader::{BuildPrivateInputsWithLeaderKey, CheckLotteryWinning},
+    };
+    let staking_sk = if same_secret { nf_sk } else { Fr::from(19u64) };
+    let public = LeadershipPublicKeys {
+        nullifier_public_key: kdf_public_key(&nf_sk),
+        staking_public_key: kdf_public_key(&staking_sk),
+    };
+    let note = if note_set == NoteSetIndex::Sdp {
+        let mut declaration = SDPDeclareOp::sample();
+        declaration.note_pk = public.nullifier_public_key;
+        declaration.note_stake_pk = public.staking_public_key;
+        declaration.amount = 1000;
+        declaration.service_note()
+    } else {
+        Note {
+            stake_public_key: public.staking_public_key,
+            program,
+            ..Note::new(1000, Fr::from(11u64), public.nullifier_public_key)
+        }
+    };
+    let key_id = LeadershipKeyIds {
+        nullifier: "leadership-nf".into(),
+        staking: if same_secret {
+            "leadership-nf"
+        } else {
+            "leadership-stake"
+        }
+        .into(),
+    };
+    let backend = KmsBackend::new(PreloadKMSBackendSettings {
+        keys: HashMap::from([
+            (
+                key_id.nullifier.clone(),
+                Key::Zk(ZkKey::from_direct_secret(nf_sk)),
+            ),
+            (
+                key_id.staking.clone(),
+                Key::Zk(ZkKey::from_direct_secret(staking_sk)),
+            ),
+        ]),
+    });
+    let (sender, mut receiver) = mpsc::channel(8);
+    tokio::spawn(async move {
+        while let Some(message) = receiver.recv().await {
+            match message {
+                KMSMessage::Execute {
+                    key_id,
+                    operator,
+                    reply_channel,
+                } => {
+                    drop(reply_channel.send(backend.execute(&key_id, operator).await));
+                }
+                KMSMessage::ExecuteMultiple {
+                    key_ids,
+                    operator,
+                    reply_channel,
+                } => {
+                    drop(reply_channel.send(backend.execute_multiple(&key_ids, operator).await));
+                }
+                _ => panic!("unexpected KMS request"),
+            }
+        }
+    });
+    let kms = KmsServiceApi::<TestKms, TestRuntimeServiceId>::new(OutboundRelay::new(sender));
+    let known = TestWallet::leadership_known_note(&kms, key_id.clone(), note, note_set)
+        .await
+        .unwrap();
+    let mut known_notes = vec![known];
+    if collision {
+        known_notes.push(
+            TestWallet::leadership_known_note(&kms, key_id.clone(), note, NoteSetIndex::Ledger)
+                .await
+                .unwrap(),
+        );
+    }
+    let genesis = HeaderId::from([0; 32]);
+    let (updates, _receiver) = watch::channel(None);
+    let updater = StateUpdater::new(Arc::new(updates));
+    let mut settings = wallet_settings(public.nullifier_public_key);
+    settings.known_keys.clear();
+    settings.leadership_keys.push(LeadershipCredentials {
+        keys: key_id.clone(),
+        public,
+    });
+    let ledger_notes = if note_set == NoteSetIndex::Ledger || collision {
+        vec![note]
+    } else {
+        vec![]
+    };
+    let filler = Note::new(5, Fr::from(99u64), public.nullifier_public_key);
+    let service_notes = if note_set == NoteSetIndex::Sdp && collision {
+        vec![filler, note]
+    } else if note_set == NoteSetIndex::Sdp {
+        vec![note]
+    } else {
+        vec![]
+    };
+    let mut state = ServiceState::from_genesis(
+        RecoveredOpenings::default(),
+        &settings,
+        genesis,
+        &ledger_notes,
+        &service_notes,
+        [],
+        known_notes,
+        &updater,
+    )
+    .unwrap();
+    let tip = if collision {
+        assert_eq!(
+            select_leader_notes(
+                state.leadership_keys(),
+                state
+                    .leadership_wallet()
+                    .wallet_state_at(genesis)
+                    .unwrap()
+                    .aged_notes()
+                    .unwrap()
+            )
+            .len(),
+            2
+        );
+        let block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: Epoch::new(0),
+            updates: vec![NoteSetUpdate {
+                note_set: NoteSetIndex::Ledger,
+                nullifiers: vec![known.nullifier],
+                commitments: vec![],
+            }],
+            revealed: vec![],
+            withdrawals: vec![],
+        };
+        state.apply_block(&block).unwrap();
+        block.id
+    } else if let NoteSetIndex::Channel(_) = note_set {
+        let block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: Epoch::new(0),
+            updates: vec![NoteSetUpdate {
+                note_set,
+                nullifiers: vec![],
+                commitments: vec![note.commitment()],
+            }],
+            revealed: vec![],
+            withdrawals: vec![],
+        };
+        state.apply_block(&block).unwrap();
+        block.id
+    } else {
+        genesis
+    };
+    assert!(
+        state
+            .wallet()
+            .balance(tip, note.public_key)
+            .unwrap()
+            .is_none()
+    );
+    let aged = state
+        .leadership_wallet()
+        .wallet_state_at(tip)
+        .unwrap()
+        .aged_notes_at(if matches!(note_set, NoteSetIndex::Channel(_)) {
+            Epoch::new(2)
+        } else {
+            Epoch::new(0)
+        })
+        .unwrap();
+    let selected = select_leader_notes(state.leadership_keys(), aged);
+    assert_eq!(selected.len(), 1);
+
+    let sets = NoteSets::new();
+    let sets = match note_set {
+        NoteSetIndex::Ledger => {
+            let ledger = sets
+                .ledger()
+                .clone()
+                .execute_adding(&[note.commitment()])
+                .unwrap();
+            sets.update_ledger(ledger)
+        }
+        NoteSetIndex::Sdp => {
+            let sdp = sets
+                .sdp()
+                .clone()
+                .execute_adding(
+                    &service_notes
+                        .iter()
+                        .map(Note::commitment)
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            let sets = sets.update_sdp(sdp);
+            if collision {
+                let ledger = sets
+                    .ledger()
+                    .clone()
+                    .execute_adding(&[note.commitment()])
+                    .unwrap();
+                sets.update_ledger(ledger)
+            } else {
+                sets
+            }
+        }
+        NoteSetIndex::Channel(channel_id) => {
+            let sets = sets.with_channel(channel_id);
+            let channel = sets
+                .channel(&channel_id)
+                .unwrap()
+                .clone()
+                .execute_adding(&[note.commitment()])
+                .unwrap();
+            sets.update_channel(channel)
+        }
+    }
+    .end_block(1, 1024)
+    .unwrap();
+    if collision {
+        let candidates = select_leader_notes(
+            state.leadership_keys(),
+            state
+                .leadership_wallet()
+                .wallet_state_at(genesis)
+                .unwrap()
+                .aged_notes()
+                .unwrap(),
+        );
+        for candidate in &candidates {
+            assert!(
+                pol_wallet_inputs(
+                    &note,
+                    candidate.note.note_set,
+                    &candidate.note.nullifier,
+                    &candidate.aged_path,
+                    &sets,
+                    &sets
+                )
+                .is_ok()
+            );
+        }
+        assert!(
+            pol_wallet_inputs(
+                &note,
+                NoteSetIndex::Ledger,
+                &known.nullifier,
+                &candidates
+                    .iter()
+                    .find(|candidate| candidate.note.note_set == NoteSetIndex::Sdp)
+                    .unwrap()
+                    .aged_path,
+                &sets,
+                &sets
+            )
+            .is_err()
+        );
+    }
+    let latest = if collision {
+        let ledger = sets
+            .ledger()
+            .clone()
+            .execute_spending(&[known.nullifier])
+            .unwrap();
+        sets.clone()
+            .update_ledger(ledger)
+            .end_block(2, 1024)
+            .unwrap()
+    } else {
+        sets.clone()
+    };
+    let inputs = LeaderPublic::new(
+        sets.eligible_root(),
+        latest.eligible_root(),
+        Fr::from(3u64),
+        5,
+        -Fr::from(1u64),
+        Fr::from(0u64),
+    );
+    let (tx, rx) = oneshot::channel();
+    Box::pin(kms.execute_multiple(
+        vec![key_id.nullifier.clone(), key_id.staking.clone()],
+        KeyMultiOperators::Zk(Box::new(CheckLotteryWinning::new(tx, note, inputs))),
+    ))
+    .await
+    .unwrap();
+    assert!(rx.await.unwrap());
+    let mut wallet = pol_wallet_inputs(
+        &note,
+        note_set,
+        &known.nullifier,
+        &selected[0].aged_path,
+        &sets,
+        &latest,
+    )
+    .unwrap();
+    wallet.reward_public_key = *public.nullifier_public_key.as_fr();
+    wallet.reward_nonce = Fr::from(23u64);
+    let (tx, rx) = oneshot::channel();
+    Box::pin(kms.execute_multiple(
+        vec![key_id.nullifier, key_id.staking],
+        KeyMultiOperators::Zk(Box::new(BuildPrivateInputsWithLeaderKey::new(
+            tx, inputs, wallet, 0, note,
+        ))),
+    ))
+    .await
+    .unwrap();
+    let private = rx.await.unwrap();
+    assert_eq!(private.input().wallet.nullifier_key, nf_sk);
+    assert_eq!(private.input().wallet.staking_secret_key, staking_sk);
+    let proof = Groth16LeaderProof::prove(private).unwrap();
+    assert!(proof.verify(&inputs, Fr::from(0u64)));
+}
+
+#[tokio::test]
+async fn identical_memberships_survive_one_set_spending_and_prove_leadership() {
+    assert_leadership_proof(
+        Fr::from(7u64),
+        Fr::from(0u64),
+        NoteSetIndex::Sdp,
+        true,
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn leadership_only_wallet_and_kms_build_a_verifiable_proof_with_distinct_keys() {
+    assert_leadership_proof(
+        Fr::from(7u64),
+        Fr::from(0u64),
+        NoteSetIndex::Ledger,
+        false,
+        false,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn delegated_same_secret_and_repeated_identifier_produce_a_valid_proof() {
+    assert_leadership_proof(
+        Fr::from(7u64),
+        Fr::from(0u64),
+        NoteSetIndex::Ledger,
+        false,
+        true,
+    )
+    .await;
+}
+
+mod startup_integration_tests {
+    use std::{future::pending, sync::Mutex};
+
+    use lb_key_management_system_service::backend::preload::PreloadKMSBackendSettings;
+    use lb_storage_service::{StorageService, rocksdb::RocksBackendSettings};
+    use lb_time_service::{
+        TimeServiceEraSettings, TimeServiceSettings, backends::SystemTimeBackend,
+    };
+    use overwatch::{
+        overwatch::{OverwatchRunner, Shutdown},
+        services::status::{ServiceStatus, WaitForError, WaitPolicy},
+    };
+
+    use super::*;
+
+    static CHAIN_READY: Mutex<Option<oneshot::Receiver<()>>> = Mutex::new(None);
+
+    type Chain = StartupChain<RuntimeServiceId>;
+    type Kms = KMSService<KmsBackend, RuntimeServiceId>;
+    type Clock = TimeService<SystemTimeBackend, RuntimeServiceId>;
+    type Storage = StorageService<RuntimeServiceId>;
+    type Wallet = WalletService<Kms, Chain, TestTx, SystemTimeBackend, RuntimeServiceId>;
+
+    #[overwatch::derive_services(panic_policy = Shutdown)]
+    struct Services {
+        storage: Storage,
+        kms: Kms,
+        clock: Clock,
+        chain: Chain,
+        wallet: Wallet,
+    }
+
+    struct StartupChain<Id> {
+        resources: OpaqueServiceResourcesHandle<Self, Id>,
+    }
+
+    impl<Id> ServiceData for StartupChain<Id> {
+        type Settings = ();
+        type State = NoState<()>;
+        type StateOperator = NoOperator<Self::State>;
+        type Message = ConsensusMsg<TestTx>;
+    }
+
+    #[async_trait::async_trait]
+    impl<Id: Send> ServiceCore<Id> for StartupChain<Id> {
+        fn init(
+            resources: OpaqueServiceResourcesHandle<Self, Id>,
+            _: Self::State,
+        ) -> Result<Self, DynError> {
+            Ok(Self { resources })
+        }
+
+        async fn run(self) -> Result<(), DynError> {
+            let ready = CHAIN_READY.lock().unwrap().take().unwrap();
+            ready.await?;
+            self.resources.status_updater.notify_ready();
+            pending().await
+        }
+    }
+
+    #[test]
+    fn invalid_explicit_key_stops_real_wallet_startup_before_readiness() {
+        let (ready, gate) = oneshot::channel();
+        *CHAIN_READY.lock().unwrap() = Some(gate);
+        let key = ZkKey::new(Fr::from(7u64));
+        let public = LeadershipPublicKeys {
+            nullifier_public_key: key.to_public_key(),
+            staking_public_key: key.to_public_key(),
+        };
+        let mut wallet = wallet_settings(key.to_public_key());
+        wallet.leadership_keys.push(LeadershipCredentials {
+            keys: LeadershipKeyIds {
+                nullifier: "missing".into(),
+                staking: "missing".into(),
+            },
+            public,
+        });
+        let timing = EraTiming {
+            slot_duration: Duration::from_secs(1),
+            epoch_length: NonZero::new(100).unwrap(),
+        };
+        let schedule = EraSchedule::new(
+            OffsetDateTime::now_utc(),
+            timing,
+            EraEntriesAfterGenesis::empty(),
+        )
+        .unwrap()
+        .map(|era| TimeServiceEraSettings {
+            timing: *era.parameters,
+            transition_slots: 0,
+        });
+        let db_path = std::env::temp_dir().join(format!(
+            "wallet-startup-{}-{}",
+            std::process::id(),
+            rand::random::<u64>()
+        ));
+        let settings = ServicesServiceSettings {
+            storage: RocksBackendSettings {
+                db_path,
+                read_only: false,
+                column_family: None,
+            },
+            kms: PreloadKMSBackendSettings {
+                keys: HashMap::from([("owner".into(), Key::Zk(key))]),
+            },
+            clock: TimeServiceSettings {
+                backend: (),
+                era_schedule: schedule,
+            },
+            chain: (),
+            wallet,
+        };
+        let app = OverwatchRunner::<Services>::run(settings, None).unwrap();
+        app.runtime().handle().block_on(async {
+            let mut status = app.handle().status_watcher::<Wallet>().await.unwrap();
+            app.handle().start_all_services().await.unwrap();
+            status
+                .wait_with_policy(
+                    ServiceStatus::Starting,
+                    Some(Duration::from_secs(20)),
+                    WaitPolicy::RestartFriendly,
+                )
+                .await
+                .unwrap();
+            ready.send(()).unwrap();
+            assert!(matches!(
+                status
+                    .wait_with_policy(
+                        ServiceStatus::Ready,
+                        Some(Duration::from_secs(20)),
+                        WaitPolicy::FailFast
+                    )
+                    .await,
+                Err(WaitForError::ServiceStopped { .. })
+            ));
+            assert_eq!(status.current(), ServiceStatus::Stopped);
+        });
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The dispatcher fixture checks both durable success and failure"
+)]
+async fn imported_note_batch_waits_for_each_durable_opening() {
+    use crate::api::WalletApi;
+
+    for fail_second in [false, true] {
+        let key = ZkKey::new(Fr::from(7u64));
+        let input = known_note(&key, 100, 1);
+        let settings = wallet_settings(input.note.public_key);
+        let (checkpoint_sender, mut checkpoint_updates) = watch::channel(None);
+        let updater = StateUpdater::new(Arc::new(checkpoint_sender));
+        let mut state = wallet_state(&settings, &[input], &updater);
+        let (storage, mut writes) = storage_api();
+        let signer = TestSigner::new(kms_api(key));
+        let cryptarchia = chain_api();
+        let signings = FuturesUnordered::new();
+        let era = settings.era_schedule.get(Era::genesis()).unwrap();
+        let (sender, mut messages) = mpsc::channel(4);
+        let api = WalletApi::<TestWallet, TestRuntimeServiceId>::new(OutboundRelay::new(sender));
+        let notes = [
+            Note::new(20, Fr::from(8u64), input.note.public_key),
+            Note::new(30, Fr::from(9u64), input.note.public_key),
+        ];
+        let mut operation = Box::pin(async {
+            let mut imported = Vec::new();
+            for note in notes {
+                imported.push(api.import_note(note, NoteSetIndex::Ledger).await?);
+            }
+            Ok::<_, api::WalletApiError>(imported)
+        });
+        let mut records = HashMap::new();
+        for (index, note) in notes.into_iter().enumerate() {
+            assert!(poll!(operation.as_mut()).is_pending());
+            let message = messages.recv().await.unwrap();
+            assert!(
+                matches!(&message, WalletMsg::ImportNote { note: requested, .. } if *requested == note)
+            );
+            let mut handle = Box::pin(TestWallet::handle_wallet_message(
+                message,
+                &mut state,
+                &settings.voucher_master_key_id,
+                &storage,
+                &cryptarchia,
+                &signer,
+                &signings,
+                &settings.era_schedule,
+                era.parameters,
+            ));
+            let message = tokio::select! {
+                () = &mut handle => panic!("returned before opening save"),
+                message = writes.recv() => message.unwrap(),
+            };
+            let StorageMsg::BulkStoreConfirmed {
+                items,
+                reply_channel,
+            } = message
+            else {
+                panic!("expected an atomic opening save");
+            };
+            assert!(poll!(operation.as_mut()).is_pending());
+            if index == 1 && fail_second {
+                reply_channel.send(Err("write failed".into())).unwrap();
+            } else {
+                records.extend(items);
+                reply_channel.send(Ok(())).unwrap();
+            }
+            handle.await;
+            if index == 0 {
+                // The service can dispatch another API request and process LIB
+                // work while the caller's batch still has an
+                // outstanding note.
+                let mut addresses = Box::pin(api.get_known_addresses());
+                assert!(poll!(addresses.as_mut()).is_pending());
+                let message = messages.recv().await.unwrap();
+                assert!(matches!(message, WalletMsg::GetKnownAddresses { .. }));
+                TestWallet::handle_wallet_message(
+                    message,
+                    &mut state,
+                    &settings.voucher_master_key_id,
+                    &storage,
+                    &cryptarchia,
+                    &signer,
+                    &signings,
+                    &settings.era_schedule,
+                    era.parameters,
+                )
+                .await;
+                assert!(addresses.await.unwrap().contains(&input.note.public_key));
+                checkpoint_updates.borrow_and_update();
+                state.advance_lib(HeaderId::from([0; 32]), 1);
+                assert!(checkpoint_updates.has_changed().unwrap());
+                assert!(poll!(operation.as_mut()).is_pending());
+            }
+        }
+        let result = operation.await;
+        let restored = storage_with_records(records)
+            .load_wallet_known_notes()
+            .await
+            .unwrap();
+        if fail_second {
+            assert!(result.is_err());
+        } else {
+            let imported = result.unwrap();
+            assert_eq!(
+                imported.iter().map(|known| known.note).collect::<Vec<_>>(),
+                notes
+            );
+        }
+        for (index, note) in notes.into_iter().enumerate() {
+            let id = NoteId::new(NoteSetIndex::Ledger, note.commitment());
+            let should_exist = index == 0 || !fail_second;
+            assert_eq!(restored.contains_key(&id), should_exist);
+            assert_eq!(state.wallet().known_notes().contains_key(&id), should_exist);
+        }
+    }
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Covers imports, discovery and spending separation"
+)]
+async fn importing_a_leadership_only_opening_does_not_add_spending_authority() {
+    use lb_key_management_system_service::keys::kdf_public_key;
+    let nf_sk = Fr::from(7u64);
+    let staking_sk = Fr::from(19u64);
+    let public = LeadershipPublicKeys {
+        nullifier_public_key: kdf_public_key(&nf_sk),
+        staking_public_key: kdf_public_key(&staking_sk),
+    };
+    let note = Note {
+        stake_public_key: public.staking_public_key,
+        ..Note::new(12, Fr::from(11u64), public.nullifier_public_key)
+    };
+    let id = LeadershipKeyIds {
+        nullifier: "leader-nf".into(),
+        staking: "leader-stake".into(),
+    };
+    let kms = configured_kms(HashMap::from([
+        (
+            id.nullifier.clone(),
+            Key::Zk(ZkKey::from_direct_secret(nf_sk)),
+        ),
+        (
+            id.staking.clone(),
+            Key::Zk(ZkKey::from_direct_secret(staking_sk)),
+        ),
+    ]));
+    let mut settings = wallet_settings(public.nullifier_public_key);
+    settings.known_keys.clear();
+    settings
+        .leadership_keys
+        .push(LeadershipCredentials { keys: id, public });
+    let genesis = HeaderId::from([0; 32]);
+    let (updates, _receiver) = watch::channel(None);
+    let updater = StateUpdater::new(Arc::new(updates));
+    let mut state = ServiceState::from_genesis(
+        RecoveredOpenings::default(),
+        &settings,
+        genesis,
+        &[],
+        &[],
+        [],
+        [],
+        &updater,
+    )
+    .unwrap();
+    let (storage, mut writes) = storage_api();
+    let (failed, _) = complete_opening_write(
+        TestWallet::import_note(note, NoteSetIndex::Ledger, &mut state, &storage, &kms),
+        &mut writes,
+        Err("write failed".into()),
+    )
+    .await;
+    assert!(matches!(failed, Err(WalletServiceError::PersistedState(_))));
+    assert!(state.leadership_wallet().known_notes().is_empty());
+    tokio::spawn(async move {
+        while let Some(request) = writes.recv().await {
+            if let StorageMsg::BulkStoreConfirmed { reply_channel, .. } = request {
+                drop(reply_channel.send(Ok(())));
+            } else {
+                panic!("unexpected storage request");
+            }
+        }
+    });
+    TestWallet::import_note(note, NoteSetIndex::Ledger, &mut state, &storage, &kms)
+        .await
+        .unwrap();
+    TestWallet::import_note(note, NoteSetIndex::Sdp, &mut state, &storage, &kms)
+        .await
+        .unwrap();
+    let channel = NoteSetIndex::Channel(ChannelId::from([8; 32]));
+    TestWallet::import_note(note, channel, &mut state, &storage, &kms)
+        .await
+        .unwrap();
+    // Registration has no chain-service dependency, including for repeat
+    // requests. The next block discovers all three memberships normally.
+    TestWallet::import_note(note, channel, &mut state, &storage, &kms)
+        .await
+        .unwrap();
+    assert!(
+        !state
+            .wallet()
+            .known_notes()
+            .contains_key(&NoteId::new(NoteSetIndex::Ledger, note.commitment()))
+    );
+    assert!(
+        state
+            .leadership_wallet()
+            .known_notes()
+            .contains_key(&NoteId::new(NoteSetIndex::Ledger, note.commitment()))
+    );
+    let child = WalletBlock {
+        id: HeaderId::from([1; 32]),
+        parent: genesis,
+        epoch: Epoch::new(0),
+        updates: [NoteSetIndex::Ledger, NoteSetIndex::Sdp, channel]
+            .into_iter()
+            .map(|note_set| NoteSetUpdate {
+                note_set,
+                nullifiers: vec![],
+                commitments: vec![note.commitment()],
+            })
+            .collect(),
+        revealed: vec![(NoteSetIndex::Channel(ChannelId::from([8; 32])), note)],
+        withdrawals: vec![],
+    };
+    TestWallet::add_revealed_notes(&child, &mut state, &storage, &kms)
+        .await
+        .unwrap();
+    state.apply_block(&child).unwrap();
+    assert!(
+        state
+            .wallet()
+            .balance(child.id, note.public_key)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        state
+            .leadership_wallet()
+            .wallet_state_at(child.id)
+            .unwrap()
+            .aged_notes_at(Epoch::new(2))
+            .unwrap()
+            .len(),
+        3
+    );
+    let revealed = Note {
+        nonce: Fr::from(99u64),
+        ..note
+    };
+    let next = WalletBlock {
+        id: HeaderId::from([2; 32]),
+        parent: child.id,
+        epoch: Epoch::new(0),
+        updates: vec![NoteSetUpdate {
+            note_set: NoteSetIndex::Sdp,
+            nullifiers: vec![],
+            commitments: vec![revealed.commitment()],
+        }],
+        revealed: vec![(NoteSetIndex::Sdp, revealed)],
+        withdrawals: vec![],
+    };
+    TestWallet::add_revealed_notes(&next, &mut state, &storage, &kms)
+        .await
+        .unwrap();
+    state.apply_block(&next).unwrap();
+    assert!(
+        state
+            .leadership_wallet()
+            .known_notes()
+            .contains_key(&NoteId::new(NoteSetIndex::Sdp, revealed.commitment()))
+    );
+    assert!(
+        !state
+            .wallet()
+            .known_notes()
+            .contains_key(&NoteId::new(NoteSetIndex::Sdp, revealed.commitment()))
+    );
+}
+
+#[test]
+fn leader_selection_excludes_notes_without_a_staking_key() {
+    let owner = ZkPublicKey::new(Fr::from(2u64));
+    let staked = Note::new(25, Fr::from(1u64), owner);
+    let unstaked = Note {
+        nonce: Fr::from(2u64),
+        stake_public_key: ZkPublicKey::zero(),
+        ..staked
+    };
+    let known_notes = [staked, unstaked]
+        .into_iter()
+        .zip([1u64, 2])
+        .map(|(note, nullifier)| {
+            (
+                NoteId::new(NoteSetIndex::Ledger, note.commitment()),
+                KnownNote {
+                    note,
+                    note_set: NoteSetIndex::Ledger,
+                    nullifier: NoteNullifier(Fr::from(nullifier)),
+                },
+            )
+        })
+        .collect();
+    let genesis = HeaderId::from([0; 32]);
+    let wallet = Wallet::from_genesis(
+        [(owner, "owner".into())],
+        known_notes,
+        genesis,
+        &[staked, unstaked],
+        &[],
+    )
+    .unwrap();
+    let aged = wallet
+        .wallet_state_at(genesis)
+        .unwrap()
+        .aged_notes()
+        .unwrap();
+    let keys = HashMap::from([(
+        LeadershipPublicKeys {
+            nullifier_public_key: owner,
+            staking_public_key: owner,
+        },
+        LeadershipKeyIds {
+            nullifier: "owner".into(),
+            staking: "owner".into(),
+        },
+    )]);
+    let selected = select_leader_notes(&keys, aged);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].note.note, staked);
+    assert_eq!(wallet.balance(genesis, owner).unwrap().unwrap().balance, 50);
 }

@@ -1,21 +1,30 @@
-use std::{num::NonZero, path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    num::NonZero,
+    path::PathBuf,
+    time::Duration,
+};
 
 use lb_config::consensus::UNITS_PER_LGO;
-use lb_groth16::fr_to_bytes;
+use lb_groth16::{Fr, fr_to_bytes};
 use lb_http_api_common::bodies::wallet::{
     balance::WalletBalanceResponseBody, transfer_funds::WalletTransferFundsRequestBody,
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_node::config::{RunConfig, deployment::era::ruleset::v1::cryptarchia::EpochConfig};
+use lb_key_management_system_service::keys::{Key, ZkKey, ZkPublicKey};
+use lb_node::config::{
+    RunConfig,
+    deployment::{DeploymentSettings, EraDeclarations, era::ruleset::v1::cryptarchia::EpochConfig},
+};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
 use lb_utils::math::NonNegativeRatio;
+use lb_wallet_service::{LeadershipCredentials, LeadershipKeyIds, LeadershipPublicKeys};
 use logos_blockchain_tests::{
     common::manual_cluster::{
         LocalManualClusterHarnessBase, ManualNodeLayout, api_url,
-        start_local_manual_cluster_with_layout,
+        start_local_manual_cluster_with_layout, wait_for_height,
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
@@ -23,6 +32,153 @@ use testing_framework_core::scenario::{DynError, StartedNode};
 use tokio::time::{sleep, timeout};
 
 const NODE_COUNT: usize = 1;
+
+/// No spending credential can account for the delegated note's leadership.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The fixture proves delegated leadership across restart"
+)]
+async fn delegated_leadership_survives_node_restart_without_spending_authority() {
+    let nf = ZkKey::from_direct_secret(Fr::from(7u64));
+    let staking = ZkKey::from_direct_secret(Fr::from(19u64));
+    let public = LeadershipPublicKeys {
+        nullifier_public_key: nf.to_public_key(),
+        staking_public_key: staking.to_public_key(),
+    };
+    let reward = ZkKey::new(Fr::from(500u64));
+    let reward_pk = reward.to_public_key();
+    let (wallet_config, _, _) = leader_funding_wallet_config();
+    let (base, nodes) = start_local_manual_cluster_with_layout(
+        "delegated-leader",
+        "mantle-leader",
+        DeploymentBuilder::new(
+            TfTopologyConfig::with_node_numbers(1)
+                .with_allow_multiple_genesis_tokens(true)
+                .with_test_context(Some("delegated-leader".into())),
+        )
+        .with_wallet_config(wallet_config),
+        1,
+        ManualNodeLayout::SelectNodeSeed(0),
+        move |config| {
+            use lb_core::block::genesis::GenesisBlockBuilder;
+
+            let mut config = test_config(config, reward_pk);
+            config
+                .deployment
+                .update_genesis_era_parameters(|parameters| {
+                    // Keep reward notes immature for the duration of this test.
+                    parameters
+                        .cryptarchia
+                        .epoch_config
+                        .epoch_stake_distribution_stabilization = 200.try_into().unwrap();
+                })?;
+            let old = config.deployment.genesis_block().genesis_tx();
+            let mut allocations = old.distribution().iter().copied().collect::<Vec<_>>();
+            let largest = allocations
+                .iter_mut()
+                .max_by_key(|allocation| allocation.value)
+                .unwrap();
+            let delegated_stake = (largest.value / 10) * 9;
+            largest.value -= delegated_stake;
+            let mut declarations = old
+                .sdp_declarations()
+                .map(|entry| entry.operation().clone())
+                .collect::<Vec<_>>();
+            let declaration = declarations
+                .first_mut()
+                .expect("one genesis SDP declaration");
+            declaration.note_pk = public.nullifier_public_key;
+            declaration.note_stake_pk = public.staking_public_key;
+            declaration.amount += delegated_stake;
+            let genesis = GenesisBlockBuilder::new()
+                .try_add_notes(allocations)?
+                .set_inscription(old.inscription().operation().clone())
+                .add_declarations(declarations)?
+                .build()?;
+            let eras = config
+                .deployment
+                .era_schedule()
+                .iter()
+                .map(|era| (era.first_epoch, era.parameters.ruleset.clone()))
+                .collect::<BTreeMap<_, _>>();
+            config.deployment =
+                DeploymentSettings::new(&EraDeclarations::try_from(eras)?, genesis)?;
+            assert!(config.user.kms.backend.keys.values().all(|key| match key {
+                Key::Zk(key) if key.is_spending_key() =>
+                    key.to_public_key() != public.nullifier_public_key,
+                _ => true,
+            }));
+            config
+                .user
+                .kms
+                .backend
+                .keys
+                .insert("delegated-nf".into(), Key::Zk(nf.clone()));
+            config
+                .user
+                .kms
+                .backend
+                .keys
+                .insert("delegated-stake".into(), Key::Zk(staking.clone()));
+            config
+                .user
+                .kms
+                .backend
+                .keys
+                .insert("reward-only".into(), Key::Zk(reward.clone()));
+            config.user.wallet.known_keys = HashMap::from([("reward-only".into(), reward_pk)]);
+            config.user.pow.auto_claim.targets.clear();
+            config.user.wallet.leadership_keys = vec![LeadershipCredentials {
+                keys: LeadershipKeyIds {
+                    nullifier: "delegated-nf".into(),
+                    staking: "delegated-stake".into(),
+                },
+                public,
+            }];
+            config.user.sdp.wallet.funding_pk = reward_pk;
+            Ok::<_, DynError>(config)
+        },
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
+    )
+    .await;
+    let node = &nodes[0];
+    wait_for_height(&node.client, 2, Duration::from_mins(3))
+        .await
+        .expect("delegated note should produce blocks");
+    let aged = node.client.leader_aged_notes(None).await.unwrap();
+    assert_eq!(aged.notes.len(), 1);
+    assert_eq!(aged.notes[0].public_key, public.nullifier_public_key);
+    assert_eq!(
+        aged.notes[0].note_set,
+        lb_core::mantle::note_set::NoteSetIndex::Sdp
+    );
+    let address = hex::encode(fr_to_bytes(public.nullifier_public_key.as_fr()));
+    let response = reqwest::get(api_url(&node.client, &format!("wallet/{address}/balance")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    let height = node
+        .client
+        .consensus_info()
+        .await
+        .unwrap()
+        .cryptarchia_info
+        .height;
+    base.cluster().restart_node(&node.name).await.unwrap();
+    base.cluster().wait_node_ready(&node.name).await.unwrap();
+    let client = base.cluster().node_client(&node.name).unwrap();
+    wait_for_height(&client, height + 2, Duration::from_mins(3))
+        .await
+        .expect("delegated leadership should resume after restart");
+    let aged = client.leader_aged_notes(None).await.unwrap();
+    assert_eq!(aged.notes.len(), 1);
+    assert_eq!(aged.notes[0].public_key, public.nullifier_public_key);
+    let response = reqwest::get(api_url(&client, &format!("wallet/{address}/balance")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+}
 
 /// The leader reward is a note of each block, whose key the header hides; the
 /// leader records it under its funding key and its wallet adopts it, also

@@ -266,6 +266,129 @@ mod tests {
 
     const EPOCH_SLOTS: u64 = 100;
 
+    #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The test exercises the KMS-to-Blend proof path"
+    )]
+    async fn independent_credentials_generate_and_verify_leadership_quota() {
+        use lb_blend::{
+            message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
+            proofs::quota::{
+                Quota,
+                inputs::prove::{
+                    PublicInputs,
+                    public::{CoreInputs, LeaderInputs, PowInputs},
+                },
+            },
+            provers::provers::{
+                ProofsGeneratorSettings,
+                leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
+            },
+        };
+        use lb_core::{
+            mantle::{
+                note_set::{CommitmentMmr, NoteSetIndex, NoteSets},
+                notes::derive_note_nullifier,
+            },
+            proofs::leader_proof::{LeaderPublic, pol_wallet_inputs},
+        };
+        use lb_key_management_system_service::{
+            backend::{
+                KMSBackend as _,
+                preload::{PreloadKMSBackend, PreloadKMSBackendSettings},
+            },
+            keys::{Key, KeyMultiOperators, ZkKey, kdf_public_key},
+            operators::zk::leader::BuildPrivateInputsWithLeaderKey,
+        };
+
+        let nf = Fr::from(7u64);
+        let stake = Fr::from(19u64);
+        let note = Note {
+            stake_public_key: kdf_public_key(&stake),
+            ..Note::new(1000, Fr::from(11u64), kdf_public_key(&nf))
+        };
+        let (_, path) = CommitmentMmr::new()
+            .push_with_paths(note.commitment(), &mut [])
+            .unwrap();
+        let sets = NoteSets::new();
+        let ledger = sets
+            .ledger()
+            .clone()
+            .execute_adding(&[note.commitment()])
+            .unwrap();
+        let sets = sets.update_ledger(ledger).end_block(1, 1024).unwrap();
+        let nullifier = derive_note_nullifier(&note.commitment(), &nf);
+        let wallet =
+            pol_wallet_inputs(&note, NoteSetIndex::Ledger, &nullifier, &path, &sets, &sets)
+                .unwrap();
+        let public = LeaderPublic::new(
+            sets.eligible_root(),
+            sets.eligible_root(),
+            Fr::from(3u64),
+            0,
+            -Fr::from(1u64),
+            Fr::ZERO,
+        );
+        let backend = PreloadKMSBackend::new(PreloadKMSBackendSettings {
+            keys: [
+                ("nf".into(), Key::Zk(ZkKey::from_direct_secret(nf))),
+                ("stake".into(), Key::Zk(ZkKey::from_direct_secret(stake))),
+            ]
+            .into(),
+        });
+        let (tx, rx) = oneshot::channel();
+        backend
+            .execute_multiple(
+                &["nf".into(), "stake".into()],
+                KeyMultiOperators::Zk(Box::new(BuildPrivateInputsWithLeaderKey::new(
+                    tx, public, wallet, 0, note,
+                ))),
+            )
+            .await
+            .unwrap();
+        let private = rx.await.unwrap();
+        let epoch_inputs = PoQVerificationInputsMinusSigningKey {
+            core: CoreInputs {
+                zk_root: Fr::from(1u64),
+                quota: Quota::ONE,
+            },
+            leader: LeaderInputs {
+                pol_eligible_aged: public.aged_root,
+                pol_epoch_nonce: public.epoch_nonce,
+                message_quota: Quota::ONE,
+                lottery_0: public.lottery_0,
+                lottery_1: public.lottery_1,
+                pol_window_first_slot: 0,
+                pol_window_last_slot: 0,
+            },
+            pow: PowInputs::disabled(),
+        };
+        let mut generator = RealLeaderProofsGenerator::new(
+            ProofsGeneratorSettings {
+                local_node_index: None,
+                membership_size: 1,
+                public_inputs: epoch_inputs,
+                encapsulation_layers: 1.try_into().unwrap(),
+                epoch: Epoch::new(0),
+                pow_mining_pool: Arc::new(rayon::ThreadPoolBuilder::new().build().unwrap()),
+            },
+            Box::pin(stream::iter([leadership_quota_inputs(&private)])),
+        );
+        let proof = generator.get_next_proof().await.unwrap();
+        let verify_inputs = PublicInputs {
+            signing_key: proof.ephemeral_signing_key.public_key().into_inner(),
+            core: epoch_inputs.core,
+            leader: epoch_inputs.leader,
+            pow: epoch_inputs.pow,
+        };
+        proof
+            .proof_of_quota
+            .into_inner()
+            .verify(&verify_inputs)
+            .unwrap();
+    }
+
     /// The chain leader's handoff of an epoch made of `slots`.
     fn handoff(
         slots: impl Stream<Item = WinningSlotFuture> + Send + Unpin + 'static,

@@ -14,11 +14,12 @@ version     = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-lb-core     = { features = ["test-utils"], workspace = true }
-lb-faucet   = { workspace = true }
-lb-groth16  = { workspace = true }
-lb-mmr      = { workspace = true }
-serial_test = { workspace = true }
+lb-core           = { features = ["test-utils"], workspace = true }
+lb-faucet         = { workspace = true }
+lb-groth16        = { workspace = true }
+lb-mmr            = { workspace = true }
+lb-wallet-service = { workspace = true }
+serial_test       = { workspace = true }
 
 [dependencies]
 async-trait                      = { workspace = true }

@@ -142,6 +142,9 @@ storage:
 kms:
   backend:
     keys:
+      # Delegated credentials can be supplied independently, for example:
+      # delegated-nf: !Zk { direct: <32-byte hex nf_sk> }
+      # delegated-stake: !Zk { direct: <32-byte hex staking_sk> }
       625099cbe028cd9eef5777118fb09da02392c26e9efb301ab852c1681fa53b1d: !Zk 1a66f6ab42521b1ac82784e2e2d3abd2fb49e5e3312a2b5fc2ef9d3ecf365c16
       1364046c5ecd9d38825c2c5f1496b53822a819da7fb11e9c3eb8e9563cc92a0b: !Zk b45e4886f04f676b9c014efb6b928ea7ed560ab19f3d2b5d0ba0a1d1e0946627
       aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0: !Ed25519 72ca8bacc83363ed2fc9ec8e79361c5389c872d3e2952de439fcf9721b1f498a
@@ -150,6 +153,16 @@ kms:
       bb03240553c9f1572c98f99ddda9a9f9d3a2c8e5637ccab72bb679d2e5d7ef09: !Zk b0c674717f055cb39643adffd53447415569346021f47818af78c86812d36b13
       dc4aec617a8889e651c88997f2c4ba7e606cc553434a526f73109d26aa9d69ac: !Ed25519 e01039077e592ce1c454c5e8ffe2f571f6fad6106ff0e1895c9a403c126ba80f
 wallet:
+  # To track notes for delegated KMS entries, associate both identifiers and public keys:
+  # leadership_keys:
+  #   - keys:
+  #       nullifier: delegated-nf
+  #       staking: delegated-stake
+  #     public:
+  #       nullifier_public_key: <32-byte hex KDF(nf_sk)>
+  #       staking_public_key: <32-byte hex KDF(staking_sk)>
+  # Program notes use zkhash(NF_KDF_V1, 0) as nullifier_key and PK0 as
+  # nullifier_public_key. These entries grant leadership, not spending.
   known_keys:
     1364046c5ecd9d38825c2c5f1496b53822a819da7fb11e9c3eb8e9563cc92a0b: 1364046c5ecd9d38825c2c5f1496b53822a819da7fb11e9c3eb8e9563cc92a0b
     c552888bf83ed3a9c4d7c49f58f572733222e073df718024fa64a27b3b51541b: c552888bf83ed3a9c4d7c49f58f572733222e073df718024fa64a27b3b51541b

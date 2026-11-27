@@ -12,27 +12,46 @@ use overwatch::DynError;
 use super::StorageApi;
 
 const OPENINGS: &[u8] = b"wallet/openings/";
+const LEADERSHIP_OPENINGS: &[u8] = b"wallet/leadership_openings/";
 const REWARD_KEY_COUNT: &[u8] = b"wallet/reward_key_count";
 
-fn opening_key(id: NoteId) -> Result<Bytes, DynError> {
-    let mut key = Vec::with_capacity(OPENINGS.len() + 32);
-    key.extend_from_slice(OPENINGS);
+fn opening_key(prefix: &[u8], id: NoteId) -> Result<Bytes, DynError> {
+    let mut key = Vec::with_capacity(prefix.len() + 32);
+    key.extend_from_slice(prefix);
     key.extend_from_slice(&id.note_set.to_bytes()?);
     key.extend_from_slice(&fr_to_bytes(&id.commitment.0));
     Ok(key.into())
 }
 
 impl<Tx> StorageApi<Tx> {
+    /// Atomically stores spending and leadership openings in separate
+    /// namespaces.
+    pub async fn store_wallet_openings(
+        &self,
+        spending: &[KnownNote],
+        leadership: &[KnownNote],
+    ) -> Result<(), DynError> {
+        let items = spending
+            .iter()
+            .map(|note| (OPENINGS, note))
+            .chain(leadership.iter().map(|note| (LEADERSHIP_OPENINGS, note)))
+            .map(|(prefix, note)| Ok((opening_key(prefix, note.id())?, note.to_bytes()?)))
+            .collect::<Result<HashMap<_, _>, DynError>>()?;
+        if !items.is_empty() {
+            self.bulk_store_confirmed(items).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn load_wallet_leadership_notes(&self) -> Result<KnownNotes, DynError> {
+        let notes = self
+            .load_prefix::<KnownNote>(Bytes::from_static(LEADERSHIP_OPENINGS))
+            .await?;
+        Ok(notes.into_iter().map(|note| (note.id(), note)).collect())
+    }
     /// Saves every opening in one atomic write, returning the database result.
     pub async fn store_wallet_known_notes(&self, notes: &[KnownNote]) -> Result<(), DynError> {
-        if notes.is_empty() {
-            return Ok(());
-        }
-        let items = notes
-            .iter()
-            .map(|note| Ok((opening_key(note.id())?, note.to_bytes()?)))
-            .collect::<Result<HashMap<_, _>, DynError>>()?;
-        self.bulk_store_confirmed(items).await
+        self.store_wallet_openings(notes, &[]).await
     }
 
     pub async fn load_wallet_known_notes(&self) -> Result<KnownNotes, DynError> {
@@ -126,8 +145,12 @@ mod tests {
         let (storage, worker) = connect(read_only);
         let notes = [known_note(1), known_note(2)];
 
-        assert!(storage.store_wallet_known_notes(&notes).await.is_err());
+        assert!(storage.store_wallet_openings(&notes, &notes).await.is_err());
         assert_eq!(storage.load_wallet_known_notes().await.unwrap().size(), 0);
+        assert_eq!(
+            storage.load_wallet_leadership_notes().await.unwrap().size(),
+            0
+        );
         drop(storage);
         worker.await.unwrap();
     }
@@ -140,7 +163,7 @@ mod tests {
         storage
             .bulk_store_confirmed(HashMap::from([
                 (
-                    opening_key(note.id()).unwrap(),
+                    opening_key(OPENINGS, note.id()).unwrap(),
                     Bytes::from_static(b"invalid opening"),
                 ),
                 (

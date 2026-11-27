@@ -2226,7 +2226,7 @@ mod tests {
         transaction::{OpWitness, WitnessContext, op_witnesses},
     };
     use lb_wallet_service::{
-        TipResponse, WalletMsg, WalletServiceSettings,
+        SignedTransaction, TipResponse, WalletMsg, WalletServiceSettings,
         api::{WalletApi, WalletServiceData},
     };
     use lb_zktransfer::ZkTransferVerifierInput;
@@ -2930,6 +2930,77 @@ mod tests {
             witnesses[0].witness.tx_commitment_root(),
             extended.frontier_root()
         );
+    }
+
+    #[tokio::test]
+    async fn reward_and_change_preparation_registers_without_requesting_history() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let service = tokio::spawn(async move {
+            let mut registrations = 0;
+            let mut signed = false;
+            while let Some(mut msg) = receiver.recv().await {
+                match &mut msg {
+                    WalletMsg::ImportNote { .. } => assert!(msg.wallet_state_tip().is_none()),
+                    WalletMsg::SpendRoot { .. } | WalletMsg::SignTx { .. } => (),
+                    other => panic!("claim preparation must not request recovery: {other:?}"),
+                }
+                match msg {
+                    WalletMsg::ImportNote {
+                        note,
+                        note_set,
+                        resp_tx,
+                    } => {
+                        registrations += 1;
+                        assert_eq!(note_set, NoteSetIndex::Ledger);
+                        assert_eq!(signed, registrations > 1);
+                        drop(resp_tx.send(Ok(known_note(note))));
+                        if registrations == 2 {
+                            return registrations;
+                        }
+                    }
+                    WalletMsg::SpendRoot { resp_tx, .. } => {
+                        drop(resp_tx.send(Ok(TipResponse {
+                            tip: HeaderId::from([0; 32]),
+                            response: Fr::from(1u64),
+                        })));
+                    }
+                    WalletMsg::SignTx {
+                        tx_builder,
+                        resp_tx,
+                        ..
+                    } => {
+                        assert_eq!(registrations, 1);
+                        signed = true;
+                        let tx = SignedOps::from_ops_with_sample_proofs(
+                            tx_builder.build(FORK_DIGEST).unwrap(),
+                        )
+                        .into_preverified_trusted();
+                        drop(resp_tx.send(Ok(TipResponse {
+                            tip: HeaderId::from([0; 32]),
+                            response: SignedTransaction {
+                                transaction: tx,
+                                reservation_id: None,
+                            },
+                        })));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            panic!("both reward and change registrations must complete");
+        });
+        let api = WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(sender));
+        let signed = sign_reward_claims(
+            &api,
+            reward_key(0).to_public_key(),
+            HeaderId::from([0; 32]),
+            REWARD,
+            GasPrices::new(1, 1),
+            GAS_PROFILE,
+            &[ticket()],
+        )
+        .await;
+        assert!(signed.is_ok());
+        assert_eq!(service.await.unwrap(), 2);
     }
 
     #[test]
