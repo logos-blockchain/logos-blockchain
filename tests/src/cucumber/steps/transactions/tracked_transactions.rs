@@ -255,7 +255,7 @@ async fn transaction_is_in_chain(
 /// Builds a transaction that fails stateless validation: a `TransferOp` with no
 /// inputs.
 pub fn create_stateless_invalid_transaction(
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
 ) -> SignedOps<Unverified, StandardMode> {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([output_note]));
@@ -266,7 +266,7 @@ pub fn create_stateless_invalid_transaction(
 /// Builds a transaction that passes stateless validation but is invalid against
 /// ledger state: its input note id does not correspond to any real UTXO.
 fn create_stateful_invalid_transaction(
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
 ) -> SignedOps<Unverified, StandardMode> {
     let nonexistent_input = NoteId(Fr::from(0xDEAD_BEEFu64));
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
@@ -280,7 +280,7 @@ fn create_stateful_invalid_transaction(
 
 fn build_signed_transfer(
     transfer_op: TransferOp,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
 ) -> SignedOps<Unverified, StandardMode> {
     let mantle_tx = Ops::new(fork_digest, [Op::Transfer(transfer_op)]);
 

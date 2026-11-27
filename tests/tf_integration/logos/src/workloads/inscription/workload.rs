@@ -365,7 +365,7 @@ fn channel_id_from_signing_key(signing_key: &Ed25519Key) -> ChannelId {
 
 fn build_inscription_transaction(
     channel: &mut ChannelState,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
     payload_bytes: usize,
 ) -> Result<(SignedOps<Preverified, StandardMode>, MsgId, TxHash), DynError> {
     let op = InscriptionOp {
