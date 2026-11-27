@@ -113,7 +113,10 @@ Feature: Mempool lifecycle
     And node "NODE_B1" is at height 2 in 240 seconds
     # Each block appends its leader's reward note, so the forks share no root
     # but the genesis one: the shared transaction is proven against it.
-    And I prepare transfer transaction "TX_SHARED" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B" proven at the genesis block
+    # Pricing at genesis provides sufficient fee headroom for both forks,
+    # as unequal numbers of empty blocks can reduce execution gas prices
+    # more on one fork than the other.
+    And I prepare transfer transaction "TX_SHARED" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B" proven and priced at the genesis block
     And I submit prepared transaction "TX_SHARED" to nodes:
       | node_name |
       | NODE_A1   |

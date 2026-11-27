@@ -26,7 +26,7 @@ use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
-use crate::{KeyId, WalletServiceError, WalletServiceSettings};
+use crate::{KeyId, ReservationHandoff, ReservationJob, WalletServiceError, WalletServiceSettings};
 
 pub type Wallet = lb_wallet::Wallet<KeyId>;
 
@@ -42,24 +42,291 @@ pub type Wallet = lb_wallet::Wallet<KeyId>;
 /// having no reservation at all.
 #[derive(Debug, Default)]
 struct PendingNotes {
-    notes: HashMap<(NoteSetIndex, NoteNullifier), u64>,
+    notes: HashMap<(NoteSetIndex, NoteNullifier), Reservation>,
+    groups: HashMap<[u8; 32], HashSet<(NoteSetIndex, NoteNullifier)>>,
+}
+
+#[derive(Clone, Debug)]
+struct Reservation {
+    owner: [u8; 32],
+    age: u64,
+    funded: bool,
+    active_jobs: usize,
+    delivered: bool,
+    // A queued response remains provisional until its API caller receives it
+    // or drops the handoff. Each job keeps its own marker.
+    handoffs: Vec<ReservationHandoff>,
+}
+
+impl Reservation {
+    fn has_delivery(&self) -> bool {
+        self.delivered || self.handoffs.iter().any(|handoff| !handoff.cancelled())
+    }
+
+    fn reconcile_handoffs(&mut self) {
+        self.handoffs.retain(|handoff| {
+            if handoff.completed() {
+                self.delivered = true;
+                false
+            } else {
+                !handoff.cancelled()
+            }
+        });
+    }
 }
 
 impl PendingNotes {
-    fn reserve(&mut self, nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>) {
-        for (note_set, nullifier) in nullifiers {
+    fn validate_claims(
+        &self,
+        builder: &MantleTxBuilder,
+        for_funding: bool,
+    ) -> Result<(), WalletError> {
+        let inputs = builder.reservation_inputs().collect::<HashSet<_>>();
+        let claims = builder.reservation_ids().collect::<HashSet<_>>();
+        for owner in &claims {
+            let Some(group) = self.groups.get(owner) else {
+                return Err(WalletError::InputReserved);
+            };
+            if !group.iter().all(|input| {
+                self.notes
+                    .get(input)
+                    .is_some_and(|entry| entry.owner == *owner)
+            }) {
+                return Err(WalletError::InputReserved);
+            }
+            let mut found = false;
+            for (input, reservation) in &self.notes {
+                if reservation.owner == *owner {
+                    found = true;
+                    if !inputs.contains(input)
+                        || (for_funding
+                            && (reservation.funded
+                                || reservation.active_jobs > 0
+                                || reservation.has_delivery()))
+                    {
+                        return Err(WalletError::InputReserved);
+                    }
+                }
+            }
+            if !found {
+                return Err(WalletError::InputReserved);
+            }
+        }
+        if inputs.iter().any(|input| {
+            self.notes
+                .get(input)
+                .is_some_and(|entry| !claims.contains(&entry.owner))
+        }) {
+            return Err(WalletError::InputReserved);
+        }
+        Ok(())
+    }
+
+    fn transfer(
+        &mut self,
+        builder: &MantleTxBuilder,
+        new_owner: [u8; 32],
+        funded: bool,
+    ) -> Result<(), WalletError> {
+        self.validate_claims(builder, true)?;
+        if self.notes.values().any(|entry| entry.owner == new_owner) {
+            return Err(WalletError::InputReserved);
+        }
+        let inputs = builder.reservation_inputs().collect::<HashSet<_>>();
+        for owner in builder.reservation_ids() {
+            self.groups.remove(&owner);
+        }
+        for input in inputs.iter().copied() {
+            self.notes
+                .entry(input)
+                .and_modify(|entry| {
+                    entry.owner = new_owner;
+                    entry.funded = funded;
+                    if funded {
+                        entry.age = 0;
+                    }
+                    // A funded builder remains usable after a failed signing
+                    // or proving attempt. Its owner must explicitly abandon it.
+                    entry.delivered = funded;
+                    entry.handoffs.clear();
+                })
+                .or_insert(Reservation {
+                    owner: new_owner,
+                    age: 0,
+                    funded,
+                    active_jobs: 0,
+                    delivered: funded,
+                    handoffs: Vec::new(),
+                });
+        }
+        if !inputs.is_empty() {
+            self.groups.insert(new_owner, inputs);
+        }
+        Ok(())
+    }
+
+    #[expect(
+        clippy::needless_collect,
+        reason = "Each input is counted once per asynchronous job"
+    )]
+    fn begin_job(
+        &mut self,
+        builder: &MantleTxBuilder,
+        new_owner: [u8; 32],
+    ) -> Result<ReservationJob, WalletError> {
+        self.validate_claims(builder, false)?;
+        if self.notes.values().any(|entry| entry.owner == new_owner) {
+            return Err(WalletError::InputReserved);
+        }
+        let mut job = Vec::new();
+        let mut acquired = HashSet::new();
+        for input in builder.reservation_inputs().collect::<HashSet<_>>() {
+            if !self.notes.contains_key(&input) {
+                acquired.insert(input);
+            }
+            let entry = self.notes.entry(input).or_insert(Reservation {
+                owner: new_owner,
+                age: 0,
+                funded: true,
+                active_jobs: 0,
+                delivered: false,
+                handoffs: Vec::new(),
+            });
+            entry.reconcile_handoffs();
+            entry.active_jobs += 1;
+            job.push((input, entry.owner));
+        }
+        if !acquired.is_empty() {
+            self.groups.insert(new_owner, acquired);
+        }
+        Ok(job)
+    }
+
+    fn finish_job(&mut self, job: ReservationJob, delivered: bool) {
+        for (input, owner) in job {
+            let Some(entry) = self
+                .notes
+                .get_mut(&input)
+                .filter(|entry| entry.owner == owner && entry.active_jobs > 0)
+            else {
+                continue;
+            };
+            entry.active_jobs -= 1;
+            entry.reconcile_handoffs();
+            entry.delivered |= delivered;
+            if entry.active_jobs == 0 && !entry.has_delivery() {
+                self.notes.remove(&input);
+            }
+        }
+        self.forget_empty_groups();
+    }
+
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "The completion transfers its handoff marker into reservation tracking"
+    )]
+    fn finish_handoff(&mut self, job: ReservationJob, enqueued: bool, handoff: ReservationHandoff) {
+        if !enqueued {
+            if handoff.cancelled() {
+                self.cancel_job_before_dispatch(job, handoff.owner);
+            } else {
+                self.finish_job(job, false);
+            }
+            return;
+        }
+        for (input, owner) in job {
+            let Some(entry) = self
+                .notes
+                .get_mut(&input)
+                .filter(|entry| entry.owner == owner && entry.active_jobs > 0)
+            else {
+                continue;
+            };
+            entry.active_jobs -= 1;
+            entry.reconcile_handoffs();
+            if !handoff.cancelled() {
+                entry.handoffs.push(handoff.clone());
+            } else if owner == handoff.owner && entry.active_jobs == 0 && !entry.has_delivery() {
+                self.notes.remove(&input);
+            }
+        }
+        self.forget_empty_groups();
+    }
+
+    fn cancel_job_before_dispatch(&mut self, job: ReservationJob, new_owner: [u8; 32]) {
+        for (input, owner) in job {
+            let Some(entry) = self
+                .notes
+                .get_mut(&input)
+                .filter(|entry| entry.owner == owner && entry.active_jobs > 0)
+            else {
+                continue;
+            };
+            entry.active_jobs -= 1;
+            if owner == new_owner && entry.active_jobs == 0 {
+                self.notes.remove(&input);
+            }
+        }
+        self.forget_empty_groups();
+    }
+    fn reserve(
+        &mut self,
+        nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>,
+        owner: [u8; 32],
+    ) -> Result<(), WalletError> {
+        let inputs = nullifiers.into_iter().collect::<HashSet<_>>();
+        if inputs.iter().any(|input| self.notes.contains_key(input)) {
+            return Err(WalletError::InputReserved);
+        }
+        if self.groups.contains_key(&owner) {
+            return Err(WalletError::InputReserved);
+        }
+        for (note_set, nullifier) in inputs.iter().copied() {
             debug!(
                 target: wallet::SERVICE,
                 ?nullifier,
                 "Reserved pending note"
             );
-            self.notes.insert((note_set, nullifier), 0);
+            self.notes.insert(
+                (note_set, nullifier),
+                Reservation {
+                    owner,
+                    age: 0,
+                    funded: false,
+                    active_jobs: 0,
+                    delivered: false,
+                    handoffs: Vec::new(),
+                },
+            );
         }
+        if !inputs.is_empty() {
+            self.groups.insert(owner, inputs);
+        }
+        Ok(())
     }
 
-    fn release(&mut self, nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>) {
+    fn release(
+        &mut self,
+        nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>,
+        owner: [u8; 32],
+    ) {
         for (note_set, nullifier) in nullifiers {
-            if self.notes.remove(&(note_set, nullifier)).is_some() {
+            let input = (note_set, nullifier);
+            let Some(entry) = self
+                .notes
+                .get_mut(&input)
+                .filter(|entry| entry.owner == owner)
+            else {
+                continue;
+            };
+            if entry.active_jobs > 0 {
+                // An explicit release abandons earlier results. A later
+                // successful completion still keeps the input
+                // reserved for that operation.
+                entry.delivered = false;
+                entry.handoffs.clear();
+            } else {
+                self.notes.remove(&input);
                 debug!(
                     target: wallet::SERVICE,
                     ?nullifier,
@@ -67,6 +334,12 @@ impl PendingNotes {
                 );
             }
         }
+        self.forget_empty_groups();
+    }
+
+    fn forget_empty_groups(&mut self) {
+        self.groups
+            .retain(|owner, _| self.notes.values().any(|entry| entry.owner == *owner));
     }
 
     fn nullifiers(&self, note_set: NoteSetIndex) -> HashSet<NoteNullifier> {
@@ -90,26 +363,24 @@ impl PendingNotes {
             return;
         }
 
-        self.notes
-            .retain(|nullifier, immutable_blocks_since_reservation| {
-                *immutable_blocks_since_reservation =
-                    immutable_blocks_since_reservation.saturating_add(new_immutable_blocks_count);
+        self.notes.retain(|nullifier, reservation| {
+            reservation.age = reservation.age.saturating_add(new_immutable_blocks_count);
 
-                let expired =
-                    *immutable_blocks_since_reservation >= max_immutable_blocks_since_reservation;
+            let expired = reservation.age >= max_immutable_blocks_since_reservation;
 
-                if expired {
-                    debug!(
-                        target: wallet::SERVICE,
-                        ?nullifier,
-                        immutable_blocks_since_reservation,
-                        max_immutable_blocks_since_reservation,
-                        "Removing pending note reservation after LIB progress"
-                    );
-                }
+            if expired {
+                debug!(
+                    target: wallet::SERVICE,
+                    ?nullifier,
+                    immutable_blocks_since_reservation = reservation.age,
+                    max_immutable_blocks_since_reservation,
+                    "Removing pending note reservation after LIB progress"
+                );
+            }
 
-                !expired
-            });
+            !expired
+        });
+        self.forget_empty_groups();
     }
 }
 
@@ -318,17 +589,15 @@ impl<'u> ServiceState<'u> {
     /// its percentage of the final mandatory fee, including both execution and
     /// storage cost, within its maximum fee. Only the unused reserve becomes an
     /// effective priority tip, and the percentage is not capped at 100. A
-    /// funding that fails releases the notes `tx_builder` spends, such as a
-    /// split reserved for it. If a builder is funded again while its first
-    /// funding is in flight and this funding fails, its notes are released as
-    /// well, and the ledger rejects the conflict if another transaction then
-    /// spends them.
+    /// failed attempt preserves the builder's reservations for a retry. Stale
+    /// or conflicting ownership claims cannot release another operation's
+    /// reservations.
     #[expect(
         clippy::too_many_arguments,
         reason = "thin passthrough to `Wallet::fund_tx` plus the reservations"
     )]
     pub fn fund_tx(
-        &mut self,
+        &self,
         tip: HeaderId,
         tx_builder: &MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -337,7 +606,8 @@ impl<'u> ServiceState<'u> {
         context: &OpsContext,
         priority_fee: impl Into<PriorityFee>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        let funded = self.wallet.fund_tx(
+        self.pending_notes.validate_claims(tx_builder, true)?;
+        self.wallet.fund_tx(
             tip,
             tx_builder,
             change_pk,
@@ -346,11 +616,7 @@ impl<'u> ServiceState<'u> {
             context,
             &self.pending_notes.nullifiers(NoteSetIndex::Ledger),
             priority_fee,
-        );
-        if funded.is_err() {
-            self.release_pending_notes(tx_builder.note_set_nullifiers_consumed());
-        }
-        funded
+        )
     }
 
     // A Transfer giving `owner` a note of exactly `value` and the rest back to
@@ -407,15 +673,77 @@ impl<'u> ServiceState<'u> {
     pub fn reserve_pending_notes(
         &mut self,
         nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>,
-    ) {
-        self.pending_notes.reserve(nullifiers);
+        owner: [u8; 32],
+    ) -> Result<(), WalletError> {
+        self.pending_notes.reserve(nullifiers, owner)
     }
 
     pub fn release_pending_notes(
         &mut self,
         nullifiers: impl IntoIterator<Item = (NoteSetIndex, NoteNullifier)>,
+        owner: [u8; 32],
     ) {
-        self.pending_notes.release(nullifiers);
+        self.pending_notes.release(nullifiers, owner);
+    }
+
+    /// Request release of every live input controlled by this capability.
+    pub fn release_reservation(&mut self, owner: [u8; 32]) -> bool {
+        let inputs = self
+            .pending_notes
+            .notes
+            .iter()
+            .filter_map(|(input, reservation)| (reservation.owner == owner).then_some(*input))
+            .collect::<Vec<_>>();
+        let found = !inputs.is_empty();
+        self.pending_notes.release(inputs, owner);
+        found
+    }
+
+    pub fn validate_funding(&self, builder: &MantleTxBuilder) -> Result<(), WalletError> {
+        self.pending_notes.validate_claims(builder, true)
+    }
+
+    pub fn transfer_reservations(
+        &mut self,
+        builder: &MantleTxBuilder,
+        owner: [u8; 32],
+        funded: bool,
+    ) -> Result<(), WalletError> {
+        self.pending_notes.transfer(builder, owner, funded)
+    }
+
+    pub fn release_transaction_notes(&mut self, builder: &MantleTxBuilder) {
+        let inputs = builder.reservation_inputs().collect::<Vec<_>>();
+        for owner in builder.reservation_ids() {
+            self.pending_notes.release(inputs.iter().copied(), owner);
+        }
+    }
+
+    pub fn begin_transaction_job(
+        &mut self,
+        builder: &MantleTxBuilder,
+        owner: [u8; 32],
+    ) -> Result<ReservationJob, WalletError> {
+        self.pending_notes.begin_job(builder, owner)
+    }
+
+    #[cfg(test)]
+    pub fn finish_transaction_job(&mut self, job: ReservationJob, delivered: bool) {
+        self.pending_notes.finish_job(job, delivered);
+    }
+
+    pub fn finish_transaction_handoff(
+        &mut self,
+        job: ReservationJob,
+        enqueued: bool,
+        handoff: ReservationHandoff,
+    ) {
+        self.pending_notes.finish_handoff(job, enqueued, handoff);
+    }
+
+    pub fn cancel_transaction_job(&mut self, job: ReservationJob, new_owner: [u8; 32]) {
+        self.pending_notes
+            .cancel_job_before_dispatch(job, new_owner);
     }
 
     fn update_state(&self) {
@@ -472,7 +800,9 @@ mod tests {
         let nullifier = NoteNullifier(Fr::ONE);
         let mut pending_notes = PendingNotes::default();
 
-        pending_notes.reserve([(NoteSetIndex::Ledger, nullifier)]);
+        pending_notes
+            .reserve([(NoteSetIndex::Ledger, nullifier)], [1; 32])
+            .unwrap();
         pending_notes.evict_expired(0, EXPIRY_BLOCKS);
 
         assert!(
@@ -487,7 +817,9 @@ mod tests {
         let nullifier = NoteNullifier(Fr::ONE);
         let mut pending_notes = PendingNotes::default();
 
-        pending_notes.reserve([(NoteSetIndex::Ledger, nullifier)]);
+        pending_notes
+            .reserve([(NoteSetIndex::Ledger, nullifier)], [1; 32])
+            .unwrap();
         pending_notes.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
         assert!(
             pending_notes
@@ -508,8 +840,10 @@ mod tests {
         let nullifier = NoteNullifier(Fr::ONE);
         let mut pending_notes = PendingNotes::default();
 
-        pending_notes.reserve([(NoteSetIndex::Ledger, nullifier)]);
-        pending_notes.release([(NoteSetIndex::Ledger, nullifier)]);
+        pending_notes
+            .reserve([(NoteSetIndex::Ledger, nullifier)], [1; 32])
+            .unwrap();
+        pending_notes.release([(NoteSetIndex::Ledger, nullifier)], [1; 32]);
 
         assert!(pending_notes.nullifiers(NoteSetIndex::Ledger).is_empty());
     }
@@ -518,20 +852,311 @@ mod tests {
     fn reservations_are_independent_across_note_sets() {
         let mut pending = PendingNotes::default();
         let nullifier = NoteNullifier(Fr::ONE);
-        pending.reserve([
-            (NoteSetIndex::Ledger, nullifier),
-            (NoteSetIndex::Sdp, nullifier),
-        ]);
-        pending.release([(NoteSetIndex::Sdp, nullifier)]);
+        pending
+            .reserve([(NoteSetIndex::Ledger, nullifier)], [1; 32])
+            .unwrap();
+        assert!(
+            pending
+                .reserve([(NoteSetIndex::Ledger, nullifier)], [9; 32])
+                .is_err()
+        );
+        assert_eq!(
+            pending.notes[&(NoteSetIndex::Ledger, nullifier)].owner,
+            [1; 32]
+        );
+        pending
+            .reserve([(NoteSetIndex::Sdp, nullifier)], [2; 32])
+            .unwrap();
+        pending.release([(NoteSetIndex::Sdp, nullifier)], [2; 32]);
         assert!(
             pending
                 .nullifiers(NoteSetIndex::Ledger)
                 .contains(&nullifier)
         );
         assert!(!pending.nullifiers(NoteSetIndex::Sdp).contains(&nullifier));
-        pending.reserve([(NoteSetIndex::Sdp, nullifier)]);
-        pending.release([(NoteSetIndex::Ledger, nullifier)]);
+        pending
+            .reserve([(NoteSetIndex::Sdp, nullifier)], [3; 32])
+            .unwrap();
+        pending.release([(NoteSetIndex::Ledger, nullifier)], [1; 32]);
         assert!(pending.nullifiers(NoteSetIndex::Sdp).contains(&nullifier));
+    }
+
+    #[test]
+    fn stale_owners_cannot_release_a_transferred_or_reacquired_input() {
+        use lb_core::mantle::{Op, notes::NoteCommitment};
+
+        let nullifier = NoteNullifier(Fr::ONE);
+        let input = (NoteSetIndex::Ledger, nullifier);
+        let old = [1; 32];
+        let new = [2; 32];
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id(old)
+            .push_op(Op::Transfer(TransferOp::new(
+                [nullifier].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending.reserve([input], old).unwrap();
+        pending.transfer(&builder, new, true).unwrap();
+        assert!(pending.validate_claims(&builder, true).is_err());
+        pending.release([input], old);
+        assert!(pending.notes.contains_key(&input));
+        pending.evict_expired(EXPIRY_BLOCKS, EXPIRY_BLOCKS);
+        pending.reserve([input], [3; 32]).unwrap();
+        pending.release([input], new);
+        assert_eq!(pending.notes[&input].owner, [3; 32]);
+    }
+
+    #[test]
+    fn incomplete_owner_group_cannot_reacquire_a_released_member() {
+        use lb_core::mantle::{Op, notes::NoteCommitment};
+
+        let first = NoteNullifier(Fr::ONE);
+        let second = NoteNullifier(Fr::from(2u64));
+        let owner = [1; 32];
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id(owner)
+            .push_op(Op::Transfer(TransferOp::new(
+                [first, second].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending
+            .reserve(
+                [
+                    (NoteSetIndex::Ledger, first),
+                    (NoteSetIndex::Ledger, second),
+                ],
+                owner,
+            )
+            .unwrap();
+        pending.release([(NoteSetIndex::Ledger, first)], owner);
+        assert!(pending.transfer(&builder, [2; 32], true).is_err());
+        assert!(!pending.notes.contains_key(&(NoteSetIndex::Ledger, first)));
+        assert_eq!(pending.notes[&(NoteSetIndex::Ledger, second)].owner, owner);
+    }
+
+    #[test]
+    fn multiple_claims_transfer_atomically() {
+        use lb_core::mantle::{Op, notes::NoteCommitment};
+
+        let first = NoteNullifier(Fr::ONE);
+        let second = NoteNullifier(Fr::from(2u64));
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
+            .with_additional_reservation_id([2; 32])
+            .push_op(Op::Transfer(TransferOp::new(
+                [first, second].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending
+            .reserve([(NoteSetIndex::Ledger, first)], [1; 32])
+            .unwrap();
+        assert!(pending.transfer(&builder, [3; 32], true).is_err());
+        assert_eq!(pending.notes[&(NoteSetIndex::Ledger, first)].owner, [1; 32]);
+        pending
+            .reserve([(NoteSetIndex::Ledger, second)], [2; 32])
+            .unwrap();
+        pending.transfer(&builder, [3; 32], true).unwrap();
+        assert_eq!(pending.notes[&(NoteSetIndex::Ledger, first)].owner, [3; 32]);
+        assert_eq!(
+            pending.notes[&(NoteSetIndex::Ledger, second)].owner,
+            [3; 32]
+        );
+        pending.release([(NoteSetIndex::Ledger, first)], [1; 32]);
+        assert!(pending.notes.contains_key(&(NoteSetIndex::Ledger, first)));
+    }
+
+    #[test]
+    fn funding_resets_all_transferred_reservation_ages() {
+        use lb_core::mantle::Op;
+
+        let first = NoteNullifier(Fr::ONE);
+        let second = NoteNullifier(Fr::from(2u64));
+        let newly_funded = NoteNullifier(Fr::from(3u64));
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
+            .with_additional_reservation_id([2; 32])
+            .push_op(Op::Transfer(TransferOp::new(
+                [first, second, newly_funded].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        let first_input = (NoteSetIndex::Ledger, first);
+        let second_input = (NoteSetIndex::Ledger, second);
+        let new_input = (NoteSetIndex::Ledger, newly_funded);
+        pending.reserve([first_input], [1; 32]).unwrap();
+        pending.evict_expired(1, EXPIRY_BLOCKS);
+        pending.reserve([second_input], [2; 32]).unwrap();
+        pending.evict_expired(2, EXPIRY_BLOCKS);
+
+        // A conflicting target owner rejects the whole transition without
+        // refreshing either existing claim or acquiring the new input.
+        assert!(pending.transfer(&builder, [1; 32], true).is_err());
+        assert_eq!(pending.notes[&first_input].age, 3);
+        assert_eq!(pending.notes[&second_input].age, 2);
+        assert!(!pending.notes.contains_key(&new_input));
+
+        pending.transfer(&builder, [3; 32], true).unwrap();
+        for input in [first_input, second_input, new_input] {
+            assert_eq!(pending.notes[&input].owner, [3; 32]);
+            assert_eq!(pending.notes[&input].age, 0);
+        }
+        assert!(pending.validate_claims(&builder, true).is_err());
+        pending.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        assert_eq!(pending.notes.len(), 3);
+        pending.evict_expired(1, EXPIRY_BLOCKS);
+        assert!(pending.notes.is_empty());
+    }
+
+    #[test]
+    fn unfunded_transfer_does_not_refresh_reservation_age() {
+        use lb_core::mantle::Op;
+
+        let nullifier = NoteNullifier(Fr::ONE);
+        let input = (NoteSetIndex::Ledger, nullifier);
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
+            .push_op(Op::Transfer(TransferOp::new(
+                [nullifier].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending.reserve([input], [1; 32]).unwrap();
+        pending.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        pending.transfer(&builder, [2; 32], false).unwrap();
+        assert_eq!(pending.notes[&input].age, EXPIRY_BLOCKS - 1);
+        pending.evict_expired(1, EXPIRY_BLOCKS);
+        assert!(pending.notes.is_empty());
+    }
+
+    #[test]
+    fn overlapping_jobs_and_stale_completions_do_not_release_live_reservations() {
+        use lb_core::mantle::{Op, notes::NoteCommitment};
+
+        let nullifier = NoteNullifier(Fr::ONE);
+        let input = (NoteSetIndex::Ledger, nullifier);
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
+            .push_op(Op::Transfer(TransferOp::new(
+                [nullifier].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending.reserve([input], [1; 32]).unwrap();
+        let first = pending.begin_job(&builder, [2; 32]).unwrap();
+        let second = pending.begin_job(&builder, [3; 32]).unwrap();
+        pending.finish_job(first, false);
+        assert!(pending.notes.contains_key(&input));
+        pending.finish_job(second, true);
+        assert!(pending.notes.contains_key(&input));
+        let stale = pending.begin_job(&builder, [4; 32]).unwrap();
+        pending.evict_expired(EXPIRY_BLOCKS, EXPIRY_BLOCKS);
+        pending.reserve([input], [5; 32]).unwrap();
+        pending.finish_job(stale, false);
+        assert_eq!(pending.notes[&input].owner, [5; 32]);
+    }
+
+    #[test]
+    fn cancelled_undispatched_job_preserves_existing_claims() {
+        use lb_core::mantle::{Op, notes::NoteCommitment};
+
+        let first = NoteNullifier(Fr::ONE);
+        let second = NoteNullifier(Fr::from(2u64));
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
+            .push_op(Op::Transfer(TransferOp::new(
+                [first, second].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending
+            .reserve([(NoteSetIndex::Ledger, first)], [1; 32])
+            .unwrap();
+        let job = pending.begin_job(&builder, [2; 32]).unwrap();
+        pending.cancel_job_before_dispatch(job, [2; 32]);
+        assert_eq!(pending.notes[&(NoteSetIndex::Ledger, first)].owner, [1; 32]);
+        assert!(!pending.notes.contains_key(&(NoteSetIndex::Ledger, second)));
+        assert!(pending.validate_claims(&builder, true).is_ok());
+    }
+
+    #[test]
+    fn release_during_a_job_waits_and_preserves_later_success() {
+        use lb_core::mantle::{Op, notes::NoteCommitment};
+
+        let nullifier = NoteNullifier(Fr::ONE);
+        let input = (NoteSetIndex::Ledger, nullifier);
+        let owner = [1; 32];
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id(owner)
+            .push_op(Op::Transfer(TransferOp::new(
+                [nullifier].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending.reserve([input], owner).unwrap();
+        let first = pending.begin_job(&builder, [2; 32]).unwrap();
+        pending.finish_job(first, true);
+        let second = pending.begin_job(&builder, [3; 32]).unwrap();
+        pending.release([input], owner);
+        assert!(pending.notes.contains_key(&input));
+        pending.finish_job(second, false);
+        assert!(!pending.notes.contains_key(&input));
+
+        pending.reserve([input], owner).unwrap();
+        let third = pending.begin_job(&builder, [4; 32]).unwrap();
+        pending.release([input], owner);
+        pending.finish_job(third, true);
+        assert!(pending.notes.contains_key(&input));
+    }
+
+    #[test]
+    fn delivered_proof_prevents_a_stale_prepared_builder_from_being_funded() {
+        use lb_core::mantle::{Op, notes::NoteCommitment};
+
+        let nullifier = NoteNullifier(Fr::ONE);
+        let input = (NoteSetIndex::Ledger, nullifier);
+        let owner = [1; 32];
+        let builder = MantleTxBuilder::new()
+            .with_reservation_id(owner)
+            .push_op(Op::Transfer(TransferOp::new(
+                [nullifier].into(),
+                [NoteCommitment(Fr::ONE)].into(),
+                Fr::ONE,
+                0,
+            )))
+            .unwrap();
+        let mut pending = PendingNotes::default();
+        pending.reserve([input], owner).unwrap();
+        let job = pending.begin_job(&builder, [2; 32]).unwrap();
+        pending.finish_job(job, true);
+        assert!(pending.transfer(&builder, [3; 32], true).is_err());
+        assert_eq!(pending.notes[&input].owner, owner);
     }
 
     #[test]
@@ -578,6 +1203,7 @@ mod tests {
         .unwrap();
         let returned = Note::new(ledger.note.value, Fr::from(2u64), owner);
         let builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
             .push_op_with_opening(
                 Op::SDPWithdraw(SDPWithdrawOp {
                     service_note_nullifier: ledger.nullifier,
@@ -595,7 +1221,9 @@ mod tests {
             gas_context: OpsGasContext::new(HashMap::new(), GasPrices::new(1, 1), GAS_PROFILE),
         };
 
-        state.reserve_pending_notes([(NoteSetIndex::Sdp, ledger.nullifier)]);
+        state
+            .reserve_pending_notes([(NoteSetIndex::Sdp, ledger.nullifier)], [1; 32])
+            .unwrap();
         let funded = state
             .fund_tx(
                 genesis,
@@ -612,7 +1240,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_funding_releases_the_notes_of_its_builder_alone() {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The test follows the prepared reservation through failure, retry and abandonment"
+    )]
+    fn a_failed_funding_keeps_prepared_reservations_for_retry() {
         use std::sync::Arc;
 
         use lb_core::mantle::{
@@ -620,9 +1252,12 @@ mod tests {
             ops::sdp::SDPWithdrawOp,
             transactions::{GasPrices, tx_list::ops::OpsGasContext},
         };
+        use lb_cryptarchia_engine::Epoch;
+        use lb_key_management_system_service::keys::ZkKey;
         use lb_services_utils::overwatch::RecoveryData;
 
-        let funding_pk = ZkPublicKey::new(Fr::ONE);
+        let key = ZkKey::new(Fr::from(7u64));
+        let funding_pk = key.to_public_key();
         let settings = WalletServiceSettings {
             known_keys: HashMap::from([("funding".into(), funding_pk)]),
             voucher_master_key_id: "voucher-master".into(),
@@ -647,11 +1282,15 @@ mod tests {
 
         let split_input = NoteNullifier(Fr::ONE);
         let in_flight = NoteNullifier(Fr::from(2u64));
-        state.reserve_pending_notes([
-            (NoteSetIndex::Ledger, split_input),
-            (NoteSetIndex::Ledger, in_flight),
-        ]);
+        state
+            .reserve_pending_notes([(NoteSetIndex::Ledger, split_input)], [1; 32])
+            .unwrap();
+        state
+            .reserve_pending_notes([(NoteSetIndex::Ledger, in_flight)], [2; 32])
+            .unwrap();
+        state.pending_notes.evict_expired(3, 10);
         let tx_builder = MantleTxBuilder::new()
+            .with_reservation_id([1; 32])
             .push_op(Op::Transfer(TransferOp::new(
                 [split_input].into(),
                 [NoteCommitment(Fr::ONE)].into(),
@@ -678,16 +1317,23 @@ mod tests {
         assert_eq!(error, WalletError::InsufficientFunds { available: 0 });
         assert_eq!(
             state.pending_notes.nullifiers(NoteSetIndex::Ledger),
-            HashSet::from([in_flight])
+            HashSet::from([split_input, in_flight])
+        );
+        assert_eq!(
+            state.pending_notes.notes[&(NoteSetIndex::Ledger, split_input)].age,
+            3
         );
 
         let sdp = MantleTxBuilder::new()
+            .with_reservation_id([3; 32])
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 service_note_nullifier: in_flight,
                 ..SDPWithdrawOp::sample()
             }))
             .unwrap();
-        state.reserve_pending_notes([(NoteSetIndex::Sdp, in_flight)]);
+        state
+            .reserve_pending_notes([(NoteSetIndex::Sdp, in_flight)], [3; 32])
+            .unwrap();
         assert!(
             state
                 .fund_tx(
@@ -702,11 +1348,76 @@ mod tests {
                 .is_err()
         );
         assert!(state.is_pending_note(NoteSetIndex::Ledger, &in_flight));
-        assert!(!state.is_pending_note(NoteSetIndex::Sdp, &in_flight));
+        assert!(state.is_pending_note(NoteSetIndex::Sdp, &in_flight));
         assert_eq!(
             state.pending_notes.nullifiers(NoteSetIndex::Sdp),
-            HashSet::new()
+            HashSet::from([in_flight])
         );
+
+        // A later block supplies a Ledger funding note. The original builder
+        // can be retried with the same reservation capability.
+        let fee_note = crate::tests::known_note(&key, 100_000, 8);
+        state.wallet.add_known_notes([fee_note]);
+        let child = HeaderId::from([1; 32]);
+        state
+            .apply_block(&WalletBlock {
+                id: child,
+                parent: genesis,
+                epoch: Epoch::new(0),
+                revealed: vec![],
+                withdrawals: vec![],
+                updates: vec![lb_core::mantle::note_set::NoteSetUpdate {
+                    note_set: NoteSetIndex::Ledger,
+                    nullifiers: vec![],
+                    commitments: vec![fee_note.note.commitment()],
+                }],
+            })
+            .unwrap();
+        let mut spend_tip = child;
+        for number in 2..=5 {
+            let next = HeaderId::from([number; 32]);
+            state
+                .apply_block(&WalletBlock {
+                    id: next,
+                    parent: spend_tip,
+                    epoch: Epoch::new(0),
+                    revealed: vec![],
+                    withdrawals: vec![],
+                    updates: vec![],
+                })
+                .unwrap();
+            spend_tip = next;
+        }
+        let funded = state
+            .fund_tx(
+                spend_tip,
+                &tx_builder,
+                funding_pk,
+                Fr::ONE,
+                [funding_pk],
+                &context,
+                0,
+            )
+            .unwrap();
+        state.transfer_reservations(&funded, [4; 32], true).unwrap();
+        assert!(state.validate_funding(&tx_builder).is_err());
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &split_input));
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &in_flight));
+        assert!(state.is_pending_note(NoteSetIndex::Sdp, &in_flight));
+        assert!(state.release_reservation([3; 32]));
+        assert!(matches!(
+            state.fund_tx(
+                spend_tip,
+                &sdp,
+                funding_pk,
+                Fr::ONE,
+                [funding_pk],
+                &context,
+                0
+            ),
+            Err(WalletError::InputReserved)
+        ));
+        assert!(state.is_pending_note(NoteSetIndex::Ledger, &in_flight));
     }
 
     /// Regression test for the wallet-service crash seen the first time a

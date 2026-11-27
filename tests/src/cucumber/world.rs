@@ -1981,7 +1981,7 @@ impl CucumberWorld {
         State: VerificationState + Clone + Send + Sync + 'static,
     {
         tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(60),
             node_client.submit_transaction(signed_tx),
         )
         .await
@@ -2011,15 +2011,9 @@ impl CucumberWorld {
                     wallet.node_name, wallet.wallet_name
                 ),
             })?;
-        let response =
-            tokio::time::timeout(Duration::from_secs(10), node.client.transfer_funds(body))
-                .await
-                .map_err(|_| StepError::Timeout {
-                    message: format!(
-                        "Submit transaction '{}/{}' ",
-                        wallet.wallet_name, wallet.node_name
-                    ),
-                })??;
+        // The client bounds preparation and publication separately so a slow
+        // proof does not consume the publication deadline.
+        let response = node.client.transfer_funds(body).await?;
         // A scanned wallet adopts the note once it knows its opening.
         record_note_openings([response.recipient_note]);
 

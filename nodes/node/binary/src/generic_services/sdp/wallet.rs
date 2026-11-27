@@ -4,7 +4,6 @@ use lb_core::{
         Note, Op, SignedOps,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
-        notes::NoteNullifier,
         transactions::{MantleTxBuilder, builder::ZkTransferOpening, states::Preverified},
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
@@ -39,13 +38,12 @@ where
     R: AsServiceId<S> + std::fmt::Debug + std::fmt::Display + Sync,
 {
     // Rejects a funded transaction whose fee exceeds the configured maximum,
-    // releasing `reserved`, the notes this request reserved for it. A funding
+    // releasing the notes this request owns. A funding
     // capped at that maximum exceeds it only when its mandatory fee does.
     async fn check_tx_fee(
         &self,
         funded: &MantleTxBuilder,
         config: &SdpWalletConfig,
-        reserved: Vec<(NoteSetIndex, NoteNullifier)>,
     ) -> Result<(), SdpWalletError> {
         let checked = match funded.tx_fee() {
             Ok(tx_fee) if tx_fee > config.max_tx_fee => Err(SdpWalletError::TxFeeExceedsMaxFee {
@@ -56,7 +54,9 @@ where
             Err(error) => Err(error.into()),
         };
         if checked.is_err() {
-            self.api.release_pending_notes(reserved).await;
+            self.api
+                .release_pending_notes(funded, funded.reservation_inputs().collect())
+                .await;
         }
         checked
     }
@@ -97,6 +97,7 @@ where
             )
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
+        let mut split_guard = self.api.guard_reservations(&split_builder);
         // The wallet holds the notes of the split until the transaction spends
         // them, so a declaration that fails before funding releases them.
         let split_notes = added_nullifiers(&tx_builder, &split_builder);
@@ -125,7 +126,9 @@ where
         let tx_builder = match declared {
             Ok(tx_builder) => tx_builder,
             Err(error) => {
-                self.api.release_pending_notes(split_notes).await;
+                self.api
+                    .release_pending_notes(&split_builder, split_notes)
+                    .await;
                 return Err(error);
             }
         };
@@ -148,18 +151,20 @@ where
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
-        let reserved = added_nullifiers(&tx_builder, &funded)
-            .into_iter()
-            .chain(split_notes)
-            .collect();
-        self.check_tx_fee(&funded, config, reserved).await?;
+        let mut funded_guard = self.api.guard_reservations(&funded);
+        split_guard.disarm();
+
+        self.check_tx_fee(&funded, config).await?;
 
         let signed_tx = self
             .api
             .sign_tx(Some(tip), funded)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
-            .response;
+            .response
+            .transaction;
+
+        funded_guard.disarm();
 
         Ok(signed_tx)
     }
@@ -216,15 +221,19 @@ where
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
-        let reserved = added_nullifiers(&tx_builder, &funded);
-        self.check_tx_fee(&funded, config, reserved).await?;
+        let mut funded_guard = self.api.guard_reservations(&funded);
+
+        self.check_tx_fee(&funded, config).await?;
 
         let signed_tx = self
             .api
             .sign_tx(Some(tip), funded)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
-            .response;
+            .response
+            .transaction;
+
+        funded_guard.disarm();
 
         Ok(signed_tx)
     }
@@ -253,15 +262,19 @@ where
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?;
 
-        let reserved = added_nullifiers(&tx_builder, &funded);
-        self.check_tx_fee(&funded, config, reserved).await?;
+        let mut funded_guard = self.api.guard_reservations(&funded);
+
+        self.check_tx_fee(&funded, config).await?;
 
         let signed_tx = self
             .api
             .sign_tx(Some(tip), funded)
             .await
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
-            .response;
+            .response
+            .transaction;
+
+        funded_guard.disarm();
 
         Ok(signed_tx)
     }
@@ -280,7 +293,9 @@ pub fn split_root(tx_builder: &MantleTxBuilder) -> Result<Fr, DynError> {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        gas::GasCost, notes::NoteCommitment, ops::transfer::TransferOp,
+        gas::GasCost,
+        notes::{NoteCommitment, NoteNullifier},
+        ops::transfer::TransferOp,
         transactions::builder::FundingNote,
     };
     use lb_key_management_system_service::keys::ZkPublicKey;
@@ -291,8 +306,8 @@ mod tests {
     use crate::{RuntimeServiceId, generic_services};
 
     #[tokio::test]
-    async fn a_fee_above_the_cap_releases_the_notes_of_the_funding_alone() {
-        // the input of the caller's own op may be reserved by another request
+    async fn a_fee_above_the_cap_releases_the_funded_transaction_reservations() {
+        // Funding transfers both operation and fee inputs to the new owner.
         let unfunded = MantleTxBuilder::new()
             .push_op(Op::Transfer(TransferOp::new(
                 [NoteNullifier(Fr::from(2u64))].into(),
@@ -300,7 +315,8 @@ mod tests {
                 Fr::from(5u64),
                 0,
             )))
-            .unwrap();
+            .unwrap()
+            .with_reservation_id([1; 32]);
         let nullifier = NoteNullifier(Fr::from(3u64));
         let funded = unfunded
             .clone()
@@ -323,14 +339,16 @@ mod tests {
         };
 
         assert!(matches!(
-            adapter
-                .check_tx_fee(&funded, &config, added_nullifiers(&unfunded, &funded))
-                .await,
+            adapter.check_tx_fee(&funded, &config).await,
             Err(SdpWalletError::TxFeeExceedsMaxFee { .. })
         ));
         assert!(matches!(
             msg_receiver.try_recv(),
-            Ok(WalletMsg::ReleasePendingNotes { nullifiers }) if nullifiers == [(NoteSetIndex::Ledger, nullifier)]
+            Ok(WalletMsg::ReleasePendingNotes { nullifiers, builder })
+                if builder.reservation_id() == Some([1; 32]) && nullifiers == [
+                    (NoteSetIndex::Ledger, NoteNullifier(Fr::from(2u64))),
+                    (NoteSetIndex::Ledger, nullifier),
+                ]
         ));
     }
 }

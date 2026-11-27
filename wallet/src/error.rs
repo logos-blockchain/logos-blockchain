@@ -18,6 +18,8 @@ pub enum WalletError {
     InsufficientFunds { available: u64 },
     #[error("Change key {0:?} must be one of this wallet's funding keys")]
     InvalidChangeKey(ZkPublicKey),
+    #[error("Transaction input reservation is unavailable or the ownership claim is stale")]
+    InputReserved,
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
     #[error("Transaction builder error: {0}")]

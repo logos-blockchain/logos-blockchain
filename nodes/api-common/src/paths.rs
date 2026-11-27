@@ -54,6 +54,7 @@ pub mod wallet {
         "/wallet/transactions/prepare-transfer-funds";
     pub const SIGN_TX_ED25519: &str = "/wallet/sign/ed25519";
     pub const FUND: &str = "/wallet/fund";
+    pub const RELEASE_RESERVATION: &str = "/wallet/reservations/release";
     pub const IMPORT_NOTE: &str = "/wallet/notes/import";
 }
 

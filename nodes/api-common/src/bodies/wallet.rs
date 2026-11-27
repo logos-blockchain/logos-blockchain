@@ -143,6 +143,9 @@ pub mod transfer_funds {
     pub struct WalletPrepareTransferResponseBody<Tx = SignedOps<Unverified, StandardMode>> {
         pub hash: TxHash,
         pub transaction: Tx,
+        /// Capabilities for abandoning this prepared transfer's reservations.
+        #[serde(default)]
+        pub reservation_ids: Vec<[u8; 32]>,
         /// The note paid to the recipient. A recipient whose wallet is not this
         /// node's imports it to spend it.
         pub recipient_note: Note,
@@ -164,6 +167,9 @@ pub mod fund {
     #[derive(Serialize, Deserialize)]
     pub struct WalletFundRequestBody {
         pub tip: Option<HeaderId>,
+        /// Reservation capabilities in this builder must have been issued by
+        /// the wallet receiving this request. Include externally prepared
+        /// channel steps without the other wallet's capabilities.
         pub tx_builder: MantleTxBuilder,
         /// A wallet-owned key included in `funding_public_keys`.
         pub change_public_key: ZkPublicKey,
@@ -198,6 +204,14 @@ pub mod fund {
         /// funded transaction hash. `None` if funding required no transfer
         /// (zero fee and no inputs pulled in).
         pub transfer_proof: Option<OpProof>,
+        /// Capabilities for abandoning this funded transaction's reservations.
+        #[serde(default)]
+        pub reservation_ids: Vec<[u8; 32]>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletReleaseReservationRequestBody {
+        pub reservation_id: [u8; 32],
     }
 }
 

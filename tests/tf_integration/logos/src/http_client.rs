@@ -78,7 +78,7 @@ impl NodeHttpClient {
         Self {
             base_url,
             http_client: CommonHttpClient::new(basic_auth),
-            timeout: Duration::from_secs(15),
+            timeout: Duration::from_secs(60),
         }
     }
 
@@ -291,6 +291,18 @@ impl NodeHttpClient {
         self.with_timeout(
             "Fund transaction request",
             self.http_client.fund_tx(self.base_url.clone(), body),
+        )
+        .await
+    }
+
+    pub async fn release_wallet_reservation(
+        &self,
+        reservation_id: [u8; 32],
+    ) -> Result<bool, Error> {
+        self.with_timeout(
+            "Release wallet reservation request",
+            self.http_client
+                .release_wallet_reservation(self.base_url.clone(), reservation_id),
         )
         .await
     }

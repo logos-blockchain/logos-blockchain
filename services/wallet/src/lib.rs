@@ -7,9 +7,13 @@ mod tests;
 
 use std::{
     collections::{BTreeMap, HashMap},
+    fmt,
     num::NonZero,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
 };
 
 use async_trait::async_trait;
@@ -179,6 +183,74 @@ pub enum WalletServiceError {
     InvalidSigner([u8; ED25519_PUBLIC_KEY_SIZE]),
 }
 
+const HANDOFF_WAITING: u8 = 0;
+const HANDOFF_ACQUIRED: u8 = 1;
+const HANDOFF_CANCELLED: u8 = 2;
+const HANDOFF_COMPLETED: u8 = 3;
+
+/// Coordinates a reservation until its response reaches the requesting API.
+/// The identifier is a capability and must not appear in debug output.
+#[derive(Clone)]
+pub struct ReservationHandoff {
+    owner: [u8; 32],
+    state: Arc<AtomicU8>,
+}
+
+impl ReservationHandoff {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            owner: rand::random(),
+            state: Arc::new(AtomicU8::new(HANDOFF_WAITING)),
+        }
+    }
+
+    // A cancellation before acquisition leaves cleanup to the service.
+    fn acquired(&self) -> bool {
+        self.state
+            .compare_exchange(
+                HANDOFF_WAITING,
+                HANDOFF_ACQUIRED,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+    }
+
+    fn cancelled(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == HANDOFF_CANCELLED
+    }
+
+    fn completed(&self) -> bool {
+        self.state.load(Ordering::SeqCst) == HANDOFF_COMPLETED
+    }
+
+    // A cancellation after acquisition leaves cleanup to the API guard.
+    fn cancel(&self) -> bool {
+        self.state
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |state| {
+                (state != HANDOFF_COMPLETED).then_some(HANDOFF_CANCELLED)
+            })
+            .is_ok_and(|state| state == HANDOFF_ACQUIRED)
+    }
+
+    fn complete(&self) {
+        self.state.store(HANDOFF_COMPLETED, Ordering::SeqCst);
+    }
+}
+
+impl Default for ReservationHandoff {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for ReservationHandoff {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ReservationHandoff(<redacted>)")
+    }
+}
+
 #[derive(Debug, AsRefStr)]
 pub enum WalletMsg {
     GetBalance {
@@ -187,6 +259,7 @@ pub enum WalletMsg {
         resp_tx: Sender<Result<TipResponse<Option<WalletBalance>>, WalletServiceError>>,
     },
     FundTx {
+        handoff: ReservationHandoff,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
@@ -200,10 +273,10 @@ pub enum WalletMsg {
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     SignTx {
+        handoff: ReservationHandoff,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-        resp_tx:
-            Sender<Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>>,
+        resp_tx: Sender<Result<TipResponse<SignedTransaction>, WalletServiceError>>,
     },
     SignTxWithEd25519 {
         tx_hash: TxHash,
@@ -213,12 +286,14 @@ pub enum WalletMsg {
     // The funding Transfer of the built Operations and its proof, None
     // without funding.
     ProveFunding {
+        handoff: ReservationHandoff,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         resp_tx: Sender<Result<TipResponse<ProvenFunding>, WalletServiceError>>,
     },
     // Pushes a Transfer giving `owner` a note of exactly `value`.
     PrepareExactNote {
+        handoff: ReservationHandoff,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         value: Value,
@@ -263,11 +338,13 @@ pub enum WalletMsg {
         resp_tx: Sender<Result<KnownNote, WalletServiceError>>,
     },
     ProveChannelStep {
+        handoff: ReservationHandoff,
         tip: Option<HeaderId>,
         request: ChannelStepRequest,
         resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
     },
     ChannelWithdrawal {
+        handoff: ReservationHandoff,
         tip: Option<HeaderId>,
         channel_id: ChannelId,
         notes: Vec<NoteCommitment>,
@@ -288,11 +365,48 @@ pub enum WalletMsg {
     // not be submitted, so that they fund the next request.
     ReleasePendingNotes {
         nullifiers: Vec<(NoteSetIndex, NoteNullifier)>,
+        builder: MantleTxBuilder,
+    },
+    ReleaseReservation {
+        builder: MantleTxBuilder,
+        resp_tx: Sender<bool>,
     },
 }
 
-// The built Operations and the proof of their funding Transfer.
-pub type ProvenFunding = (Ops, Option<OpProof>);
+/// A signed transaction and any reservation acquired during signing.
+pub struct SignedTransaction {
+    pub transaction: SignedOps<Preverified, StandardMode>,
+    /// Add this claim to the builder before reusing it or releasing its inputs.
+    pub reservation_id: Option<[u8; 32]>,
+}
+
+impl fmt::Debug for SignedTransaction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignedTransaction")
+            .field("transaction", &self.transaction)
+            .field("reservation_id", &self.reservation_id.map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+/// The built operations, funding proof and any reservation acquired while
+/// proving.
+pub struct ProvenFunding {
+    pub ops: Ops,
+    pub proof: Option<OpProof>,
+    /// Add this claim to the builder before reusing it or releasing its inputs.
+    pub reservation_id: Option<[u8; 32]>,
+}
+
+impl fmt::Debug for ProvenFunding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProvenFunding")
+            .field("ops", &self.ops)
+            .field("proof", &self.proof)
+            .field("reservation_id", &self.reservation_id.map(|_| "<redacted>"))
+            .finish()
+    }
+}
 
 #[derive(Debug)]
 pub struct TipResponse<R> {
@@ -355,8 +469,31 @@ where
 /// A signing under way, which the service loop polls along with its other
 /// inputs. It comes to the notes funding the transaction, for the loop to
 /// release, if the requester doesn't end up with the transaction.
-type PendingSigning =
-    Pin<Box<dyn Future<Output = Vec<(NoteSetIndex, NoteNullifier)>> + Send + Sync>>;
+type ReservationJob = Vec<((NoteSetIndex, NoteNullifier), [u8; 32])>;
+#[derive(Debug)]
+enum PendingRelease {
+    Transaction(ReservationJob, bool, ReservationHandoff),
+    Channel(Vec<(NoteSetIndex, NoteNullifier)>, [u8; 32]),
+}
+type Delivery = Box<dyn FnOnce() -> bool + Send>;
+enum PendingCompletion {
+    Transaction(ReservationJob, ReservationHandoff, Delivery),
+    Channel(Vec<(NoteSetIndex, NoteNullifier)>, [u8; 32], Delivery),
+}
+
+impl PendingCompletion {
+    fn deliver(self) -> Option<PendingRelease> {
+        match self {
+            Self::Transaction(job, handoff, deliver) => {
+                Some(PendingRelease::Transaction(job, deliver(), handoff))
+            }
+            Self::Channel(inputs, owner, deliver) => {
+                (!deliver()).then_some(PendingRelease::Channel(inputs, owner))
+            }
+        }
+    }
+}
+type PendingSigning = Pin<Box<dyn Future<Output = PendingCompletion> + Send + Sync>>;
 
 async fn signing_permit(permits: &Semaphore) -> SemaphorePermit<'_> {
     permits
@@ -448,7 +585,8 @@ impl WalletMsg {
             | Self::TrackLeaderReward { .. }
             | Self::ImportNote { .. }
             | Self::GetKnownAddresses { .. }
-            | Self::ReleasePendingNotes { .. } => None,
+            | Self::ReleasePendingNotes { .. }
+            | Self::ReleaseReservation { .. } => None,
         }
     }
 }
@@ -544,8 +682,8 @@ where
         + AsServiceId<lb_storage_service::StorageService<RuntimeServiceId>>
         + AsServiceId<Kms>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
-        + std::fmt::Debug
-        + std::fmt::Display
+        + fmt::Debug
+        + fmt::Display
         + Clone
         + Send
         + Sync
@@ -665,7 +803,11 @@ where
                 Some(msg) = service_resources_handle.inbound_relay.recv() => {
                     Box::pin(Self::handle_wallet_message(msg, &mut state, &voucher_master_key_id, &storage, &cryptarchia_api, &signer, &signings, &settings.era_schedule, era_in_force.parameters)).await;
                 }
-                Some(unused) = signings.next() => state.release_pending_notes(unused),
+                Some(completion) = signings.next() => match completion.deliver() {
+                    Some(PendingRelease::Transaction(job, delivered, handoff)) => state.finish_transaction_handoff(job, delivered, handoff),
+                    Some(PendingRelease::Channel(inputs, owner)) => state.release_pending_notes(inputs, owner),
+                    None => {},
+                },
                 Some(EraEvent::NewEra { era: new_era, .. }) = era_ticks.next() => {
                     if new_era > era_in_force.era {
                         era_in_force = settings.era_schedule.get(new_era).unwrap();
@@ -712,8 +854,8 @@ where
     TimeBackend: 'static,
     RuntimeServiceId: AsServiceId<Cryptarchia>
         + AsServiceId<Kms>
-        + std::fmt::Debug
-        + std::fmt::Display
+        + fmt::Debug
+        + fmt::Display
         + Send
         + Sync
         + 'static,
@@ -798,6 +940,7 @@ where
                 Self::handle_get_balance(tip, pk, resp_tx, state.wallet(), cryptarchia).await;
             }
             WalletMsg::FundTx {
+                handoff,
                 tip,
                 tx_builder,
                 change_pk,
@@ -806,13 +949,16 @@ where
                 max_tx_fee,
                 resp_tx,
             } => {
-                // Like a funding that fails, a request that fails before
-                // funding releases the notes `tx_builder`
-                // spends, such as a split.
+                if handoff.cancelled() {
+                    return;
+                }
+                if let Err(err) = state.validate_funding(&tx_builder) {
+                    Self::send_err(resp_tx, err.into());
+                    return;
+                }
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
-                        state.release_pending_notes(tx_builder.note_set_nullifiers_consumed());
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -825,7 +971,6 @@ where
                 let context = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger.tx_context(era_settings.gas_profile),
                     Err(err) => {
-                        state.release_pending_notes(tx_builder.note_set_nullifiers_consumed());
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -855,14 +1000,28 @@ where
                     Self::add_change_note(&funded, change_pk, change_nonce, state, storage, kms)
                         .await
                 {
-                    state.release_pending_notes(funded.note_set_nullifiers_consumed());
                     Self::send_err(resp_tx, err);
                     return;
                 }
 
-                let funded_notes: Vec<(NoteSetIndex, NoteNullifier)> =
-                    funded.note_set_nullifiers_consumed().collect();
-                state.reserve_pending_notes(funded_notes.iter().copied());
+                if handoff.cancelled() {
+                    return;
+                }
+                let owner = handoff.owner;
+                if let Err(err) = state.transfer_reservations(&funded, owner, true) {
+                    Self::send_err(resp_tx, err.into());
+                    return;
+                }
+                let funded = if funded.reservation_inputs().next().is_some() {
+                    funded.with_transferred_reservations(owner)
+                } else {
+                    funded
+                };
+                if funded.reservation_inputs().next().is_some() && !handoff.acquired() {
+                    state.release_transaction_notes(&funded);
+                    return;
+                }
+                let reservations = funded.clone();
 
                 if resp_tx
                     .send(Ok(TipResponse {
@@ -871,22 +1030,40 @@ where
                     }))
                     .is_err()
                 {
-                    state.release_pending_notes(funded_notes);
+                    state.release_transaction_notes(&reservations);
                     debug!(target: LOG_TARGET, "Failed to respond to FundTx");
                 }
             }
             WalletMsg::SignTx {
+                handoff,
                 tip,
                 tx_builder,
                 resp_tx,
             } => {
-                let funded_notes: Vec<(NoteSetIndex, NoteNullifier)> =
-                    tx_builder.note_set_nullifiers_consumed().collect();
+                if handoff.cancelled() {
+                    return;
+                }
+                let new_owner = handoff.owner;
+                let job_reservations = match state.begin_transaction_job(&tx_builder, new_owner) {
+                    Ok(job) => job,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err.into());
+                        return;
+                    }
+                };
+                let reservation_id = job_reservations
+                    .iter()
+                    .any(|(_, owner)| *owner == new_owner)
+                    .then_some(new_owner);
+                if reservation_id.is_some() && !handoff.acquired() {
+                    state.cancel_transaction_job(job_reservations, new_owner);
+                    return;
+                }
 
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
-                        state.release_pending_notes(funded_notes);
+                        state.finish_transaction_handoff(job_reservations, false, handoff);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -895,7 +1072,7 @@ where
                 let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger,
                     Err(err) => {
-                        state.release_pending_notes(funded_notes);
+                        state.finish_transaction_handoff(job_reservations, false, handoff);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -909,26 +1086,52 @@ where
                     state.wallet(),
                 ) {
                     Ok(job) => {
-                        signings.push(Self::signing(job, tip, funded_notes, signer, resp_tx));
+                        signings.push(Self::signing(
+                            job,
+                            tip,
+                            job_reservations,
+                            reservation_id,
+                            handoff,
+                            signer,
+                            resp_tx,
+                        ));
                     }
                     Err(err) => {
-                        state.release_pending_notes(funded_notes);
+                        state.finish_transaction_handoff(job_reservations, false, handoff);
                         Self::send_err(resp_tx, err);
                     }
                 }
             }
             WalletMsg::ProveFunding {
+                handoff,
                 tip,
                 tx_builder,
                 resp_tx,
             } => {
-                let funded_notes: Vec<(NoteSetIndex, NoteNullifier)> =
-                    tx_builder.note_set_nullifiers_consumed().collect();
+                if handoff.cancelled() {
+                    return;
+                }
+                let new_owner = handoff.owner;
+                let job_reservations = match state.begin_transaction_job(&tx_builder, new_owner) {
+                    Ok(job) => job,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err.into());
+                        return;
+                    }
+                };
+                let reservation_id = job_reservations
+                    .iter()
+                    .any(|(_, owner)| *owner == new_owner)
+                    .then_some(new_owner);
+                if reservation_id.is_some() && !handoff.acquired() {
+                    state.cancel_transaction_job(job_reservations, new_owner);
+                    return;
+                }
 
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
-                        state.release_pending_notes(funded_notes);
+                        state.finish_transaction_handoff(job_reservations, false, handoff);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -937,7 +1140,7 @@ where
                 let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
                     Ok(ledger) => ledger,
                     Err(err) => {
-                        state.release_pending_notes(funded_notes);
+                        state.finish_transaction_handoff(job_reservations, false, handoff);
                         Self::send_err(resp_tx, err);
                         return;
                     }
@@ -951,15 +1154,24 @@ where
                     state.wallet(),
                 ) {
                     Ok(job) => {
-                        signings.push(Self::funding_proof(job, tip, funded_notes, signer, resp_tx));
+                        signings.push(Self::funding_proof(
+                            job,
+                            tip,
+                            job_reservations,
+                            reservation_id,
+                            handoff,
+                            signer,
+                            resp_tx,
+                        ));
                     }
                     Err(err) => {
-                        state.release_pending_notes(funded_notes);
+                        state.finish_transaction_handoff(job_reservations, false, handoff);
                         Self::send_err(resp_tx, err);
                     }
                 }
             }
             WalletMsg::PrepareExactNote {
+                handoff,
                 tip,
                 tx_builder,
                 value,
@@ -967,15 +1179,24 @@ where
                 funding_pks,
                 resp_tx,
             } => {
+                if handoff.cancelled() {
+                    return;
+                }
+                if let Err(err) = state.validate_funding(&tx_builder) {
+                    Self::send_err(resp_tx, err.into());
+                    return;
+                }
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
+                        state.release_transaction_notes(&tx_builder);
                         Self::send_err(resp_tx, err);
                         return;
                     }
                 };
 
-                let (tx_builder, exact_note, split_notes) = match Self::prepare_exact_note(
+                let attempted = tx_builder.clone();
+                let (tx_builder, exact_note, _split_notes) = match Self::prepare_exact_note(
                     tip,
                     tx_builder,
                     value,
@@ -989,16 +1210,29 @@ where
                 {
                     Ok(prepared) => prepared,
                     Err(err) => {
+                        state.release_transaction_notes(&attempted);
                         Self::send_err(resp_tx, err);
                         return;
                     }
                 };
-                state.reserve_pending_notes(
-                    split_notes
-                        .iter()
-                        .copied()
-                        .map(|n| (NoteSetIndex::Ledger, n)),
-                );
+                if handoff.cancelled() {
+                    return;
+                }
+                let owner = handoff.owner;
+                if let Err(err) = state.transfer_reservations(&tx_builder, owner, false) {
+                    Self::send_err(resp_tx, err.into());
+                    return;
+                }
+                let tx_builder = if tx_builder.reservation_inputs().next().is_some() {
+                    tx_builder.with_transferred_reservations(owner)
+                } else {
+                    tx_builder
+                };
+                if tx_builder.reservation_inputs().next().is_some() && !handoff.acquired() {
+                    state.release_transaction_notes(&tx_builder);
+                    return;
+                }
+                let reservations = tx_builder.clone();
 
                 if resp_tx
                     .send(Ok(TipResponse {
@@ -1007,9 +1241,7 @@ where
                     }))
                     .is_err()
                 {
-                    state.release_pending_notes(
-                        split_notes.into_iter().map(|n| (NoteSetIndex::Ledger, n)),
-                    );
+                    state.release_transaction_notes(&reservations);
                     debug!(target: LOG_TARGET, "Failed to respond to PrepareExactNote");
                 }
             }
@@ -1106,10 +1338,14 @@ where
                 }
             }
             WalletMsg::ProveChannelStep {
+                handoff,
                 tip,
                 request,
                 resp_tx,
             } => {
+                if handoff.cancelled() {
+                    return;
+                }
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
@@ -1127,11 +1363,24 @@ where
                             .copied()
                             .map(|n| (note_set, n))
                             .collect();
-                        state.reserve_pending_notes(spent.iter().copied());
+                        if handoff.cancelled() {
+                            return;
+                        }
+                        let owner = handoff.owner;
+                        if let Err(err) = state.reserve_pending_notes(spent.iter().copied(), owner)
+                        {
+                            Self::send_err(resp_tx, err.into());
+                            return;
+                        }
+                        if !spent.is_empty() && !handoff.acquired() {
+                            state.release_pending_notes(spent, owner);
+                            return;
+                        }
                         signings.push(Self::channel_step_proof(
                             (step, outputs, witness),
                             tip,
                             spent,
+                            owner,
                             signer,
                             resp_tx,
                         ));
@@ -1140,11 +1389,15 @@ where
                 }
             }
             WalletMsg::ChannelWithdrawal {
+                handoff,
                 tip,
                 channel_id,
                 notes,
                 resp_tx,
             } => {
+                if handoff.cancelled() {
+                    return;
+                }
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
                     Ok(tip) => tip,
                     Err(err) => {
@@ -1152,11 +1405,50 @@ where
                         return;
                     }
                 };
-                let response =
-                    Self::channel_withdrawal(tip, channel_id, &notes, state, storage, kms)
-                        .await
-                        .map(|response| TipResponse { tip, response });
+                let response = Self::channel_withdrawal(
+                    tip,
+                    channel_id,
+                    &notes,
+                    state,
+                    storage,
+                    kms,
+                    handoff.owner,
+                )
+                .await
+                .map(|response| TipResponse { tip, response });
+                let reservation = response.as_ref().ok().map(|response| {
+                    (
+                        response
+                            .response
+                            .op
+                            .inputs
+                            .iter()
+                            .copied()
+                            .map(|n| (NoteSetIndex::Channel(channel_id), n))
+                            .collect::<Vec<_>>(),
+                        response.response.reservation_id,
+                    )
+                });
+                if handoff.cancelled() {
+                    return;
+                }
+                if let Some((inputs, owner)) = &reservation
+                    && let Err(err) = state.reserve_pending_notes(inputs.iter().copied(), *owner)
+                {
+                    Self::send_err(resp_tx, err.into());
+                    return;
+                }
+                if let Some((inputs, owner)) = &reservation
+                    && !inputs.is_empty()
+                    && !handoff.acquired()
+                {
+                    state.release_pending_notes(inputs.iter().copied(), *owner);
+                    return;
+                }
                 if resp_tx.send(response).is_err() {
+                    if let Some((inputs, owner)) = reservation {
+                        state.release_pending_notes(inputs, owner);
+                    }
                     debug!(target: LOG_TARGET, "Failed to respond to ChannelWithdrawal");
                 }
             }
@@ -1184,8 +1476,19 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to SpendRoot");
                 }
             }
-            WalletMsg::ReleasePendingNotes { nullifiers } => {
-                state.release_pending_notes(nullifiers);
+            WalletMsg::ReleasePendingNotes {
+                nullifiers,
+                builder,
+            } => {
+                for owner in builder.reservation_ids() {
+                    state.release_pending_notes(nullifiers.iter().copied(), owner);
+                }
+            }
+            WalletMsg::ReleaseReservation { builder, resp_tx } => {
+                let found = builder
+                    .reservation_id()
+                    .is_some_and(|id| state.release_reservation(id));
+                let _ = resp_tx.send(found);
             }
         }
     }
@@ -1244,11 +1547,11 @@ where
     fn signing(
         job: TxSigningRequest,
         tip: HeaderId,
-        funded_notes: Vec<(NoteSetIndex, NoteNullifier)>,
+        funded_notes: ReservationJob,
+        reservation_id: Option<[u8; 32]>,
+        handoff: ReservationHandoff,
         signer: &TxSigner<Kms, RuntimeServiceId>,
-        resp_tx: Sender<
-            Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletServiceError>,
-        >,
+        resp_tx: Sender<Result<TipResponse<SignedTransaction>, WalletServiceError>>,
     ) -> PendingSigning {
         let signer = signer.clone();
         Box::pin(async move {
@@ -1257,22 +1560,25 @@ where
                 .await
                 .map(|signed_tx| TipResponse {
                     tip,
-                    response: signed_tx,
+                    response: SignedTransaction {
+                        transaction: signed_tx,
+                        reservation_id,
+                    },
                 });
             drop(permit);
 
-            let signing_failed = resp.is_err();
-            let response_delivered = resp_tx.send(resp).is_ok();
-
-            if !response_delivered {
-                debug!(target: LOG_TARGET, "Failed to respond to a signing request");
-            }
-
-            if signing_failed || !response_delivered {
-                funded_notes
-            } else {
-                Vec::new()
-            }
+            PendingCompletion::Transaction(
+                funded_notes,
+                handoff,
+                Box::new(move || {
+                    let signing_failed = resp.is_err();
+                    let response_delivered = resp_tx.send(resp).is_ok();
+                    if !response_delivered {
+                        debug!(target: LOG_TARGET, "Failed to respond to a signing request");
+                    }
+                    !signing_failed && response_delivered
+                }),
+            )
         })
     }
 
@@ -1352,7 +1658,9 @@ where
     fn funding_proof(
         (ops, witness): (Ops, Option<OpWitness>),
         tip: HeaderId,
-        funded_notes: Vec<(NoteSetIndex, NoteNullifier)>,
+        funded_notes: ReservationJob,
+        reservation_id: Option<[u8; 32]>,
+        handoff: ReservationHandoff,
         signer: &TxSigner<Kms, RuntimeServiceId>,
         resp_tx: Sender<Result<TipResponse<ProvenFunding>, WalletServiceError>>,
     ) -> PendingSigning {
@@ -1369,21 +1677,25 @@ where
             };
             let resp = proof.map(|proof| TipResponse {
                 tip,
-                response: (ops, proof),
+                response: ProvenFunding {
+                    ops,
+                    proof,
+                    reservation_id,
+                },
             });
 
-            let proving_failed = resp.is_err();
-            let response_delivered = resp_tx.send(resp).is_ok();
-
-            if !response_delivered {
-                debug!(target: LOG_TARGET, "Failed to respond to ProveFunding");
-            }
-
-            if proving_failed || !response_delivered {
-                funded_notes
-            } else {
-                Vec::new()
-            }
+            PendingCompletion::Transaction(
+                funded_notes,
+                handoff,
+                Box::new(move || {
+                    let proving_failed = resp.is_err();
+                    let response_delivered = resp_tx.send(resp).is_ok();
+                    if !response_delivered {
+                        debug!(target: LOG_TARGET, "Failed to respond to ProveFunding");
+                    }
+                    !proving_failed && response_delivered
+                }),
+            )
         })
     }
 
@@ -1706,6 +2018,7 @@ where
         (step, outputs, witness): (Step, Vec<Note>, OpWitness),
         tip: HeaderId,
         spent: Vec<(NoteSetIndex, NoteNullifier)>,
+        owner: [u8; 32],
         signer: &TxSigner<Kms, RuntimeServiceId>,
         resp_tx: Sender<Result<TipResponse<ChannelStep>, WalletServiceError>>,
     ) -> PendingSigning {
@@ -1720,21 +2033,22 @@ where
                     step,
                     proof,
                     outputs,
+                    reservation_id: owner,
                 },
             });
 
-            let proving_failed = resp.is_err();
-            let response_delivered = resp_tx.send(resp).is_ok();
-
-            if !response_delivered {
-                debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
-            }
-
-            if proving_failed || !response_delivered {
-                spent
-            } else {
-                Vec::new()
-            }
+            PendingCompletion::Channel(
+                spent,
+                owner,
+                Box::new(move || {
+                    let proving_failed = resp.is_err();
+                    let response_delivered = resp_tx.send(resp).is_ok();
+                    if !response_delivered {
+                        debug!(target: LOG_TARGET, "Failed to respond to ProveChannelStep");
+                    }
+                    !proving_failed && response_delivered
+                }),
+            )
         })
     }
 
@@ -1748,8 +2062,9 @@ where
         state: &mut ServiceState<'_>,
         storage: &StorageApi<Tx>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        owner: [u8; 32],
     ) -> Result<ChannelWithdrawal, WalletServiceError> {
-        let withdrawal = channel::build_withdrawal(tip, channel_id, notes, state)?;
+        let withdrawal = channel::build_withdrawal(tip, channel_id, notes, state, owner)?;
 
         let mut known_notes = Vec::new();
         for note in &withdrawal.opening.outputs {
@@ -2282,10 +2597,7 @@ where
         Ok(())
     }
 
-    fn send_err<T: std::fmt::Debug>(
-        tx: Sender<Result<T, WalletServiceError>>,
-        err: WalletServiceError,
-    ) {
+    fn send_err<T: fmt::Debug>(tx: Sender<Result<T, WalletServiceError>>, err: WalletServiceError) {
         if let Err(msg) = tx.send(Err(err)) {
             debug!(target: LOG_TARGET, msg = ?msg, "Wallet failed to send error response");
         }

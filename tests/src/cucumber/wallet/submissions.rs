@@ -852,7 +852,7 @@ pub(crate) async fn submit_signed_user_wallet_submissions_to_nodes(
                     let signed_tx = Arc::clone(&signed_tx);
                     tokio::spawn(async move {
                         let result = timeout(
-                            Duration::from_secs(15),
+                            Duration::from_secs(60),
                             node_client.submit_transaction(signed_tx.as_ref()),
                         )
                         .await;

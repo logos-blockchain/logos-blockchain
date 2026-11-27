@@ -32,10 +32,7 @@ use lb_node::{
         CryptarchiaService, WalletService as NodeWalletService, sdp::wallet::split_root,
     },
 };
-use lb_wallet_service::{
-    LeaderAgedNotesInfo, TipResponse,
-    api::{WalletApi, added_nullifiers},
-};
+use lb_wallet_service::{LeaderAgedNotesInfo, TipResponse, api::WalletApi};
 use overwatch::overwatch::OverwatchHandle;
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -708,7 +705,7 @@ pub(crate) fn transfer_funds_sync(
         // `post_transactions_transfer_funds`. TODO: Abstract into a common API
         // The created recipient note is returned with the transfer: only the
         // wallet's own recipient keys adopt it, another recipient imports it.
-        let (signed_tx, recipient_note) = api
+        let (signed_tx, recipient_note, _reservation_ids) = api
             .transfer_funds(
                 Some(tip),
                 change_public_key,
@@ -969,6 +966,7 @@ pub(crate) fn channel_deposit_sync(
                     format!("Failed to split the deposit note: {error}"),
                 )
             })?;
+        let mut split_guard = api.guard_reservations(&split_builder);
         // The wallet holds the notes of the split until the transaction spends
         // them, so a deposit that fails before signing releases them.
         let deposit = async {
@@ -1012,8 +1010,11 @@ pub(crate) fn channel_deposit_sync(
         let tx_builder = match deposit {
             Ok(tx_builder) => tx_builder,
             Err(error) => {
-                api.release_pending_notes(split_builder.note_set_nullifiers_consumed().collect())
-                    .await;
+                api.release_pending_notes(
+                    &split_builder,
+                    split_builder.note_set_nullifiers_consumed().collect(),
+                )
+                .await;
                 return Err(error);
             }
         };
@@ -1023,6 +1024,8 @@ pub(crate) fn channel_deposit_sync(
             tip,
             response: funded_tx_builder,
         } = fund_deposit(&api, split_tip, tx_builder, funding_public_key).await?;
+        let mut funded_guard = api.guard_reservations(&funded_tx_builder);
+        split_guard.disarm();
 
         // 4. Sign against the tip the transaction is funded at.
         let signed_tx = api
@@ -1034,9 +1037,11 @@ pub(crate) fn channel_deposit_sync(
                     format!("Failed to sign deposit tx: {error}"),
                 )
             })?
-            .response;
+            .response
+            .transaction;
 
         // 5. Submit to the mempool.
+        funded_guard.disarm();
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Hashable::hash).await {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
@@ -1233,16 +1238,20 @@ pub(crate) fn wallet_fund_tx_sync(
                 )
             })?;
 
+        let mut reservation_guard = api.guard_reservations(&funded_tx_builder);
+
         if let Err(error) = check_tx_fee(&funded_tx_builder, request.max_tx_fee) {
-            // The wallet reserved the notes of the funding, which no
-            // transaction will spend. The inputs of the caller's own ops may be
-            // reserved by another request, so they are kept.
-            api.release_pending_notes(added_nullifiers(&request.tx_builder, &funded_tx_builder))
-                .await;
+            // Abandon the inputs transferred to this funded transaction.
+            api.release_pending_notes(
+                &funded_tx_builder,
+                funded_tx_builder.reservation_inputs().collect(),
+            )
+            .await;
             return Err(error);
         }
 
-        let (funded_tx, transfer_proof) = api
+        let mut reservation_ids = funded_tx_builder.reservation_ids().collect::<Vec<_>>();
+        let proven = api
             .prove_funding(Some(tip), funded_tx_builder)
             .await
             .map_err(|error| {
@@ -1252,11 +1261,16 @@ pub(crate) fn wallet_fund_tx_sync(
                 )
             })?
             .response;
+        let funded_tx = proven.ops;
+        let transfer_proof = proven.proof;
+        reservation_ids.extend(proven.reservation_id);
+        reservation_guard.disarm();
 
         Ok(WalletFundResponseBody {
             tip,
             funded_tx,
             transfer_proof,
+            reservation_ids,
         })
     })
 }
@@ -1278,6 +1292,36 @@ fn check_tx_fee(builder: &MantleTxBuilder, max_tx_fee: GasCost) -> StatusResult<
 }
 
 pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
+pub type FfiReleaseReservationResult = FfiStatusResult<bool>;
+
+/// Requests release of an owned reservation returned by a wallet operation.
+///
+/// # Safety
+/// Both pointers must be valid, and `reservation_id` must point to 32 bytes.
+#[panic_to_error]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_release_reservation(
+    node: *const LogosBlockchainNode,
+    reservation_id: *const [u8; 32],
+) -> FfiReleaseReservationResult {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(reservation_id);
+    let node = unsafe { &*node };
+    let reservation_id = unsafe { *reservation_id };
+    let runtime = unwrap_or_return_error!(node.get_runtime_handle());
+    let result = runtime.block_on(async {
+        let handle = node.get_overwatch_handle();
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
+        api.release_reservation(reservation_id).await
+    });
+    match result {
+        Ok(found) => FfiReleaseReservationResult::ok(found),
+        Err(error) => FfiReleaseReservationResult::err(OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Failed to release wallet reservation: {error}"),
+        )),
+    }
+}
 
 /// Funds a transaction from the node's wallet.
 ///

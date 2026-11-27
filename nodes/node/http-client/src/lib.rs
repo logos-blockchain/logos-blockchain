@@ -32,7 +32,9 @@ use lb_http_api_common::{
         wallet::{
             aged_notes::LeaderAgedNotesResponseBody,
             balance::WalletBalanceResponseBody,
-            fund::{WalletFundRequestBody, WalletFundResponseBody},
+            fund::{
+                WalletFundRequestBody, WalletFundResponseBody, WalletReleaseReservationRequestBody,
+            },
             import::WalletImportNoteRequestBody,
             transfer_funds::{WalletPrepareTransferResponseBody, WalletTransferFundsRequestBody},
         },
@@ -44,7 +46,9 @@ use lb_http_api_common::{
         CRYPTARCHIA_LIB_STREAM, LEADER_AGED_NOTES, MANTLE_GAS_PRICES, MANTLE_LIMITS,
         MANTLE_SDP_FINALIZED_DECLARATION, MANTLE_SDP_FINALIZED_DECLARATIONS, MEMPOOL_ADD_TX,
         NODE_VERSION, SDP_POST_DECLARATION, TIME_INFO,
-        wallet::{BALANCE, FUND, IMPORT_NOTE, TRANSACTIONS_PREPARE_TRANSFER_FUNDS},
+        wallet::{
+            BALANCE, FUND, IMPORT_NOTE, RELEASE_RESERVATION, TRANSACTIONS_PREPARE_TRANSFER_FUNDS,
+        },
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
@@ -814,6 +818,22 @@ impl CommonHttpClient {
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await
+    }
+
+    /// Request release of a reservation capability returned by the wallet.
+    pub async fn release_wallet_reservation(
+        &self,
+        base_url: Url,
+        reservation_id: [u8; 32],
+    ) -> Result<bool, Error> {
+        let request_url = base_url
+            .join(RELEASE_RESERVATION.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.post(
+            request_url,
+            &WalletReleaseReservationRequestBody { reservation_id },
+        )
+        .await
     }
 
     /// Withdraw channel notes the node's wallet holds to the ledger.

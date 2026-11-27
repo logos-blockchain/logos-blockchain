@@ -68,6 +68,7 @@ macro_rules! api_routes {
             post lb_http_api_common::paths::wallet::TRANSACTIONS_PREPARE_TRANSFER_FUNDS => crate::api::handlers::wallet::prepare_transfer_funds, wallet::prepare_transfer_funds::<WalletService, RuntimeServiceId>;
             post lb_http_api_common::paths::wallet::SIGN_TX_ED25519 => crate::api::handlers::wallet::sign_tx_ed25519, wallet::sign_tx_ed25519::<WalletService, MempoolStorageAdapter, _>;
             post lb_http_api_common::paths::wallet::FUND => crate::api::handlers::wallet::fund, wallet::fund::<WalletService, MempoolStorageAdapter, _>;
+            post lb_http_api_common::paths::wallet::RELEASE_RESERVATION => crate::api::handlers::wallet::release_reservation, wallet::release_reservation::<WalletService, _>;
             post lb_http_api_common::paths::wallet::IMPORT_NOTE => crate::api::handlers::wallet::import_note, wallet::import_note::<WalletService, _>;
             put lb_http_api_common::paths::admin::TRACING_FILTER => crate::api::tracing::reload_tracing_filter, reload_tracing_filter::<RuntimeServiceId>;
             get lb_http_api_common::paths::BLOCKS_STREAM => crate::api::handlers::blocks_stream, blocks_stream::<CryptarchiaConsensus<_, _, _, _>, RuntimeServiceId>;

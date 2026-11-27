@@ -1,17 +1,17 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, mem};
 
 use lb_chain_service::Epoch;
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, OpProof, SignedOps, Value,
+        Note, SignedOps, Value,
         gas::GasCost,
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
         notes::{NoteCommitment, NoteNullifier},
         ops::channel::ChannelId,
         transactions::{
-            MantleTxBuilder, Ops, TxBuilderError, hash::TxHash, states::Preverified,
+            MantleTxBuilder, TxBuilderError, hash::TxHash, states::Preverified,
             tx_list::ops::OpsContext,
         },
     },
@@ -27,11 +27,15 @@ use overwatch::{
         relay::{OutboundRelay, OutboundRelayError},
     },
 };
-use tokio::sync::oneshot::{self, error::RecvError};
+use tokio::{
+    runtime::Handle,
+    sync::oneshot::{self, error::RecvError},
+};
 
 use crate::{
-    AgedNote, ChannelStep, ChannelStepRequest, ChannelWithdrawal, LeaderAgedNotesInfo, TipResponse,
-    WalletMsg, WalletServiceError, WalletServiceSettings,
+    AgedNote, ChannelStep, ChannelStepRequest, ChannelWithdrawal, LeaderAgedNotesInfo,
+    ProvenFunding, ReservationHandoff, SignedTransaction, TipResponse, WalletMsg,
+    WalletServiceError, WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -90,6 +94,62 @@ where
     }
 }
 
+/// Releases acquired capabilities if the owning async operation is cancelled.
+pub struct ReservationGuard {
+    relay: OutboundRelay<WalletMsg>,
+    reservation_ids: Vec<[u8; 32]>,
+    runtime: Option<Handle>,
+}
+
+impl ReservationGuard {
+    pub fn disarm(&mut self) {
+        self.reservation_ids.clear();
+    }
+}
+
+impl Drop for ReservationGuard {
+    fn drop(&mut self) {
+        if self.reservation_ids.is_empty() {
+            return;
+        }
+        let ids = mem::take(&mut self.reservation_ids);
+        let relay = self.relay.clone();
+        if let Some(runtime) = self.runtime.clone().or_else(|| Handle::try_current().ok()) {
+            runtime.spawn(async move {
+                for id in ids {
+                    let (resp_tx, _rx) = oneshot::channel();
+                    if let Err(err) = relay.send(WalletMsg::ReleaseReservation {
+                        builder: MantleTxBuilder::new().with_reservation_id(id),
+                        resp_tx,
+                    }).await {
+                        tracing::warn!(target: crate::LOG_TARGET, ?err, "Failed to release a cancelled reservation");
+                    }
+                }
+            });
+        }
+    }
+}
+
+struct HandoffGuard {
+    handoff: ReservationHandoff,
+    reservation: ReservationGuard,
+}
+
+impl HandoffGuard {
+    fn complete(&mut self) {
+        self.handoff.complete();
+        self.reservation.disarm();
+    }
+}
+
+impl Drop for HandoffGuard {
+    fn drop(&mut self) {
+        if !self.handoff.cancel() {
+            self.reservation.disarm();
+        }
+    }
+}
+
 /// The notes `after` spends that `before`, the builder it was built from, does
 /// not: the inputs a split or a funding added.
 #[must_use]
@@ -111,6 +171,24 @@ where
     Wallet: WalletServiceData,
     RuntimeServiceId: AsServiceId<Wallet> + std::fmt::Debug + std::fmt::Display + Sync,
 {
+    /// Keep a reservation alive only while this operation remains in progress.
+    #[must_use]
+    pub fn guard_reservations(&self, builder: &MantleTxBuilder) -> ReservationGuard {
+        ReservationGuard {
+            relay: self.relay.clone(),
+            reservation_ids: builder.reservation_ids().collect(),
+            runtime: Handle::try_current().ok(),
+        }
+    }
+
+    fn reservation_handoff(&self) -> HandoffGuard {
+        let handoff = ReservationHandoff::new();
+        let builder = MantleTxBuilder::new().with_reservation_id(handoff.owner);
+        HandoffGuard {
+            handoff,
+            reservation: self.guard_reservations(&builder),
+        }
+    }
     #[must_use]
     pub const fn new(relay: OutboundRelay<Wallet::Message>) -> Self {
         Self {
@@ -154,6 +232,11 @@ where
     /// effective priority tip. The percentage is not capped at 100. A
     /// `max_tx_fee` cuts the reserve down so the whole fee stays within it,
     /// never below the mandatory fee.
+    ///
+    /// If funding fails before ownership transfers, the original builder's
+    /// reservations remain valid until explicitly released or expired. Keep a
+    /// copy of the builder to retry. Successful funding transfers ownership;
+    /// subsequent requests must use the returned builder instead.
     pub async fn fund_tx(
         &self,
         tip: Option<HeaderId>,
@@ -164,9 +247,11 @@ where
         max_tx_fee: Option<GasCost>,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
+        let mut handoff = self.reservation_handoff();
 
         self.relay
             .send(WalletMsg::FundTx {
+                handoff: handoff.handoff.clone(),
                 tip,
                 tx_builder,
                 change_pk,
@@ -177,7 +262,9 @@ where
             })
             .await?;
 
-        Ok(rx.await??)
+        let response = rx.await??;
+        handoff.complete();
+        Ok(response)
     }
 
     /// The built Operations and the proof of their funding Transfer, `None`
@@ -186,18 +273,22 @@ where
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-    ) -> Result<TipResponse<(Ops, Option<OpProof>)>, WalletApiError> {
+    ) -> Result<TipResponse<ProvenFunding>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
+        let mut handoff = self.reservation_handoff();
 
         self.relay
             .send(WalletMsg::ProveFunding {
+                handoff: handoff.handoff.clone(),
                 tip,
                 tx_builder,
                 resp_tx,
             })
             .await?;
 
-        Ok(rx.await??)
+        let response = rx.await??;
+        handoff.complete();
+        Ok(response)
     }
 
     /// Pushes a Transfer giving `owner` a note of exactly `value`, which a
@@ -211,9 +302,11 @@ where
         funding_pks: Vec<ZkPublicKey>,
     ) -> Result<TipResponse<(MantleTxBuilder, KnownNote)>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
+        let mut handoff = self.reservation_handoff();
 
         self.relay
             .send(WalletMsg::PrepareExactNote {
+                handoff: handoff.handoff.clone(),
                 tip,
                 tx_builder,
                 value,
@@ -223,7 +316,9 @@ where
             })
             .await?;
 
-        Ok(rx.await??)
+        let response = rx.await??;
+        handoff.complete();
+        Ok(response)
     }
 
     pub async fn owned_note(
@@ -307,14 +402,18 @@ where
         request: ChannelStepRequest,
     ) -> Result<TipResponse<ChannelStep>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
+        let mut handoff = self.reservation_handoff();
         self.relay
             .send(WalletMsg::ProveChannelStep {
+                handoff: handoff.handoff.clone(),
                 tip,
                 request,
                 resp_tx,
             })
             .await?;
-        Ok(rx.await??)
+        let response = rx.await??;
+        handoff.complete();
+        Ok(response)
     }
 
     /// A withdrawal of the channel notes `notes` of the wallet, each released
@@ -326,15 +425,19 @@ where
         notes: Vec<NoteCommitment>,
     ) -> Result<TipResponse<ChannelWithdrawal>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
+        let mut handoff = self.reservation_handoff();
         self.relay
             .send(WalletMsg::ChannelWithdrawal {
+                handoff: handoff.handoff.clone(),
                 tip,
                 channel_id,
                 notes,
                 resp_tx,
             })
             .await?;
-        Ok(rx.await??)
+        let response = rx.await??;
+        handoff.complete();
+        Ok(response)
     }
 
     /// The ledger set root every spend from `tip` names. See
@@ -352,14 +455,20 @@ where
 
     /// Releases the notes of `nullifiers`, which the wallet reserved for a
     /// split or a funding of a transaction that will not be submitted, so
-    /// that they fund the next request. A caller only releases the notes
-    /// its own request reserved, since a reservation is keyed by the note
-    /// alone. If the release does not reach the wallet, the notes stay
-    /// reserved until their reservation expires.
-    pub async fn release_pending_notes(&self, nullifiers: Vec<(NoteSetIndex, NoteNullifier)>) {
+    /// that they fund the next request. Only reservations owned by the
+    /// builder's current claims are released. If the release does not reach
+    /// the wallet, the notes stay reserved until their reservation expires.
+    pub async fn release_pending_notes(
+        &self,
+        builder: &MantleTxBuilder,
+        nullifiers: Vec<(NoteSetIndex, NoteNullifier)>,
+    ) {
         if let Err(err) = self
             .relay
-            .send(WalletMsg::ReleasePendingNotes { nullifiers })
+            .send(WalletMsg::ReleasePendingNotes {
+                nullifiers,
+                builder: builder.clone(),
+            })
             .await
         {
             tracing::warn!(
@@ -368,6 +477,22 @@ where
                 "Failed to release the pending notes of a transaction"
             );
         }
+    }
+
+    /// Request release of all inputs owned by a reservation capability.
+    /// Returns whether that capability currently owns any input.
+    pub async fn release_reservation(
+        &self,
+        reservation_id: [u8; 32],
+    ) -> Result<bool, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+        self.relay
+            .send(WalletMsg::ReleaseReservation {
+                builder: MantleTxBuilder::new().with_reservation_id(reservation_id),
+                resp_tx,
+            })
+            .await?;
+        Ok(rx.await?)
     }
 
     pub async fn get_tx_context(
@@ -390,7 +515,10 @@ where
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
-    ) -> Result<TipResponse<(SignedOps<Preverified, StandardMode>, Note)>, WalletApiError> {
+    ) -> Result<
+        TipResponse<(SignedOps<Preverified, StandardMode>, Note, Vec<[u8; 32]>)>,
+        WalletApiError,
+    > {
         let note = Note::new(amount, crate::random_nonce(), recipient_pk);
         if self.get_known_addresses().await?.contains(&recipient_pk) {
             self.import_note(note, NoteSetIndex::Ledger).await?;
@@ -399,12 +527,19 @@ where
         let funded_tx_builder = self
             .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, None, None)
             .await?;
+        let mut reservation_ids = funded_tx_builder
+            .response
+            .reservation_ids()
+            .collect::<Vec<_>>();
+        let mut reservation_guard = self.guard_reservations(&funded_tx_builder.response);
         let TipResponse { tip, response } = self
             .sign_tx(Some(funded_tx_builder.tip), funded_tx_builder.response)
             .await?;
+        reservation_ids.extend(response.reservation_id);
+        reservation_guard.disarm();
         Ok(TipResponse {
             tip,
-            response: (response, note),
+            response: (response.transaction, note, reservation_ids),
         })
     }
 
@@ -412,18 +547,22 @@ where
         &self,
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
-    ) -> Result<TipResponse<SignedOps<Preverified, StandardMode>>, WalletApiError> {
+    ) -> Result<TipResponse<SignedTransaction>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
+        let mut handoff = self.reservation_handoff();
 
         self.relay
             .send(WalletMsg::SignTx {
+                handoff: handoff.handoff.clone(),
                 tip,
                 tx_builder,
                 resp_tx,
             })
             .await?;
 
-        Ok(rx.await??)
+        let response = rx.await??;
+        handoff.complete();
+        Ok(response)
     }
 
     pub async fn sign_tx_with_ed25519(
@@ -487,7 +626,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::fmt::{self, Display, Formatter};
+    use std::{
+        fmt::{self, Display, Formatter},
+        thread,
+    };
 
     use lb_core::mantle::{
         ops::channel::ChannelKeyIndex,
@@ -600,6 +742,223 @@ mod tests {
                 .configuration_threshold(&ChannelId::from([1u8; 32])),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn dropping_a_reservation_guard_requests_owned_cleanup() {
+        let (msg_sender, mut msg_receiver) = mpsc::channel(1);
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let builder = MantleTxBuilder::new().with_reservation_id([7; 32]);
+        drop(api.guard_reservations(&builder));
+        let Some(WalletMsg::ReleaseReservation { builder, .. }) = msg_receiver.recv().await else {
+            panic!("expected a reservation release request");
+        };
+        assert_eq!(builder.reservation_id(), Some([7; 32]));
+
+        let builder = MantleTxBuilder::new().with_reservation_id([6; 32]);
+        let guard = api.guard_reservations(&builder);
+        thread::spawn(move || drop(guard)).join().unwrap();
+        let Some(WalletMsg::ReleaseReservation { builder, .. }) = msg_receiver.recv().await else {
+            panic!("expected cleanup from outside the runtime");
+        };
+        assert_eq!(builder.reservation_id(), Some([6; 32]));
+
+        let builder = MantleTxBuilder::new().with_reservation_id([8; 32]);
+        let mut guard = api.guard_reservations(&builder);
+        guard.disarm();
+        drop(guard);
+        assert!(matches!(
+            msg_receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_a_response_is_queued_releases_its_reservation() {
+        let (msg_sender, mut msg_receiver) = mpsc::channel(4);
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let key = ZkPublicKey::new(Fr::from(1u64));
+        let task = tokio::spawn(async move {
+            api.fund_tx(None, MantleTxBuilder::new(), key, vec![key], None, None)
+                .await
+        });
+        let Some(WalletMsg::FundTx {
+            handoff,
+            tx_builder,
+            resp_tx,
+            ..
+        }) = msg_receiver.recv().await
+        else {
+            panic!("expected funding");
+        };
+        assert!(handoff.acquired());
+        resp_tx
+            .send(Ok(TipResponse {
+                tip: HeaderId::from([0; 32]),
+                response: tx_builder.with_reservation_id(handoff.owner),
+            }))
+            .unwrap();
+        task.abort();
+        drop(task.await);
+        let Some(WalletMsg::ReleaseReservation { builder, .. }) = msg_receiver.recv().await else {
+            panic!("expected cancellation cleanup");
+        };
+        assert_eq!(builder.reservation_id(), Some(handoff.owner));
+    }
+
+    #[tokio::test]
+    async fn cancelled_queued_signing_and_proving_handoffs_are_not_delivered() {
+        use lb_core::{era::ForkDigest, mantle::transactions::OpProofs};
+
+        for proving in [false, true] {
+            for acquired in [false, true] {
+                let (msg_sender, mut msg_receiver) = mpsc::channel(4);
+                let api = WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(
+                    msg_sender,
+                ));
+                let task = tokio::spawn(async move {
+                    if proving {
+                        drop(api.prove_funding(None, MantleTxBuilder::new()).await);
+                    } else {
+                        drop(api.sign_tx(None, MantleTxBuilder::new()).await);
+                    }
+                });
+                let message = msg_receiver.recv().await.unwrap();
+                let ops = MantleTxBuilder::new()
+                    .build(ForkDigest::new([0x11; 32]))
+                    .unwrap();
+                let handoff = match message {
+                    WalletMsg::SignTx {
+                        handoff, resp_tx, ..
+                    } => {
+                        if acquired {
+                            assert!(handoff.acquired());
+                        }
+                        let transaction = SignedOps::from_parts(ops, OpProofs::empty())
+                            .unwrap()
+                            .preverify()
+                            .unwrap();
+                        assert!(
+                            resp_tx
+                                .send(Ok(TipResponse {
+                                    tip: HeaderId::from([0; 32]),
+                                    response: SignedTransaction {
+                                        transaction,
+                                        reservation_id: acquired.then_some(handoff.owner)
+                                    },
+                                }))
+                                .is_ok()
+                        );
+                        handoff
+                    }
+                    WalletMsg::ProveFunding {
+                        handoff, resp_tx, ..
+                    } => {
+                        if acquired {
+                            assert!(handoff.acquired());
+                        }
+                        assert!(
+                            resp_tx
+                                .send(Ok(TipResponse {
+                                    tip: HeaderId::from([0; 32]),
+                                    response: ProvenFunding {
+                                        ops,
+                                        proof: None,
+                                        reservation_id: acquired.then_some(handoff.owner)
+                                    },
+                                }))
+                                .is_ok()
+                        );
+                        handoff
+                    }
+                    _ => panic!("expected signing or proving"),
+                };
+                task.abort();
+                drop(task.await);
+                assert!(handoff.cancelled());
+                if acquired {
+                    let Some(WalletMsg::ReleaseReservation { builder, .. }) =
+                        msg_receiver.recv().await
+                    else {
+                        panic!("expected newly acquired reservation cleanup");
+                    };
+                    assert_eq!(builder.reservation_id(), Some(handoff.owner));
+                } else {
+                    assert!(msg_receiver.try_recv().is_err());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_acquisition_cannot_claim_an_existing_reservation() {
+        let (msg_sender, mut msg_receiver) = mpsc::channel(4);
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let key = ZkPublicKey::new(Fr::from(1u64));
+        let task = tokio::spawn(async move {
+            api.fund_tx(None, MantleTxBuilder::new(), key, vec![key], None, None)
+                .await
+        });
+        let Some(WalletMsg::FundTx { handoff, .. }) = msg_receiver.recv().await else {
+            panic!("expected funding");
+        };
+        task.abort();
+        drop(task.await);
+        assert!(!handoff.acquired());
+        assert!(msg_receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelling_transfer_during_signing_releases_the_funded_claim() {
+        use std::time::Duration;
+
+        use tokio::time::timeout;
+
+        let (msg_sender, mut msg_receiver) = mpsc::channel(8);
+        let api =
+            WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
+        let key = ZkPublicKey::new(Fr::from(1u64));
+        let task =
+            tokio::spawn(async move { api.transfer_funds(None, key, vec![key], key, 1).await });
+        let Some(WalletMsg::GetKnownAddresses { resp_tx }) = msg_receiver.recv().await else {
+            panic!("expected addresses")
+        };
+        resp_tx.send(Ok(Vec::new())).unwrap();
+        let Some(WalletMsg::FundTx {
+            tx_builder,
+            resp_tx,
+            ..
+        }) = msg_receiver.recv().await
+        else {
+            panic!("expected funding")
+        };
+        resp_tx
+            .send(Ok(TipResponse {
+                tip: HeaderId::from([0; 32]),
+                response: tx_builder.with_reservation_id([9; 32]),
+            }))
+            .unwrap();
+        let Some(WalletMsg::SignTx {
+            resp_tx: pending_signing,
+            ..
+        }) = msg_receiver.recv().await
+        else {
+            panic!("expected signing")
+        };
+        task.abort();
+        drop(task.await);
+        let Some(WalletMsg::ReleaseReservation { builder, .. }) =
+            timeout(Duration::from_secs(5), msg_receiver.recv())
+                .await
+                .unwrap()
+        else {
+            panic!("expected cancellation cleanup")
+        };
+        assert_eq!(builder.reservation_id(), Some([9; 32]));
+        drop(pending_signing);
     }
 
     #[tokio::test]
