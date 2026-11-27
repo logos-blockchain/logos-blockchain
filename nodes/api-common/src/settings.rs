@@ -15,11 +15,12 @@ pub struct AxumBackendSettings {
     /// API can serve it without asking a running service for a value that
     /// cannot change.
     pub chain_id: ChainId,
-    /// The fork digest of every era of the deployment, era `n` at position
-    /// `n`, from which the API serves the one in force.
+    /// The fork digest the transactions of every era of the deployment carry,
+    /// era `n` at position `n`, from which the API serves the one in force.
+    /// None for a legacy era, whose transactions carry no fork digest.
     ///
     /// Not user configurable, like `chain_id`.
-    pub fork_digests: Vec<ForkDigest>,
+    pub fork_digests: Vec<Option<ForkDigest>>,
     /// Socket where the server will be listening on for incoming requests.
     pub address: SocketAddr,
     /// Browser origins allowed to use this server. A page from any other

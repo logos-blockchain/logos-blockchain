@@ -1715,8 +1715,8 @@ impl CucumberWorld {
     }
 
     /// The fork digest a transaction signed now carries, as the first node to
-    /// answer reports it.
-    pub async fn fork_digest_in_force(&self) -> Result<ForkDigest, StepError> {
+    /// answer reports it: none in a legacy era.
+    pub async fn fork_digest_in_force(&self) -> Result<Option<ForkDigest>, StepError> {
         for node_info in self.nodes_info.values() {
             if let Ok(fork_digest) = node_info.client.chain_fork().await {
                 return Ok(fork_digest);

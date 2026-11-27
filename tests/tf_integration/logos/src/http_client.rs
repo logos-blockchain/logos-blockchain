@@ -87,9 +87,9 @@ impl NodeHttpClient {
         .await
     }
 
-    /// The fork digest of the era the node's clock is in, which a
-    /// transaction signed now carries.
-    pub async fn chain_fork(&self) -> Result<ForkDigest, Error> {
+    /// The fork digest a transaction signed now carries: none in a legacy
+    /// era.
+    pub async fn chain_fork(&self) -> Result<Option<ForkDigest>, Error> {
         self.with_timeout(
             "Chain fork request",
             self.http_client.chain_fork(self.base_url.clone()),

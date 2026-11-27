@@ -455,7 +455,7 @@ impl CommonHttpClient {
             .map(|body| body.chain_id)
     }
 
-    pub async fn chain_fork(&self, base_url: Url) -> Result<ForkDigest, Error> {
+    pub async fn chain_fork(&self, base_url: Url) -> Result<Option<ForkDigest>, Error> {
         let request_url = base_url
             .join(CHAIN_FORK.trim_start_matches('/'))
             .map_err(Error::Url)?;

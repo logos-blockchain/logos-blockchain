@@ -1950,7 +1950,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::new(source),
             priority_fee_percent,
-            ForkDigest::new([0x11; 32]),
+            Some(ForkDigest::new([0x11; 32])),
         )
     }
 
@@ -1977,7 +1977,7 @@ mod cache_removal_tests {
             intent,
             WalletFundingResources::fee_sponsored(sender, fee_sponsor),
             0,
-            ForkDigest::new([0x11; 32]),
+            Some(ForkDigest::new([0x11; 32])),
         )
     }
 

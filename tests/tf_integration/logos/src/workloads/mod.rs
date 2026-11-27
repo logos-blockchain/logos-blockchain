@@ -18,10 +18,10 @@ use crate::{BlockFeed, BlockRecord, DeploymentPlan, LbcEnv, NodeHttpClient};
 pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
 
 /// The fork digest a transaction signed now carries, as a node of the cluster
-/// reports it.
+/// reports it: none in a legacy era.
 pub(crate) async fn fork_digest_in_force(
     ctx: &RunContext<AppHostEnv>,
-) -> Result<ForkDigest, DynError> {
+) -> Result<Option<ForkDigest>, DynError> {
     let client = ctx
         .lbc_clients()?
         .into_iter()
