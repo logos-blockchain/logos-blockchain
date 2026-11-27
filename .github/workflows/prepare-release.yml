@@ -130,6 +130,7 @@ jobs:
     needs:
       - configure-version
       - build
+      - build-windows
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.configure-version.outputs.version }}
@@ -215,6 +216,8 @@ jobs:
             arch: aarch64
           - os: macos
             arch: aarch64
+          - os: windows
+            arch: x86_64
     env:
       UPLOAD_URL: ${{ needs.create-draft-release.outputs.upload_url }}
       BINARY_NAME: logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}
