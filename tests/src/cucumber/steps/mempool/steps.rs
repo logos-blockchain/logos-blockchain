@@ -494,7 +494,7 @@ async fn step_prepare_transfer_transaction(
 }
 
 #[when(
-    expr = "I prepare transfer transaction {string} of {int} LGO from wallet {string} to wallet {string} proven at the genesis block"
+    expr = "I prepare transfer transaction {string} of {int} LGO from wallet {string} to wallet {string} proven and priced at the genesis block"
 )]
 async fn step_prepare_genesis_anchored_transfer_transaction(
     world: &mut CucumberWorld,

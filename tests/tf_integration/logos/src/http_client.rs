@@ -78,7 +78,7 @@ impl NodeHttpClient {
         Self {
             base_url,
             http_client: CommonHttpClient::new(basic_auth),
-            timeout: Duration::from_secs(15),
+            timeout: Duration::from_secs(60),
         }
     }
 
