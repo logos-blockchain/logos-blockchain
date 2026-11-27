@@ -217,18 +217,19 @@ mod tests {
             note_set::CommitmentMmr,
             notes::{NoteCommitment, OutputCommitments, derive_note_nullifier},
             ops::{
-                NoOpProof, ZkTransferProof,
-                program::ProgramRegisterOp,
+                ZkTransferProof,
                 transfer::{TransferOp, test_utils::prove_transfer},
             },
-            programs::ProgramVerificationKey,
             traits::StorageSize,
             transactions::{OpProofs, Ops, TxList, states::Unverified},
         },
     };
-    use lb_groth16::{AdditiveGroup as _, Fr, test_utils::three_input_setup};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_service::keys::ZkKey;
-    use lb_ledger::Config;
+    use lb_ledger::{
+        Config,
+        config::{ExecutionMarketConfig, MaxGasPerBlock},
+    };
 
     use super::*;
     use crate::{leadership, txs_for_block};
@@ -245,20 +246,12 @@ mod tests {
             .collect()
     }
 
-    // Program registrations per transaction: each one costs 15114 gas plus its
-    // bytes, so that six transactions fit in the block Execution Gas limit of
-    // 3_137_798 and a seventh does not.
-    const PROGRAM_REGISTRATIONS_PER_TX: usize = 32;
-
-    // Each transaction pays its fees with one Transfer and fills its execution
-    // gas with Program registrations, which carry no proof, so only one
-    // ZkTransfer is proven per transaction.
-    fn gas_heavy_transactions(
+    // One transaction per funding note, a Transfer spending it whole.
+    fn transfer_transactions(
         funding_notes: &[Note],
         funding_key: &ZkKey,
         commitment_root: Fr,
     ) -> Vec<SignedOps<Preverified, StandardMode>> {
-        let verification_key = ProgramVerificationKey::try_from(&three_input_setup(1).0).unwrap();
         let mut mmr = CommitmentMmr::new();
         let mut paths = Vec::new();
         for note in funding_notes {
@@ -272,24 +265,16 @@ mod tests {
             .iter()
             .zip(paths)
             .map(|(note, path)| {
-                let ops = TxList::try_from_iter(
-                    std::iter::once(Op::Transfer(TransferOp::new(
-                        [derive_note_nullifier(
-                            &note.commitment(),
-                            &funding_key.nullifier_key(),
-                        )]
-                        .into(),
-                        OutputCommitments::default(),
-                        commitment_root,
-                        note.value,
-                    )))
-                    .chain(std::iter::repeat_n(
-                        Op::ProgramRegister(ProgramRegisterOp {
-                            verification_key: verification_key.clone(),
-                        }),
-                        PROGRAM_REGISTRATIONS_PER_TX,
-                    )),
-                )
+                let ops = TxList::try_from_iter(std::iter::once(Op::Transfer(TransferOp::new(
+                    [derive_note_nullifier(
+                        &note.commitment(),
+                        &funding_key.nullifier_key(),
+                    )]
+                    .into(),
+                    OutputCommitments::default(),
+                    commitment_root,
+                    note.value,
+                ))))
                 .map(|ops| Ops::new(ForkDigest::new([0x11; 32]), ops))
                 .unwrap();
                 let transfer_proof = prove_transfer(
@@ -298,13 +283,9 @@ mod tests {
                     commitment_root,
                     ops.hash().to_fr(),
                 );
-                let proofs = OpProofs::try_from_iter(
-                    std::iter::once(OpProof::ZkTransfer(ZkTransferProof::new(transfer_proof)))
-                        .chain(std::iter::repeat_n(
-                            OpProof::None(NoOpProof),
-                            PROGRAM_REGISTRATIONS_PER_TX,
-                        )),
-                )
+                let proofs = OpProofs::try_from_iter(std::iter::once(OpProof::ZkTransfer(
+                    ZkTransferProof::new(transfer_proof),
+                )))
                 .unwrap();
                 SignedOps::<Unverified, StandardMode>::from_parts(ops, proofs)
                     .unwrap()
@@ -330,7 +311,7 @@ mod tests {
             );
             let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
             let transaction =
-                gas_heavy_transactions(&funding_notes, &funding_key, commitment_root).remove(0);
+                transfer_transactions(&funding_notes, &funding_key, commitment_root).remove(0);
             (
                 select_transactions(
                     ledger_state,
@@ -355,22 +336,41 @@ mod tests {
     fn gas_limited_selection_returns_canonically_applicable_prefix() {
         const CANDIDATE_COUNT: usize = 7;
 
-        let config = leadership::test_config();
-        let eras = leadership::single_era(config.clone());
         let funding_key = ZkKey::zero();
         let funding_notes = funding_notes(&funding_key, CANDIDATE_COUNT);
+        let ledger_state = LedgerState::from_notes(
+            funding_notes.iter().copied(),
+            &leadership::test_config(),
+            &leadership::genesis_parameters(),
+        );
+        let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
+        let candidates = transfer_transactions(&funding_notes, &funding_key, commitment_root);
+        let gas_context = ledger_state
+            .tx_context(leadership::test_config().gas_profile)
+            .gas_context;
+        let individual_gas = candidates[0]
+            .op_refs()
+            .execution_gas_consumption(&gas_context)
+            .unwrap();
+        // A block takes six of the candidates and not a seventh.
+        let base = leadership::test_config();
+        let config = Config {
+            execution_market: ExecutionMarketConfig {
+                max_gas_per_block: MaxGasPerBlock::new(
+                    individual_gas.into_inner() * (CANDIDATE_COUNT as u64 - 1)
+                        + individual_gas.into_inner() / 2,
+                )
+                .unwrap(),
+                ..base.execution_market
+            },
+            ..base
+        };
+        let eras = leadership::single_era(config.clone());
         let ledger_state = LedgerState::from_notes(
             funding_notes.iter().copied(),
             &config,
             &leadership::genesis_parameters(),
         );
-        let commitment_root = ledger_state.latest_note_sets().ledger().commitment_root();
-        let candidates = gas_heavy_transactions(&funding_notes, &funding_key, commitment_root);
-        let gas_context = ledger_state.tx_context(config.gas_profile).gas_context;
-        let individual_gas = candidates[0]
-            .op_refs()
-            .execution_gas_consumption(&gas_context)
-            .unwrap();
         assert!(candidates.iter().all(|candidate| {
             candidate
                 .op_refs()

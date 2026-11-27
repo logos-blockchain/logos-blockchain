@@ -36,8 +36,6 @@ pub enum VerificationError {
     ChannelVerificationError(#[from] crate::mantle::channel::Error),
     #[error("Transfer verification error: {0}")]
     TransferVerificationError(#[from] crate::mantle::ops::transfer::TransferError),
-    #[error("ProgramRegister verification error: {0}")]
-    ProgramRegisterError(#[from] crate::mantle::ops::program::ProgramRegisterError),
     #[error("SDP verification error: {0}")]
     SDPVerificationError(#[from] SdpError),
     #[error("ClaimPoWReward verification error: {0}")]
@@ -62,9 +60,6 @@ impl VerificationError {
                         | ChannelError::InvalidSignatureIndex { .. }
                         | ChannelError::ThresholdUnmet { .. }
                         | ChannelError::StepProofCount { .. }
-                        | ChannelError::StepProofKind { .. }
-                        | ChannelError::ProgramNoteCount { .. }
-                        | ChannelError::ProgramNoteOpening { .. }
                 )
                 | Self::SDPVerificationError(SdpError::InvalidEddsaSignature)
         )
@@ -81,7 +76,6 @@ impl VerificationError {
             | Self::KeyNotFound { .. }
             | Self::ChannelMultiSigProofNotEnoughSignatures { .. }
             | Self::ChannelMultiSigProofInvalidSignature { .. }
-            | Self::ProgramRegisterError(_)
             | Self::BoundsError(_) => false,
         }
     }

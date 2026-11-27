@@ -106,7 +106,6 @@ const STORAGE_MARKET_EMA_SMOOTHING_FACTOR: ProperFraction =
 /// under.
 pub const GAS_PROFILE: GasProfile = GasProfile {
     transfer: Gas::new(10),
-    program_register: Gas::new(15114),
     channel_config: Gas::new(24),
     channel_inscribe: Gas::new(26),
     channel_deposit: Gas::new(26),
@@ -124,9 +123,6 @@ pub const GAS_PROFILE: GasProfile = GasProfile {
     commitment: Gas::new(58),
     signature: Gas::new(557),
     user_step: Gas::new(28),
-    program_deposit: Gas::new(144),
-    program_step: Gas::new(13528),
-    opening: Gas::new(470),
 };
 /// The block rewards of the specification: `I_max`, `I_min`, the stake target
 /// and the target of the pooled fees as shares of the supply cap, `α_d`, `α_a`,

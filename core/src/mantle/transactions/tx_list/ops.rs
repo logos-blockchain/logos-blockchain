@@ -14,7 +14,6 @@ use crate::mantle::ops::{
         withdraw::ChannelWithdrawOp,
     },
     pow::ClaimPowRewardOp,
-    program::ProgramRegisterOp,
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     transfer::TransferOp,
 };
@@ -124,7 +123,6 @@ impl Ops {
             ForkDigest::new([0x11; 32]),
             [
                 Op::Transfer(TransferOp::sample()),                     // 0x00
-                Op::ProgramRegister(ProgramRegisterOp::sample()),       // 0x01
                 Op::ChannelConfig(ChannelConfigOp::sample()),           // 0x10
                 Op::ChannelInscribe(InscriptionOp::sample_with_step()), // 0x11
                 Op::ChannelDeposit(DepositOp::sample()),                // 0x12

@@ -8,30 +8,26 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, Op, OpProof, SignedOps,
-        batch::test_utils::batch_verify,
         gas::GasCost,
         notes::NoteCommitment,
         ops::{
-            ChannelInscribeProof, OpRef, StepProof,
+            ChannelInscribeProof, OpRef,
             channel::{
                 ChannelId, MsgId,
                 deposit::Metadata,
-                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
-                program_step::program_deposit_id,
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks},
             },
-            zk_transfer::defer_zk_transfer,
         },
         traits::Hashable as _,
         transactions::{MantleTxBuilder, OpProofs, hash::TxHash},
     },
 };
-use lb_groth16::Fr;
 use lb_http_api_common::{
     bodies::{
         channel::{
             ChannelDepositRequestBody, ChannelPayment, ChannelPrepareDepositResponseBody,
             ChannelStepRequestBody, ChannelStepResponseBody, ChannelWithdrawRequestBody,
-            ChannelWithdrawResponseBody, ProgramDepositBody,
+            ChannelWithdrawResponseBody,
         },
         wallet::{
             fund::{WalletFundRequestBody, WalletFundResponseBody},
@@ -542,7 +538,6 @@ async fn channel_note_round_trip() {
         first_paid,
     )
     .await;
-    assert!(matches!(first_step, Step::User(_)));
     assert_eq!(
         first_outputs
             .iter()
@@ -568,7 +563,7 @@ async fn channel_note_round_trip() {
     )
     .await;
     assert_eq!(
-        step.inputs().len(),
+        step.inputs.len(),
         2,
         "the second step should spend both notes of the first"
     );
@@ -610,10 +605,7 @@ async fn channel_note_round_trip() {
     let op_proofs = OpProofs::from([
         OpProof::ChannelInscribe(ChannelInscribeProof::new(
             signing_key.sign_payload(tx_hash.as_signing_bytes()),
-            vec![
-                StepProof::ZkTransfer(first_proof),
-                StepProof::ZkTransfer(proof),
-            ],
+            vec![first_proof, proof],
         )),
         transfer_proof.expect("funding at non-zero gas prices should add a transfer"),
     ]);
@@ -685,56 +677,6 @@ async fn channel_note_round_trip() {
         .expect("a step moving no value should be refused");
     assert!(error.to_string().contains("400"), "{error}");
 
-    // A program deposit pays its value to the program out of the change, and
-    // its proof is bound to the deposit and to that value.
-    let deposited = 2;
-    let ChannelStepResponseBody {
-        step: deposit_step,
-        proof: deposit_proof,
-        outputs: deposit_outputs,
-        ..
-    } = validator
-        .client
-        .channel_step(ChannelStepRequestBody {
-            program_deposit: Some(ProgramDepositBody {
-                program_id: Fr::from(7u64),
-                value: deposited,
-                intent: Fr::from(11u64),
-            }),
-            payments: vec![],
-            ..user_step_request(channel_id, funding_pk, vec![], 0)
-        })
-        .await
-        .expect("a program deposit should be proven from the change");
-    let Step::ProgramDeposit(program_deposit) = deposit_step else {
-        panic!("the step should be a program deposit");
-    };
-    assert_eq!(program_deposit.value, deposited);
-    assert_eq!(
-        deposit_outputs
-            .iter()
-            .map(|note| (note.value, note.public_key))
-            .collect::<Vec<_>>(),
-        vec![(change - deposited, funding_pk)]
-    );
-    let verify = |excess, msg| {
-        batch_verify(
-            defer_zk_transfer(
-                &deposit_proof,
-                &program_deposit.inputs,
-                &program_deposit.outputs,
-                excess,
-                program_deposit.commitment_merkle_root,
-                msg,
-            )
-            .expect("the deposit should fit a ZkTransfer"),
-        )
-    };
-    let msg = program_deposit_id(&channel_id, &program_deposit);
-    verify(deposited, msg).expect("the proof should verify for the deposit and its value");
-    verify(deposited + 1, msg).expect_err("the proof should not verify for another value");
-    verify(deposited, Fr::from(1u64)).expect_err("the proof should not verify for another message");
-
     // The withdrawal costs its fee at inclusion and pays the note at release.
     let balance_after_fee = timeout(Duration::from_secs(10), async {
         loop {
@@ -791,7 +733,6 @@ fn user_step_request(
             public_key: funding_pk,
             value: paid,
         }],
-        program_deposit: None,
         inscription: Inscription::new_unchecked(b"user step".to_vec()),
         change_public_key: funding_pk,
         holder_public_keys: vec![funding_pk],

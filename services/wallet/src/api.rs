@@ -292,8 +292,7 @@ where
         Ok(rx.await??)
     }
 
-    /// A user step, or a program deposit, spending the channel notes of the
-    /// wallet, with its proof.
+    /// A step spending the channel notes of the wallet, with its proof.
     pub async fn prove_channel_step(
         &self,
         tip: Option<HeaderId>,

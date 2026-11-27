@@ -13,6 +13,10 @@
 
 #[path = "../benches/gas/cycles.rs"]
 mod cycles;
+#[expect(
+    dead_code,
+    reason = "the cases of the bench use the rest of the fixture"
+)]
 #[path = "../benches/gas/fixture.rs"]
 mod fixture;
 #[path = "../benches/gas/micro.rs"]
@@ -20,7 +24,6 @@ mod micro;
 
 use cycles::{Case, Counter};
 use lb_core::mantle::note_set::{NoteSet, TxBuffer};
-use lb_groth16::Fr;
 
 fn counter() -> Counter {
     Counter::new().expect("counters must be available and the process pinned")
@@ -225,33 +228,13 @@ fn ed25519_verify_costs_more_than_hashing_its_message() {
 #[ignore = "requires a pinned CPU and accessible hardware performance counters"]
 fn groth16_batches_cost_more_with_more_proofs() {
     let mut cases = micro::micro_cases();
-    for inputs in [3, 27, 37] {
+    for inputs in [3, 27] {
         assert_costlier(
             &mut cases,
             ("micro/groth16_batch", &[("N", inputs), ("n", 8)]),
             ("micro/groth16_batch", &[("N", inputs), ("n", 1)]),
         );
     }
-}
-
-#[test]
-fn program_spend_batch_inputs_are_full_size() {
-    let small = Fr::from(u64::MAX);
-    for spend in micro::program_spends(2) {
-        let inputs = spend.inputs().to_inputs();
-        assert_eq!(inputs.len(), 37);
-        assert!(inputs.iter().all(|input| *input > small), "{inputs:?}");
-    }
-}
-
-#[test]
-#[ignore = "requires a pinned CPU and accessible hardware performance counters"]
-fn program_proof_verification_costs_more_than_its_key_lines() {
-    assert_costlier(
-        &mut micro::micro_cases(),
-        ("micro/program_proof_verify", &[]),
-        ("micro/key_lines", &[]),
-    );
 }
 
 #[test]
@@ -267,11 +250,6 @@ fn key_preparation_costs_more_than_each_of_its_parts() {
         &mut cases,
         ("micro/key_prepare", &[]),
         ("micro/key_lines", &[]),
-    );
-    assert_costlier(
-        &mut cases,
-        ("micro/program_key_register", &[]),
-        ("micro/key_decompress", &[]),
     );
 }
 

@@ -9,9 +9,7 @@ use super::{
 };
 use crate::mantle::{
     ledger::ProvableOperation as _,
-    ops::{
-        channel::withdraw::ChannelWithdrawOp, pow::ClaimPowRewardOp, program::ProgramRegisterOp,
-    },
+    ops::{channel::withdraw::ChannelWithdrawOp, pow::ClaimPowRewardOp},
 };
 
 /// Core set of supported Mantle operations and their serialization behaviour.
@@ -27,7 +25,6 @@ pub enum OpSer<'a> {
     SDPWithdraw(OpWire<{ SDPWithdrawOp::CODE }, &'a SDPWithdrawOp>),
     SDPActive(OpWire<{ SDPActiveOp::CODE }, &'a SDPActiveOp>),
     ClaimPowReward(OpWire<{ ClaimPowRewardOp::CODE }, &'a ClaimPowRewardOp>),
-    ProgramRegister(OpWire<{ ProgramRegisterOp::CODE }, &'a ProgramRegisterOp>),
 }
 
 impl<'a> From<&'a Op> for OpSer<'a> {
@@ -42,7 +39,6 @@ impl<'a> From<&'a Op> for OpSer<'a> {
             Op::SDPWithdraw(op) => Self::SDPWithdraw(OpWire::new(op)),
             Op::SDPActive(op) => Self::SDPActive(OpWire::new(op)),
             Op::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
-            Op::ProgramRegister(op) => Self::ProgramRegister(OpWire::new(op)),
         }
     }
 }
@@ -59,7 +55,6 @@ impl<'a> From<OpRef<'a>> for OpSer<'a> {
             OpRef::SDPActive(op) => Self::SDPActive(OpWire::new(op)),
             OpRef::Transfer(op) => Self::Transfer(OpWire::new(op)),
             OpRef::ClaimPowReward(op) => Self::ClaimPowReward(OpWire::new(op)),
-            OpRef::ProgramRegister(op) => Self::ProgramRegister(OpWire::new(op)),
         }
     }
 }
@@ -77,7 +72,6 @@ pub enum OpDe {
     SDPWithdraw(OpWire<{ SDPWithdrawOp::CODE }, SDPWithdrawOp>),
     SDPActive(OpWire<{ SDPActiveOp::CODE }, SDPActiveOp>),
     ClaimPowReward(OpWire<{ ClaimPowRewardOp::CODE }, ClaimPowRewardOp>),
-    ProgramRegister(OpWire<{ ProgramRegisterOp::CODE }, ProgramRegisterOp>),
 }
 
 impl From<OpDe> for Op {
@@ -92,7 +86,6 @@ impl From<OpDe> for Op {
             OpDe::SDPWithdraw(w) => Self::SDPWithdraw(w.into_op()),
             OpDe::SDPActive(w) => Self::SDPActive(w.into_op()),
             OpDe::ClaimPowReward(w) => Self::ClaimPowReward(w.into_op()),
-            OpDe::ProgramRegister(w) => Self::ProgramRegister(w.into_op()),
         }
     }
 }

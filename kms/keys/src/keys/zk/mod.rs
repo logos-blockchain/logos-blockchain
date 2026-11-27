@@ -155,8 +155,8 @@ mod tests {
     }
 
     #[test]
-    fn program_notes_are_held_by_the_key_of_the_spending_secret_key_0() {
-        // PK0 as the circuits fix it
+    fn pk0_is_the_key_of_the_spending_secret_key_0() {
+        // PK0 as the Mantle specification fixes it
         let pk0 = BigUint::parse_bytes(
             b"972202553888197888567329063379813321440011391652189983173398887118271398762",
             10,

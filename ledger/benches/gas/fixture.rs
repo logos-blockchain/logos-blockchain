@@ -1,7 +1,6 @@
 //! A ledger as a live chain holds it: the ledger note set and the note set of
-//! one channel each hold [`fill`] nullifiers and one more commitment, and one
-//! program is registered. The gas prices are `0`, so the measured
-//! transactions fund no fee.
+//! one channel each hold [`fill`] nullifiers and one more commitment. The gas
+//! prices are `0`, so the measured transactions fund no fee.
 
 use std::{
     collections::HashMap,
@@ -17,16 +16,14 @@ use lb_core::{
         gas::{Gas, GasProfile},
         ledger::verification_mode::StandardMode,
         note_set::NoteSetIndex,
-        notes::{self, NoteCommitment, NoteNullifier, ProgramId},
+        notes::{self, NoteCommitment, NoteNullifier},
         ops::{
             ChannelInscribeProof, NoOpProof,
             channel::{
                 ChannelId, MsgId,
                 inscribe::{Inscription, InscriptionOp, MiniBlocks},
             },
-            program::ProgramRegisterOp,
         },
-        programs::{ProgramVerificationKey, derive_program_id},
         traits::Hashable as _,
         transactions::{GasPrices, OpProofs, Ops, TxList, states::Preverified},
     },
@@ -81,7 +78,6 @@ pub struct Fixture {
     pub channel: ChannelId,
     pub channel_key: Ed25519Key,
     pub channel_set: NoteSetIndex,
-    pub program: ProgramId,
 }
 
 static FIXTURE: LazyLock<Fixture> = LazyLock::new(build);
@@ -135,11 +131,6 @@ pub fn signed(ops: Vec<Op>, key: &Ed25519Key) -> SignedOps<Preverified, Standard
         .expect("the transaction preverifies")
 }
 
-pub fn program_key() -> ProgramVerificationKey {
-    ProgramVerificationKey::try_from(&lb_groth16::test_utils::three_input_setup(1).0)
-        .expect("the test key is valid")
-}
-
 fn apply(
     state: LedgerState,
     config: &EraScheduledConfig,
@@ -171,16 +162,7 @@ fn build() -> Fixture {
         signer: channel_key.public_key().into_unverified(),
         mini_blocks: MiniBlocks::default(),
     });
-    let key = program_key();
-    let program = derive_program_id(&key);
-    let register = Op::ProgramRegister(ProgramRegisterOp {
-        verification_key: key,
-    });
-    let state = apply(
-        state,
-        &config,
-        &signed(vec![create_channel, register], &channel_key),
-    );
+    let state = apply(state, &config, &signed(vec![create_channel], &channel_key));
 
     let channel_set = state
         .mantle_ledger()
@@ -225,7 +207,6 @@ fn build() -> Fixture {
         channel,
         channel_key,
         channel_set,
-        program,
     }
 }
 
@@ -270,7 +251,6 @@ pub fn single_era(config: Config) -> EraScheduledConfig {
 /// The costs of the deployments' current gas profile.
 const GAS_PROFILE: GasProfile = GasProfile {
     transfer: Gas::new(10),
-    program_register: Gas::new(15114),
     channel_config: Gas::new(24),
     channel_inscribe: Gas::new(26),
     channel_deposit: Gas::new(26),
@@ -288,9 +268,6 @@ const GAS_PROFILE: GasProfile = GasProfile {
     commitment: Gas::new(58),
     signature: Gas::new(557),
     user_step: Gas::new(28),
-    program_deposit: Gas::new(144),
-    program_step: Gas::new(13528),
-    opening: Gas::new(470),
 };
 
 fn era_parameters() -> Config {

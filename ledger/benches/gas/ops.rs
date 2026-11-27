@@ -37,22 +37,18 @@ use lb_core::{
         note_set::NoteSetIndex,
         notes::{InputNullifiers, NoteCommitment, OutputCommitments},
         ops::{
-            ChannelInscribeProof, NoOpProof, ProgramNoteOpening, ProgramProof, ProgramStepProof,
-            StepProof, ZkAndEd25519Proof, ZkProgramSpendProof, ZkTransferProof,
+            ChannelInscribeProof, NoOpProof, ZkAndEd25519Proof, ZkTransferProof,
             channel::{
                 ChannelId, MsgId, VerifiedChannelKeys,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
-                program_step::{ProgramDeposit, ProgramStep},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
                 withdraw::ChannelWithdrawOp,
             },
             pow::ClaimPowRewardOp,
-            program::ProgramRegisterOp,
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
         },
-        programs::ProgramVerificationKey,
         traits::Hashable as _,
         transactions::{GasPrices, OpProofs, Ops, TxList, states::Unverified},
     },
@@ -82,8 +78,6 @@ pub type Applied = (LedgerState, GasAndFees, Vec<TxEvent>, DeferredProofs);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Deferred {
     pub zk_transfers: usize,
-    pub program_spends: usize,
-    pub program_proofs: usize,
 }
 
 impl Deferred {
@@ -91,17 +85,11 @@ impl Deferred {
     pub fn of(proofs: &DeferredProofs) -> Self {
         Self {
             zk_transfers: proofs.zk_transfers().len(),
-            program_spends: proofs.program_spends().len(),
-            program_proofs: proofs.program_proofs().len(),
         }
     }
 
     const fn transfers(zk_transfers: usize) -> Self {
-        Self {
-            zk_transfers,
-            program_spends: 0,
-            program_proofs: 0,
-        }
+        Self { zk_transfers }
     }
 }
 
@@ -199,7 +187,6 @@ pub fn op_shapes() -> Vec<OpShape> {
     let mut shapes = Vec::new();
     shapes.extend(transfers());
     shapes.extend(inscriptions());
-    shapes.extend(program_inscriptions());
     shapes.extend(configs());
     shapes.extend(deposits());
     shapes.extend(withdrawals());
@@ -207,7 +194,6 @@ pub fn op_shapes() -> Vec<OpShape> {
     shapes.push(sdp_withdraw());
     shapes.push(sdp_active());
     shapes.push(claim_pow());
-    shapes.push(program_register());
     shapes
 }
 
@@ -251,7 +237,7 @@ pub fn encode(ops: Vec<Op>, prove: impl Fn(usize, &Op, &[u8]) -> OpProof) -> Vec
 
 /// The encoding of the inscription `op` with its step proofs, signed by the
 /// key of the fixture channel.
-pub fn encode_inscription(op: InscriptionOp, step_proofs: &[StepProof]) -> Vec<u8> {
+pub fn encode_inscription(op: InscriptionOp, step_proofs: &[ZkTransferProof]) -> Vec<u8> {
     let key = &filled_state().channel_key;
     encode(vec![Op::ChannelInscribe(op)], |_, _, hash| {
         OpProof::ChannelInscribe(ChannelInscribeProof::new(
@@ -355,12 +341,12 @@ pub fn transfers() -> Vec<OpShape> {
 /// A user step of the fixture channel, spending `inputs` and creating
 /// `outputs` fresh notes against the current root of its set.
 pub fn user_step(inputs: usize, outputs: usize, salt: u64) -> Step {
-    Step::User(UserStep {
+    Step {
         inputs: fresh_nullifiers(inputs, salt),
         outputs: fresh_commitments(outputs, salt),
         commitment_merkle_root: channel_root(),
         inscription: Inscription::default(),
-    })
+    }
 }
 
 /// An inscription on the fixture channel after `parent`, its steps in a single
@@ -425,14 +411,8 @@ fn user_inscription_shape(
 ) -> OpShape {
     let first = mini_blocks(round_salt(0));
     let user_steps = first.iter().map(Vec::len).sum::<usize>();
-    let outputs: usize = first
-        .iter()
-        .flatten()
-        .map(|step| step.outputs().len())
-        .sum();
-    let step_proofs: Vec<StepProof> = (0..user_steps)
-        .map(|index| StepProof::ZkTransfer(zk_transfer(index)))
-        .collect();
+    let outputs: usize = first.iter().flatten().map(|step| step.outputs.len()).sum();
+    let step_proofs: Vec<ZkTransferProof> = (0..user_steps).map(zk_transfer).collect();
     let tip = channel_tip();
     OpShape::on_fixture(
         "op/inscribe",
@@ -507,141 +487,6 @@ pub fn user_steps_shape(user_steps: usize) -> OpShape {
         },
         0,
         0,
-    )
-}
-
-/// The shape of a program step of the fixture program and of the program
-/// deposits it consumes.
-#[derive(Clone, Copy, Debug)]
-pub struct ProgramShape {
-    pub deposits: usize,
-    pub inputs: usize,
-    pub outputs: usize,
-    pub openings: usize,
-}
-
-// The tags of the salts of the notes a program deposit and a program step
-// spend and create, which keep them apart from each other and from the notes
-// of the user steps of the same salt.
-const DEPOSIT_NOTES: u64 = 1 << 48;
-const STEP_NOTES: u64 = 2 << 48;
-
-/// The program deposits of `shape`, then its program step, with their proofs:
-/// each program deposit spends one fresh note and returns one change note;
-/// `openings` of the `outputs` are program outputs, derived from their
-/// openings, and the others user outputs.
-pub fn program_steps(shape: ProgramShape, salt: u64) -> Vec<(Step, StepProof)> {
-    let fixture = filled_state();
-    let root = channel_root();
-    let spent = nullifiers(shape.deposits, salt | DEPOSIT_NOTES);
-    let change = commitments(shape.deposits, salt | DEPOSIT_NOTES);
-    let deposits = spent
-        .into_iter()
-        .zip(change)
-        .enumerate()
-        .map(|(index, (input, output))| {
-            let deposit = ProgramDeposit {
-                program_id: fixture.program,
-                inputs: [input].into(),
-                outputs: [output].into(),
-                commitment_merkle_root: root,
-                value: 1,
-                intent: Fr::from(index as u64),
-                inscription: Inscription::default(),
-            };
-            (
-                Step::ProgramDeposit(deposit),
-                StepProof::ZkTransfer(zk_transfer(index)),
-            )
-        });
-    let openings: Vec<ProgramNoteOpening> = (0..shape.openings)
-        .map(|index| ProgramNoteOpening {
-            value: 1 + index as u64,
-            nonce: Fr::from(salt * 64 + index as u64 + 1),
-            stake_public_key: ZkPublicKey::new(Fr::from(5u64)),
-            data: Fr::from(index as u64),
-        })
-        .collect();
-    let program_outputs: Vec<NoteCommitment> = openings
-        .iter()
-        .map(|opening| opening.note(fixture.program).commitment())
-        .collect();
-    let step = ProgramStep {
-        program_id: fixture.program,
-        inputs: fresh_nullifiers(shape.inputs, salt | STEP_NOTES),
-        program_outputs: program_outputs.try_into().expect("the program outputs fit"),
-        outputs: fresh_commitments(shape.outputs - shape.openings, salt | STEP_NOTES),
-        commitment_merkle_root: root,
-        program_step_id: Fr::from(7u64),
-        inscription: Inscription::default(),
-    };
-    let proof = StepProof::ProgramStep(ProgramStepProof {
-        spend_proof: ZkProgramSpendProof::new(proof(1)),
-        program_proof: ProgramProof::new(proof(2)),
-        program_notes: openings,
-    });
-    deposits.chain([(Step::Program(step), proof)]).collect()
-}
-
-/// The most program deposits of one input and one output an inscription of no
-/// payload carries before a program step of one input and one output, within
-/// the Execution Gas limit, at the gas prices of the node: the end of the
-/// program deposit series.
-pub const MOST_PROGRAM_DEPOSITS: usize = 500;
-
-/// The program deposits of the program deposit series of
-/// `op/inscribe_program`.
-pub const PROGRAM_DEPOSITS: [usize; 11] =
-    [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, MOST_PROGRAM_DEPOSITS];
-
-// Four series, one dimension varying at a time from no program deposit, one
-// program input, one output and no opening; the openings vary at eight
-// outputs, the most a step can create.
-pub fn program_inscriptions() -> Vec<OpShape> {
-    let base = ProgramShape {
-        deposits: 0,
-        inputs: 1,
-        outputs: 1,
-        openings: 0,
-    };
-    let tip = channel_tip();
-    PROGRAM_DEPOSITS
-        .map(|deposits| ProgramShape { deposits, ..base })
-        .into_iter()
-        .chain(
-            (0..=4)
-                .filter(|i| *i != 1)
-                .map(|inputs| ProgramShape { inputs, ..base }),
-        )
-        .chain((2..=8).map(|outputs| ProgramShape { outputs, ..base }))
-        .chain((1..=8).map(|openings| ProgramShape {
-            outputs: 8,
-            openings,
-            ..base
-        }))
-        .map(|shape| program_inscription_shape(shape, tip))
-        .collect()
-}
-
-pub fn program_inscription_shape(shape: ProgramShape, tip: MsgId) -> OpShape {
-    OpShape::on_fixture(
-        "op/inscribe_program",
-        vec![
-            ("program_deposits", shape.deposits as u64),
-            ("program_inputs", shape.inputs as u64),
-            ("program_outputs", shape.outputs as u64),
-            ("openings", shape.openings as u64),
-        ],
-        each_round(|salt| {
-            let (steps, proofs): (Vec<_>, Vec<_>) =
-                program_steps(shape, 1 + salt).into_iter().unzip();
-            encode_inscription(inscription(tip, steps, 0), &proofs)
-        }),
-        Deferred {
-            zk_transfers: shape.deposits,
-            program_spends: 1,
-            program_proofs: 1,
-        },
     )
 }
 
@@ -987,22 +832,6 @@ fn claim_pow() -> OpShape {
         })],
         deferred: Deferred::default(),
     }
-}
-
-// A key the fixture has not registered.
-fn program_register() -> OpShape {
-    let verification_key =
-        ProgramVerificationKey::try_from(&lb_groth16::test_utils::three_input_setup(2).0)
-            .expect("the test key is valid");
-    OpShape::on_fixture(
-        "op/program_register",
-        Vec::new(),
-        vec![encode(
-            vec![Op::ProgramRegister(ProgramRegisterOp { verification_key })],
-            |_, _, _| OpProof::None(NoOpProof),
-        )],
-        Deferred::default(),
-    )
 }
 
 /// A leadership proof every check accepts, for the headers the setups apply and

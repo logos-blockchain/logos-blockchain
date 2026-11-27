@@ -49,8 +49,6 @@ pub fn sample_witness_data() -> PolWitnessInputsData {
     let wallet = PolWalletInputsData {
         note_value: u64_value(&json["value"]),
         note_nonce: fr(&json["nonce"]),
-        note_program: fr(&json["program"]),
-        note_data: fr(&json["data"]),
         set_selectors: selectors(&json["set_selectors"]),
         commitment_aged_path: path(&json["cm_aged_path"]),
         commitment_aged_selectors: selectors(&json["cm_aged_selectors"]),

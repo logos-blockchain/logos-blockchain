@@ -5,10 +5,8 @@ pub mod op_proof;
 pub mod op_proof_ref;
 pub mod op_ref;
 pub mod pow;
-pub mod program;
 pub mod proof_channel_inscribe;
 pub mod proof_noop;
-pub mod proof_program_step;
 pub mod proof_zk_and_ed;
 pub mod proof_zk_transfer;
 pub mod sdp;
@@ -28,10 +26,6 @@ pub use crate::mantle::ops::{
     op_ref::OpRef,
     proof_channel_inscribe::ChannelInscribeProof,
     proof_noop::NoOpProof,
-    proof_program_step::{
-        ProgramNoteOpening, ProgramProof, ProgramStepProof, StepProof, StepProofShape,
-        ZkProgramSpendProof,
-    },
     proof_zk_and_ed::ZkAndEd25519Proof,
     proof_zk_transfer::ZkTransferProof,
     signed_op::SignedOp,
@@ -187,7 +181,6 @@ mod mantle_test_vectors {
                 Op::ChannelDeposit(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::ChannelWithdraw(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::SDPWithdraw(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
-                Op::ProgramRegister(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 Op::ChannelInscribe(o) => assert_eq!(o.op_id(), op_id_from_payload(&o.op_bytes())),
                 _ => {}
             }
@@ -210,7 +203,7 @@ mod mantle_test_vectors {
         );
 
         // Transaction holding one of every operation.
-        print_tx_vector("one of each operation (10 ops)", &Ops::sample());
+        print_tx_vector("one of each operation (9 ops)", &Ops::sample());
     }
 
     #[test]
@@ -238,20 +231,6 @@ mod mantle_test_vectors {
             "271876ff684b7087005dba3153c44e8dcefd09257aa7e0d491399e2a483c975a"
         );
         assert_eq!(pow::ClaimPowRewardOp::CODE, 0x30);
-    }
-
-    #[test]
-    fn program_register_op_id_matches_the_spec_vector() {
-        let register = Op::ProgramRegister(program::ProgramRegisterOp::sample());
-        let payload = &register.encode()[1..];
-        assert_eq!(
-            hex::encode(payload),
-            "0100000000000000000000000000000000000000000000000000000000000000b9b3b4620913f849ee2aa6a9cfd35c9d146f3e7c27596cc3e8d311fd3472dc2779ad28398ced57998435d8c63164b86d7033733ab82101b6379bf1b45d203ea0f5c7fb9406fade12005e9ab08c477e8d5e7192e12628e551900eb14d784e0606856eb6ff324f82c9a7a078686b1504bcebe4cf5dcd9151734297bb572f7714102ce236b4ddb40977fd454c08e570151342c4cc50a86380c3472f6a6ff8dbdd296f237195c2856d5a3f8ca190f6666f2084d776f9935a48a2d57a569e476806a9a93f16faa7a849e89ca35389d8dee46243772b760402bc66f7e0fe0edf39c117f94a688c5b3dfe2a762ab3d315927156987792e7d92f79e0f4523f1a41caf40978e0ffab866b3a9876bd01b8ecc66fcb86936277f425539a758dbbd32e2b0717636a302c88373904f75a15fe21c13882a8fe9c3be9f572f4100c48231dd5b188"
-        );
-        assert_eq!(
-            hex::encode(op_id_from_payload(payload)),
-            "87e8c6cec157aab8a5f80f9058851063f8f4586992bcb54a256769694cbb0dd1"
-        );
     }
 
     #[test]
@@ -300,16 +279,16 @@ mod mantle_test_vectors {
         let payload = &inscribe.encode()[1..];
         assert_eq!(
             hex::encode(payload),
-            "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0b00000068656c6c6f206c6f676f730000000000000000000000000000000000000000000000000000000000000000d9bf2148748a85c89da5aad8ee0b0fc2d105fd39d41a4c796536354f0ae2900c0100030000012300000000000000000000000000000000000000000000000000000000000000012400000000000000000000000000000000000000000000000000000000000000250000000000000000000000000000000000000000000000000000000000000010000000737465702d696e736372697074696f6e013400000000000000000000000000000000000000000000000000000000000000013500000000000000000000000000000000000000000000000000000000000000013600000000000000000000000000000000000000000000000000000000000000370000000000000000000000000000000000000000000000000000000000000038000000000000003900000000000000000000000000000000000000000000000000000000000000130000006465706f7369742d696e736372697074696f6e023400000000000000000000000000000000000000000000000000000000000000013a00000000000000000000000000000000000000000000000000000000000000013b00000000000000000000000000000000000000000000000000000000000000003c000000000000000000000000000000000000000000000000000000000000003d000000000000000000000000000000000000000000000000000000000000001800000070726f6772616d2d737465702d696e736372697074696f6e"
+            "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0b00000068656c6c6f206c6f676f730000000000000000000000000000000000000000000000000000000000000000d9bf2148748a85c89da5aad8ee0b0fc2d105fd39d41a4c796536354f0ae2900c01000100012300000000000000000000000000000000000000000000000000000000000000012400000000000000000000000000000000000000000000000000000000000000250000000000000000000000000000000000000000000000000000000000000010000000737465702d696e736372697074696f6e"
         );
         assert_eq!(
             hex::encode(op_id_from_payload(payload)),
-            "1f5700526b623c843e77095c4dfc855810a36d7f68f9caa147006db47a427654"
+            "be94d0343391e97bdf3a2842b832b9214e3d0827503a055b1c06bd66743ac2b0"
         );
         if let Op::ChannelInscribe(operation) = &inscribe {
             assert_eq!(
                 hex::encode(operation.op_id()),
-                "1f5700526b623c843e77095c4dfc855810a36d7f68f9caa147006db47a427654"
+                "be94d0343391e97bdf3a2842b832b9214e3d0827503a055b1c06bd66743ac2b0"
             );
         }
     }

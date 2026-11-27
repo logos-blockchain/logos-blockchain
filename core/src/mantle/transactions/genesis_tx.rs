@@ -521,8 +521,8 @@ mod tests {
             Note, OpProof,
             notes::{InputNullifiers, NoteNullifier, OutputCommitments},
             ops::{
-                ChannelInscribeProof, StepProof, ZkTransferProof,
-                channel::inscribe::{Inscription, MiniBlock, MiniBlocks, Step, UserStep},
+                ChannelInscribeProof, ZkTransferProof,
+                channel::inscribe::{Inscription, MiniBlock, MiniBlocks, Step},
             },
             transactions::{OpProofs, Ops, TxList},
         },
@@ -1106,14 +1106,14 @@ mod tests {
             Err(Error::InvalidGenesisParameters(_))
         ));
 
-        let step = UserStep {
+        let step = Step {
             inputs: [NoteNullifier(Fr::ONE)].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: Fr::ZERO,
             inscription: Inscription::default(),
         };
         let with_step = InscriptionOp {
-            mini_blocks: [MiniBlock::from([Step::User(step)])].into(),
+            mini_blocks: [MiniBlock::from([step])].into(),
             ..parameters_op()
         };
         let tx = create_trusted_tx(
@@ -1124,8 +1124,8 @@ mod tests {
             vec![
                 OpProof::ChannelInscribe(ChannelInscribeProof::new(
                     Ed25519Signature::zero(),
-                    vec![StepProof::ZkTransfer(ZkTransferProof::new(
-                        CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+                    vec![ZkTransferProof::new(CompressedGroth16Proof::from_bytes(
+                        &[0u8; 128],
                     ))],
                 )),
                 inscription_proof(),

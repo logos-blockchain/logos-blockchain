@@ -524,7 +524,7 @@ mod tests {
         canonical::BinaryEncode as _,
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519Key, PK0, ZkPublicKey};
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::mantle::{
         Op, OpProof, SignedOps, VerificationError,
@@ -532,19 +532,16 @@ mod tests {
         fixtures::ops::op_values::FORK_DIGEST,
         gas::{TxGasCalculator as _, test_utils::GAS_PROFILE},
         ledger::verification_mode::StandardMode,
-        notes::{InputNullifiers, Note, NoteNullifier, OutputCommitments},
+        notes::{NoteNullifier, OutputCommitments},
         ops::{
-            ChannelInscribeProof, ProgramNoteOpening, ProgramProof, ProgramStepProof, StepProof,
-            ZkProgramSpendProof,
+            ChannelInscribeProof,
             channel::{
                 ChannelId, MsgId,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
-                inscribe::{Inscription, InscriptionOp, MiniBlock, Step},
-                program_step::ProgramStep,
+                inscribe::InscriptionOp,
                 withdraw::ChannelWithdrawOp,
             },
-            op_proof::samples::SampleProof as _,
         },
         traits::Hashable as _,
         transactions::{
@@ -1080,73 +1077,5 @@ mod tests {
             .expect_err("Preverified deserialization should fail")
             .to_string();
         assert!(err_msg.contains("Invalid signature"));
-    }
-
-    #[test]
-    fn a_copy_with_an_altered_opening_does_not_deserialize_as_preverified() {
-        let note = Note {
-            value: 10,
-            nonce: Fr::from(2u64),
-            public_key: *PK0,
-            stake_public_key: ZkPublicKey::new(Fr::from(3u64)),
-            program: Fr::from(7u64),
-            data: Fr::from(4u64),
-        };
-        let step = ProgramStep {
-            program_id: Fr::from(7u64),
-            inputs: InputNullifiers::default(),
-            program_outputs: [note.commitment()].into(),
-            outputs: OutputCommitments::default(),
-            commitment_merkle_root: Fr::ZERO,
-            program_step_id: Fr::ZERO,
-            inscription: Inscription::default(),
-        };
-        let ops = Ops::new(
-            FORK_DIGEST,
-            [Op::ChannelInscribe(InscriptionOp {
-                mini_blocks: [MiniBlock::from([Step::Program(step)])].into(),
-                ..InscriptionOp::sample()
-            })],
-        );
-        let signature =
-            Ed25519Key::from_bytes(&[15; 32]).sign_payload(ops.hash().as_signing_bytes());
-        let opening = ProgramNoteOpening {
-            value: 10,
-            nonce: Fr::from(2u64),
-            stake_public_key: note.stake_public_key,
-            data: Fr::from(4u64),
-        };
-        let encoded = |opening: ProgramNoteOpening| {
-            let proof = ChannelInscribeProof::new(
-                signature,
-                vec![StepProof::ProgramStep(ProgramStepProof {
-                    spend_proof: ZkProgramSpendProof::sample(),
-                    program_proof: ProgramProof::sample(),
-                    program_notes: vec![opening],
-                })],
-            );
-            bincode::serialize(
-                &SignedOps::<Unverified, StandardMode>::from_parts(
-                    ops.clone(),
-                    OpProofs::from([OpProof::ChannelInscribe(proof)]),
-                )
-                .unwrap(),
-            )
-            .unwrap()
-        };
-
-        assert!(
-            bincode::deserialize::<SignedOps<Preverified, StandardMode>>(&encoded(opening)).is_ok()
-        );
-        // Neither the transaction hash nor the block ID covers the opening: the
-        // altered copy is dropped as a copy, before any verdict.
-        let altered = ProgramNoteOpening {
-            data: Fr::from(5u64),
-            ..opening
-        };
-        assert!(
-            bincode::deserialize::<SignedOps<Preverified, StandardMode>>(&encoded(altered))
-                .is_err()
-        );
     }
 }

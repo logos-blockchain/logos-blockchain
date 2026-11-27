@@ -121,11 +121,10 @@ mod filled_ledger {
     }
 
     #[test]
-    fn the_channel_and_the_program_exist() {
+    fn the_channel_exists() {
         let fixture = filled_state();
         let mantle = fixture.state.mantle_ledger();
         assert!(mantle.channels().channel_state(&fixture.channel).is_some());
-        assert!(mantle.programs().get(&fixture.program).is_some());
     }
 }
 

@@ -5,6 +5,6 @@ use crate::mantle::ops::ChannelInscribeProof;
 
 codec_fixtures!(
     ChannelInscribeProof,
-    context = vec![crate::mantle::ops::StepProofShape::ZkTransfer],
+    context = 1,
     CHANNEL_INSCRIBE_PROOF.clone() => CHANNEL_INSCRIBE_PROOF_HEX,
 );

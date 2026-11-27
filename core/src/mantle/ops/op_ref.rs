@@ -12,7 +12,6 @@ use crate::mantle::{
         },
         internal::OpSer,
         pow::ClaimPowRewardOp,
-        program::ProgramRegisterOp,
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         transfer::TransferOp,
     },
@@ -29,7 +28,6 @@ pub enum OpRef<'a> {
     SDPActive(&'a SDPActiveOp),
     Transfer(&'a TransferOp),
     ClaimPowReward(&'a ClaimPowRewardOp),
-    ProgramRegister(&'a ProgramRegisterOp),
 }
 
 const fn code_of<T>(_op: &T) -> u8
@@ -57,7 +55,6 @@ impl OpRef<'_> {
             Self::SDPActive(op) => op.execution_gas(profile, context),
             Self::Transfer(op) => op.execution_gas(profile, context),
             Self::ClaimPowReward(op) => op.execution_gas(profile, context),
-            Self::ProgramRegister(op) => op.execution_gas(profile, context),
         }
     }
 
@@ -73,7 +70,6 @@ impl OpRef<'_> {
             Self::SDPActive(_) => "SDPActive",
             Self::Transfer(_) => "Transfer",
             Self::ClaimPowReward(_) => "ClaimPowReward",
-            Self::ProgramRegister(_) => "ProgramRegister",
         }
     }
 
@@ -88,7 +84,6 @@ impl OpRef<'_> {
             Self::SDPActive(op) => code_of(*op),
             Self::Transfer(op) => code_of(*op),
             Self::ClaimPowReward(op) => code_of(*op),
-            Self::ProgramRegister(op) => code_of(*op),
         }
     }
 }
@@ -105,7 +100,6 @@ impl BinaryEncode for OpRef<'_> {
             Self::SDPActive(op) => op.encoded_length(),
             Self::Transfer(op) => op.encoded_length(),
             Self::ClaimPowReward(op) => op.encoded_length(),
-            Self::ProgramRegister(op) => op.encoded_length(),
         };
         self.code().encoded_length().checked_add(payload).unwrap()
     }
@@ -122,7 +116,6 @@ impl BinaryEncode for OpRef<'_> {
             Self::SDPActive(op) => op.encode_into(out),
             Self::Transfer(op) => op.encode_into(out),
             Self::ClaimPowReward(op) => op.encode_into(out),
-            Self::ProgramRegister(op) => op.encode_into(out),
         }
     }
 }
@@ -153,7 +146,6 @@ impl_owned_ref_conversions! {
         SDPActiveOp => SDPActive,
         TransferOp => Transfer,
         ClaimPowRewardOp => ClaimPowReward,
-        ProgramRegisterOp => ProgramRegister,
 }
 
 impl Serialize for OpRef<'_> {

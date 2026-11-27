@@ -139,9 +139,6 @@ pub struct ProofOfLeadershipQuotaInputs {
     pub slot: u64,
     pub note_value: u64,
     pub note_nonce: ZkHash,
-    // The program and the data of the note, 0 for a user note.
-    pub note_program: ZkHash,
-    pub note_data: ZkHash,
     pub commitment_aged_path_and_selectors: AgedNotePathAndSelectors,
     pub low_leaf_aged_nullifier: ZkHash,
     pub low_leaf_aged_next_nullifier: ZkHash,

@@ -4509,8 +4509,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-build"
-version = "0.8.0-rc.1+putxos.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
+version = "0.8.0-rc.1+putxos.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.2#d10d512253fe7d6a00d5eaeebb6d5d53d6542f63"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -4521,16 +4521,16 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-common"
-version = "0.8.0-rc.1+putxos.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
+version = "0.8.0-rc.1+putxos.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.2#d10d512253fe7d6a00d5eaeebb6d5d53d6542f63"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
-version = "0.8.0-rc.1+putxos.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
+version = "0.8.0-rc.1+putxos.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.2#d10d512253fe7d6a00d5eaeebb6d5d53d6542f63"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4539,18 +4539,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
-version = "0.8.0-rc.1+putxos.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
-dependencies = [
- "logos-blockchain-circuits-build",
- "logos-blockchain-circuits-common",
- "logos-blockchain-circuits-types",
-]
-
-[[package]]
-name = "logos-blockchain-circuits-program-spend-sys"
-version = "0.8.0-rc.1+putxos.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
+version = "0.8.0-rc.1+putxos.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.2#d10d512253fe7d6a00d5eaeebb6d5d53d6542f63"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4566,8 +4556,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-transfer-sys"
-version = "0.8.0-rc.1+putxos.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
+version = "0.8.0-rc.1+putxos.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.2#d10d512253fe7d6a00d5eaeebb6d5d53d6542f63"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4576,8 +4566,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-types"
-version = "0.8.0-rc.1+putxos.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.1#d04e8d78e23e4eee8bc66f27ef8dc35333fc713d"
+version = "0.8.0-rc.1+putxos.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.8.0-rc.1%2Bputxos.2#d10d512253fe7d6a00d5eaeebb6d5d53d6542f63"
 dependencies = [
  "bytes",
  "libc",
@@ -4661,7 +4651,6 @@ dependencies = [
  "logos-blockchain-mmr",
  "logos-blockchain-pol",
  "logos-blockchain-poseidon2",
- "logos-blockchain-program-spend",
  "logos-blockchain-time",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
@@ -5200,24 +5189,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-stream",
- "tracing",
-]
-
-[[package]]
-name = "logos-blockchain-program-spend"
-version = "0.0.0"
-dependencies = [
- "logos-blockchain-circuits-program-spend-sys",
- "logos-blockchain-circuits-prover",
- "logos-blockchain-circuits-types",
- "logos-blockchain-groth16",
- "logos-blockchain-log-targets",
- "logos-blockchain-proofs-error",
- "logos-blockchain-zktransfer",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror 2.0.21",
  "tracing",
 ]
 

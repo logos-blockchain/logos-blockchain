@@ -4,20 +4,18 @@ use lb_core::{
         Note, Value,
         channel::channel_note_set,
         note_set::NoteSetIndex,
-        notes::{InputNullifiers, NoteCommitment, OutputCommitments, ProgramId},
+        notes::{InputNullifiers, NoteCommitment, OutputCommitments},
         ops::{
             ZkTransferProof,
             channel::{
                 ChannelId,
-                inscribe::{Inscription, Step, UserStep, user_step_id},
-                program_step::{ProgramDeposit, program_deposit_id},
+                inscribe::{Inscription, Step, step_id},
                 withdraw::ChannelWithdrawOp,
             },
         },
         transactions::builder::ZkTransferOpening,
     },
 };
-use lb_groth16::Fr;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet::{
     NoteSetSpend, WalletError,
@@ -38,18 +36,9 @@ pub struct ChannelStepRequest {
     pub appended: Vec<NoteCommitment>,
     /// The channel notes the step creates, by holder key.
     pub payments: Vec<(ZkPublicKey, Value)>,
-    /// Makes the step a program deposit.
-    pub program_deposit: Option<ProgramPayment>,
     pub inscription: Inscription,
     pub change_pk: ZkPublicKey,
     pub holder_pks: Vec<ZkPublicKey>,
-}
-
-#[derive(Debug)]
-pub struct ProgramPayment {
-    pub program_id: ProgramId,
-    pub value: Value,
-    pub intent: Fr,
 }
 
 /// A step with its proof and the openings of the notes it creates, the
@@ -69,9 +58,8 @@ pub struct ChannelWithdrawal {
     pub opening: ZkTransferOpening,
 }
 
-// A user step, or a program deposit, spending the channel notes of the
-// wallet, with the opening and the witness of its ZkTransfer and the note set
-// of the channel.
+// A step spending the channel notes of the wallet, with the opening and the
+// witness of its ZkTransfer and the note set of the channel.
 pub fn build_step(
     tip: HeaderId,
     request: ChannelStepRequest,
@@ -81,7 +69,6 @@ pub fn build_step(
         channel_id,
         appended,
         payments,
-        program_deposit,
         inscription,
         change_pk,
         holder_pks,
@@ -89,11 +76,7 @@ pub fn build_step(
     let note_set = channel_note_set(channel_id)
         .ok_or(WalletServiceError::ChannelWithoutNoteSet(channel_id))?;
     // A step spends at least one note, so it has to move some value.
-    if payments.iter().all(|(_, value)| *value == 0)
-        && program_deposit
-            .as_ref()
-            .is_none_or(|deposit| deposit.value == 0)
-    {
+    if payments.iter().all(|(_, value)| *value == 0) {
         return Err(WalletServiceError::EmptyChannelStep);
     }
     let paid = payments
@@ -106,7 +89,7 @@ pub fn build_step(
             note_set,
             appended: appended.clone(),
             outputs: paid,
-            excess: program_deposit.as_ref().map_or(0, |deposit| deposit.value),
+            excess: 0,
             change_pk,
             change_nonce: random_nonce(),
             holder_pks,
@@ -114,34 +97,19 @@ pub fn build_step(
     )?;
     let outputs = OutputCommitments::try_from_iter(opening.outputs.iter().map(Note::commitment))
         .map_err(WalletError::from)?;
-    let (step, msg) = if let Some(deposit) = program_deposit {
-        let deposit = ProgramDeposit {
-            program_id: deposit.program_id,
-            inputs,
-            outputs,
-            commitment_merkle_root,
-            value: deposit.value,
-            intent: deposit.intent,
-            inscription,
-        };
-        let msg = program_deposit_id(&channel_id, &deposit);
-        (Step::ProgramDeposit(deposit), msg)
-    } else {
-        let step = UserStep {
-            inputs,
-            outputs,
-            commitment_merkle_root,
-            inscription,
-        };
-        let msg = user_step_id(&channel_id, &step);
-        (Step::User(step), msg)
+    let step = Step {
+        inputs,
+        outputs,
+        commitment_merkle_root,
+        inscription,
     };
+    let msg = step_id(&channel_id, &step);
     let witness = step_witness(
         &state.wallet().spend_state(tip)?,
         state.wallet().known_notes(),
         note_set,
         &appended,
-        step.inputs(),
+        &step.inputs,
         &opening,
         msg,
     )?;

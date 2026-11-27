@@ -829,8 +829,8 @@ impl CommonHttpClient {
         self.post(request_url, &body).await
     }
 
-    /// Request a user step, or a program deposit, built and proven from the
-    /// notes the node's wallet holds in a channel.
+    /// Request a step built and proven from the notes the node's wallet holds
+    /// in a channel.
     pub async fn channel_step(
         &self,
         base_url: Url,

@@ -4,7 +4,7 @@ use lb_core::{
         Note, SignedOps, Value,
         gas::GasCost,
         ledger::verification_mode::StandardMode,
-        notes::{NoteCommitment, ProgramId},
+        notes::NoteCommitment,
         ops::{
             ZkTransferProof,
             channel::{
@@ -16,7 +16,6 @@ use lb_core::{
         transactions::{hash::TxHash, states::Unverified},
     },
 };
-use lb_groth16::{Fr, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
@@ -69,8 +68,7 @@ pub struct ChannelWithdrawResponseBody {
     pub outputs: Vec<Note>,
 }
 
-/// A user step, or a program deposit, built from the notes this node's wallet
-/// holds in the channel.
+/// A step built from the notes this node's wallet holds in the channel.
 #[derive(Serialize, Deserialize)]
 pub struct ChannelStepRequestBody {
     pub tip: Option<HeaderId>,
@@ -85,8 +83,6 @@ pub struct ChannelStepRequestBody {
     pub appended: Vec<NoteCommitment>,
     /// The channel notes the step creates.
     pub payments: Vec<ChannelPayment>,
-    /// Makes the step a program deposit.
-    pub program_deposit: Option<ProgramDepositBody>,
     #[serde(with = "serde_inscription")]
     pub inscription: Inscription,
     pub change_public_key: ZkPublicKey,
@@ -97,15 +93,6 @@ pub struct ChannelStepRequestBody {
 pub struct ChannelPayment {
     pub public_key: ZkPublicKey,
     pub value: Value,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct ProgramDepositBody {
-    #[serde(with = "serde_fr")]
-    pub program_id: ProgramId,
-    pub value: Value,
-    #[serde(with = "serde_fr")]
-    pub intent: Fr,
 }
 
 /// The step and its proof, for the sequencer of the channel to inscribe in

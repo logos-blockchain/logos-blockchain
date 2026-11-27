@@ -22,10 +22,9 @@ use lb_core::{
         note_set::NoteSetIndex,
         notes::NoteCommitment,
         ops::{
-            StepProof,
             channel::{
                 ChannelId, MsgId,
-                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step, UserStep},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, Step},
                 withdraw::ChannelWithdrawOp,
             },
             sdp::SDPWithdrawOp,
@@ -43,10 +42,9 @@ use crate::{
     cycles::Case,
     fixture::{HeaderId, commitments, filled_state, nullifiers, parameters, signed},
     ops::{
-        AcceptedLeadership, ProgramShape, channel_tip, deposit_op, encode, encode_inscription,
-        fresh_commitments, fresh_nullifiers, inscription, io_dims, next_epoch, program_steps,
-        root_of, setup_declaration, setup_provider_key, signed_by, transfer_tx, user_step,
-        zk_transfer, zk_transfer_series,
+        AcceptedLeadership, channel_tip, deposit_op, encode, encode_inscription, fresh_commitments,
+        fresh_nullifiers, inscription, io_dims, next_epoch, root_of, setup_declaration,
+        setup_provider_key, signed_by, transfer_tx, user_step, zk_transfer, zk_transfer_series,
     },
 };
 
@@ -102,14 +100,11 @@ impl BlockShape {
     }
 }
 
-/// Verifies the deferred `proofs` as `DeferredProofs::verify` does, but each
-/// batch and each program proof on its own: `verify` returns at the first batch
-/// or program proof that fails, as each of the measured ones does, their proofs
-/// being of valid points but not of their statements. A batch decompresses its
-/// proofs, stopping only at an invalid point, then runs one multi-pairing
-/// whatever the proofs, so that a failing batch costs what a passing one does,
-/// and so does a program proof. Returns whether each verification passed: the
-/// `ZkTransfer` batch, the `ZkProgramSpend` batch, then each program proof.
+/// Verifies the deferred `proofs` as `DeferredProofs::verify` does: their
+/// proofs are of valid points but not of their statements, so the batch fails.
+/// A batch decompresses its proofs, stopping only at an invalid point, then
+/// runs one multi-pairing whatever the proofs, so that a failing batch costs
+/// what a passing one does. Returns whether the `ZkTransfer` batch passed.
 pub fn verify_each(proofs: DeferredProofs) -> Vec<bool> {
     let transfers = DeferredProofs::from_iter(
         proofs
@@ -117,25 +112,8 @@ pub fn verify_each(proofs: DeferredProofs) -> Vec<bool> {
             .iter()
             .map(|proof| DeferredProof::new(*proof.proof(), *proof.inputs())),
     );
-    let spends = DeferredProofs::from_iter(
-        proofs
-            .program_spends()
-            .iter()
-            .map(|proof| DeferredProof::new(*proof.proof(), *proof.inputs())),
-    );
-    let programs: Vec<DeferredProofs> = proofs
-        .program_proofs()
-        .iter()
-        .map(|proof| {
-            DeferredProofs::from_iter([DeferredProof::new(*proof.proof(), proof.inputs().clone())])
-        })
-        .collect();
     drop(proofs);
-    [transfers, spends]
-        .into_iter()
-        .chain(programs)
-        .map(|batch| batch.verify().is_ok())
-        .collect()
+    vec![transfers.verify().is_ok()]
 }
 
 /// A header at `slot`, the state and the config it applies to, and the notes
@@ -501,15 +479,15 @@ fn note_sets_shape(changed: usize) -> BlockShape {
                 inscription: Inscription::new_unchecked(vec![1]),
                 parent: channel_state.tip_message,
                 signer: fixture.channel_key.public_key().into_unverified(),
-                mini_blocks: [MiniBlock::from([Step::User(UserStep {
+                mini_blocks: [MiniBlock::from([Step {
                     inputs: nullifiers(1, salt).try_into().expect("one input"),
                     outputs: commitments(1, salt).try_into().expect("one output"),
                     commitment_merkle_root: root,
                     inscription: Inscription::default(),
-                })])]
+                }])]
                 .into(),
             };
-            encode_inscription(op, &[StepProof::ZkTransfer(zk_transfer(index))])
+            encode_inscription(op, &[zk_transfer(index)])
         })
         .collect();
     BlockShape {
@@ -524,63 +502,35 @@ fn note_sets_shape(changed: usize) -> BlockShape {
 
 const TRANSFERS: usize = 40;
 const USER_INSCRIPTIONS: usize = 16;
-const PROGRAM_INSCRIPTIONS: usize = 7;
 const PAYLOAD: usize = 64;
 
 // 40 transfers of two inputs and two outputs, 16 inscriptions of one user
-// step, 7 inscriptions of one program deposit and one program step (one
-// program input, two outputs, one of them opened), all on the fixture channel
-// one after the other, and one deposit of one input and one output; the block
-// verifies its deferred proofs.
+// step, all on the fixture channel one after the other, and one deposit of one
+// input and one output; the block verifies its deferred proofs.
 fn mixed() -> BlockShape {
     let fixture = filled_state();
-    let program = ProgramShape {
-        deposits: 1,
-        inputs: 1,
-        outputs: 2,
-        openings: 1,
-    };
     let mut txs: Vec<Vec<u8>> = (0..TRANSFERS)
         .map(|index| transfer_tx(2, 2, 600 + index as u64))
         .collect();
     let mut parent = channel_tip();
-    for index in 0..USER_INSCRIPTIONS + PROGRAM_INSCRIPTIONS {
+    for index in 0..USER_INSCRIPTIONS {
         let salt = 700 + index as u64;
-        let (steps, proofs): (Vec<_>, Vec<_>) = if index < USER_INSCRIPTIONS {
-            (
-                vec![user_step(1, 1, salt)],
-                vec![StepProof::ZkTransfer(zk_transfer(index))],
-            )
-        } else {
-            program_steps(program, salt).into_iter().unzip()
-        };
-        let op = inscription(parent, steps, PAYLOAD);
+        let op = inscription(parent, vec![user_step(1, 1, salt)], PAYLOAD);
         parent = op.id();
-        txs.push(encode_inscription(op, &proofs));
+        txs.push(encode_inscription(op, &[zk_transfer(index)]));
     }
     txs.push(encode(
         vec![Op::ChannelDeposit(deposit_op(1, 1, 800))],
         |index, _, _| OpProof::ZkTransfer(zk_transfer(index)),
     ));
-    let nullifiers = TRANSFERS * 2
-        + USER_INSCRIPTIONS
-        + PROGRAM_INSCRIPTIONS * (program.deposits + program.inputs)
-        + 1;
-    let commitments = TRANSFERS * 2
-        + USER_INSCRIPTIONS
-        + PROGRAM_INSCRIPTIONS * (program.deposits + program.outputs)
-        + 1;
+    let nullifiers = TRANSFERS * 2 + USER_INSCRIPTIONS + 1;
+    let commitments = TRANSFERS * 2 + USER_INSCRIPTIONS + 1;
     let bytes: usize = txs.iter().map(Vec::len).sum();
     BlockShape {
         name: "block/mixed",
         dims: vec![
             ("transfers", TRANSFERS as u64),
             ("user_steps", USER_INSCRIPTIONS as u64),
-            ("program_steps", PROGRAM_INSCRIPTIONS as u64),
-            (
-                "program_deposits",
-                (PROGRAM_INSCRIPTIONS * program.deposits) as u64,
-            ),
             ("deposits", 1),
             ("nullifiers", nullifiers as u64),
             ("commitments", commitments as u64),

@@ -154,11 +154,9 @@ impl<C: ChannelSource> TxGasState<C> {
                 self.extend_root_over_buffer(set, operation.commitment_merkle_root);
             }
             // An inscription creates the channel when it does not exist yet, and
-            // changes its set when a step spends from it or adds to it. The user
-            // steps and program deposits of a mini-block cover the buffer as it
-            // stands when the mini-block starts, a program step the whole buffer at
-            // its position. Each step then buffers the notes it creates, the
-            // program outputs of a program step before its outputs.
+            // changes its set when a step spends from it or adds to it. The steps
+            // of a mini-block cover the buffer as it stands when the mini-block
+            // starts. Each step then buffers the notes it creates.
             OpRef::ChannelInscribe(operation) => {
                 let set = NoteSetKey::Channel(operation.channel_id);
                 if !self.channel_exists(&operation.channel_id) {
@@ -172,15 +170,8 @@ impl<C: ChannelSource> TxGasState<C> {
                 for mini_block in operation.mini_blocks.iter() {
                     let covered = self.buffered(&set);
                     for step in mini_block.iter() {
-                        match step {
-                            Step::User(_) | Step::ProgramDeposit(_) => {
-                                self.extend_root(set, *step.commitment_merkle_root(), covered);
-                            }
-                            Step::Program(step) => {
-                                self.extend_root_over_buffer(set, step.commitment_merkle_root);
-                            }
-                        }
-                        self.buffer(set, step.outputs().len());
+                        self.extend_root(set, step.commitment_merkle_root, covered);
+                        self.buffer(set, step.outputs.len());
                     }
                 }
             }
@@ -189,14 +180,14 @@ impl<C: ChannelSource> TxGasState<C> {
                 self.change(NoteSetKey::Sdp);
             }
             OpRef::SDPWithdraw(_) => self.change(NoteSetKey::Sdp),
-            OpRef::SDPActive(_) | OpRef::ProgramRegister(_) => {}
+            OpRef::SDPActive(_) => {}
         }
     }
 }
 
 // Whether the step spends from or adds to the channel set.
-fn moves_notes(step: &Step) -> bool {
-    !step.inputs().is_empty() || !step.outputs().is_empty()
+const fn moves_notes(step: &Step) -> bool {
+    !step.inputs.is_empty() || !step.outputs.is_empty()
 }
 
 impl<C: ChannelSource> ThresholdSource for TxGasState<C> {
@@ -222,8 +213,7 @@ mod tests {
             channel::{
                 config::ChannelConfigOp,
                 deposit::DepositOp,
-                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks, UserStep},
-                program_step::{ProgramDeposit, ProgramStep},
+                inscribe::{Inscription, InscriptionOp, MiniBlock, MiniBlocks},
                 withdraw::ChannelWithdrawOp,
             },
             pow::ClaimPowRewardOp,
@@ -246,7 +236,7 @@ mod tests {
     }
 
     fn user_step(root: u64, nullifier: u64, outputs: u64) -> Step {
-        Step::User(UserStep {
+        Step {
             inputs: [NoteNullifier(Fr::from(nullifier))].into(),
             outputs: OutputCommitments::try_from_iter((0..outputs).map(|output| {
                 crate::mantle::notes::NoteCommitment(Fr::from(100 + nullifier + output))
@@ -254,7 +244,7 @@ mod tests {
             .unwrap(),
             commitment_merkle_root: Fr::from(root),
             inscription: Inscription::default(),
-        })
+        }
     }
 
     fn inscription_of(mini_blocks: Vec<Vec<Step>>) -> Op {
@@ -399,37 +389,11 @@ mod tests {
         let mut state = TxGasState::new(&context);
         let inscription = InscriptionOp::sample_with_step();
         let set = NoteSetKey::Channel(inscription.channel_id);
-        let expected: usize = inscription.steps().map(|step| step.outputs().len()).sum();
+        let expected: usize = inscription.steps().map(|step| step.outputs.len()).sum();
         assert!(expected > 0);
         state.apply(Op::ChannelInscribe(inscription).by_ref());
         assert_eq!(state.buffered(&set), expected);
         assert_eq!(state.changed_note_sets(), 1);
-    }
-
-    #[test]
-    fn a_program_step_covers_the_buffer_at_its_position() {
-        let context = empty();
-        let mut state = TxGasState::new(&context);
-        // The deposit of the mini-block covers nothing buffered, the program
-        // step the change of the deposit, then the next deposit and
-        // program step the change and the program note.
-        let deposit = Step::ProgramDeposit(ProgramDeposit::sample());
-        let program = Step::Program(ProgramStep::sample());
-        state.apply(
-            inscription_of(vec![
-                vec![deposit.clone(), program.clone()],
-                vec![deposit, program],
-            ])
-            .by_ref(),
-        );
-        let expected = GAS_PROFILE
-            .root_gas(1)
-            .unwrap()
-            .checked_add(GAS_PROFILE.root_gas(2).unwrap())
-            .unwrap()
-            .checked_add(GAS_PROFILE.root_gas(3).unwrap())
-            .unwrap();
-        assert_eq!(state.root_extensions_gas(&GAS_PROFILE), Ok(expected));
     }
 
     #[test]
@@ -480,14 +444,13 @@ mod tests {
         assert_eq!(state.changed_note_sets(), 0);
     }
 
-    // A program step that spends and creates nothing, proven against a recent
-    // root.
-    fn empty_program_step() -> ProgramStep {
-        ProgramStep {
+    // A step that spends and creates nothing.
+    fn empty_step() -> Step {
+        Step {
             inputs: InputNullifiers::default(),
-            program_outputs: OutputCommitments::default(),
             outputs: OutputCommitments::default(),
-            ..ProgramStep::sample()
+            commitment_merkle_root: Fr::from(0x25u64),
+            inscription: Inscription::default(),
         }
     }
 
@@ -500,7 +463,7 @@ mod tests {
 
     #[test]
     fn inscription_with_an_empty_step_on_an_existing_channel_changes_no_set() {
-        let inscription = inscription_with(vec![Step::Program(empty_program_step())]);
+        let inscription = inscription_with(vec![empty_step()]);
         let context = existing(inscription.channel_id, 1);
         let mut state = TxGasState::new(&context);
         state.apply(Op::ChannelInscribe(inscription).by_ref());
@@ -523,36 +486,18 @@ mod tests {
     fn inscription_with_an_empty_step_creating_a_channel_changes_its_set() {
         let context = empty();
         let mut state = TxGasState::new(&context);
-        let inscription = inscription_with(vec![Step::Program(empty_program_step())]);
+        let inscription = inscription_with(vec![empty_step()]);
         state.apply(Op::ChannelInscribe(inscription).by_ref());
         assert_eq!(state.changed_note_sets(), 1);
     }
 
     #[test]
     fn inscription_with_a_step_spending_only_changes_its_set() {
-        let step = UserStep {
+        let step = Step {
             inputs: [NoteNullifier(Fr::from(0x23u64))].into(),
-            outputs: OutputCommitments::default(),
-            commitment_merkle_root: Fr::from(0x25u64),
-            inscription: Inscription::default(),
+            ..empty_step()
         };
-        let inscription = inscription_with(vec![Step::User(step)]);
-        let context = existing(inscription.channel_id, 1);
-        let mut state = TxGasState::new(&context);
-        state.apply(Op::ChannelInscribe(inscription).by_ref());
-        assert_eq!(state.changed_note_sets(), 1);
-    }
-
-    #[test]
-    fn inscription_with_a_program_deposit_spending_only_changes_its_set() {
-        let deposit = ProgramDeposit {
-            outputs: OutputCommitments::default(),
-            ..ProgramDeposit::sample()
-        };
-        let inscription = inscription_with(vec![
-            Step::ProgramDeposit(deposit),
-            Step::Program(empty_program_step()),
-        ]);
+        let inscription = inscription_with(vec![step]);
         let context = existing(inscription.channel_id, 1);
         let mut state = TxGasState::new(&context);
         state.apply(Op::ChannelInscribe(inscription).by_ref());

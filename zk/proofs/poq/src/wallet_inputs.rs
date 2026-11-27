@@ -19,8 +19,6 @@ pub struct PoQWalletInputs {
     pol_staking_secret_key: Groth16Input,
     pol_note_value: Groth16Input,
     pol_note_nonce: Groth16Input,
-    pol_note_program: Groth16Input,
-    pol_note_data: Groth16Input,
     pol_commitment_aged_path_and_selectors: [(Groth16Input, Groth16Input); NOTE_SET_TREE_DEPTH],
     pol_low_leaf_nullifier: Groth16Input,
     pol_low_leaf_next_nullifier: Groth16Input,
@@ -32,9 +30,6 @@ pub struct PoQWalletInputsData {
     pub slot: u64,
     pub note_value: u64,
     pub note_nonce: Fr,
-    // the program and the data of the note, 0 for a user note
-    pub note_program: Fr,
-    pub note_data: Fr,
     pub commitment_aged_path_and_selectors: AgedNotePathAndSelectors,
     pub low_leaf_aged_nullifier: Fr,
     pub low_leaf_aged_next_nullifier: Fr,
@@ -55,8 +50,6 @@ pub struct PoQWalletInputsJson {
     note_value: Groth16InputDeser,
     #[serde(rename = "pol_note_nonce")]
     note_nonce: Groth16InputDeser,
-    pol_note_program: Groth16InputDeser,
-    pol_note_data: Groth16InputDeser,
     #[serde(rename = "pol_cm_aged_path")]
     #[serde_as(as = "[_; NOTE_SET_TREE_DEPTH]")]
     commitment_aged_path: [Groth16InputDeser; NOTE_SET_TREE_DEPTH],
@@ -90,8 +83,6 @@ impl From<PoQWalletInputs> for PoQWalletInputsJson {
             pol_staking_secret_key,
             pol_note_value,
             pol_note_nonce,
-            pol_note_program,
-            pol_note_data,
             pol_commitment_aged_path_and_selectors,
             pol_low_leaf_nullifier,
             pol_low_leaf_next_nullifier,
@@ -103,8 +94,6 @@ impl From<PoQWalletInputs> for PoQWalletInputsJson {
             pol_slot: (&pol_slot).into(),
             note_value: (&pol_note_value).into(),
             note_nonce: (&pol_note_nonce).into(),
-            pol_note_program: (&pol_note_program).into(),
-            pol_note_data: (&pol_note_data).into(),
             commitment_aged_path: pol_commitment_aged_path_and_selectors
                 .each_ref()
                 .map(|(path, _)| path.into()),
@@ -137,8 +126,6 @@ impl From<PoQWalletInputsData> for PoQWalletInputs {
             slot,
             note_value,
             note_nonce,
-            note_program,
-            note_data,
             commitment_aged_path_and_selectors,
             low_leaf_aged_nullifier,
             low_leaf_aged_next_nullifier,
@@ -154,8 +141,6 @@ impl From<PoQWalletInputsData> for PoQWalletInputs {
             pol_staking_secret_key: pol_staking_secret_key.into(),
             pol_note_value: Groth16Input::new(Fr::from(BigUint::from(note_value))),
             pol_note_nonce: note_nonce.into(),
-            pol_note_program: note_program.into(),
-            pol_note_data: note_data.into(),
             pol_commitment_aged_path_and_selectors: commitment_aged_path_and_selectors.map(
                 |(hash, selector)| {
                     (

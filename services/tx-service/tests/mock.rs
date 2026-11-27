@@ -757,7 +757,7 @@ async fn inscription_and_step_data_count_together_for_admission() {
     let mut pool = InMemoryPool::new(settings, Era::genesis(), InMemoryStorageAdapter::default());
 
     let sample = InscriptionOp::sample_with_step();
-    let step_data_size: usize = sample.steps().map(|step| step.inscription().len()).sum();
+    let step_data_size: usize = sample.steps().map(|step| step.inscription.len()).sum();
     let inscribing = |total_size| {
         Ops::new(
             FORK_DIGEST,

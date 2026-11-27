@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use ark_ff::{AdditiveGroup as _, PrimeField as _};
+use ark_ff::PrimeField as _;
 use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -12,8 +12,6 @@ use crate::{
     crypto::{Hash, ZkHasher},
     mantle::ledger::Value,
 };
-
-pub type ProgramId = Fr;
 
 static NOTE_CM_V1: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"NOTE_CM_V1").expect("BigUint should load from constant string")
@@ -86,16 +84,12 @@ pub struct Note {
     pub public_key: ZkPublicKey,
     // The staking key, whose secret the Proof of Leadership takes.
     pub stake_public_key: ZkPublicKey,
-    #[serde(with = "serde_fr")]
-    pub program: ProgramId,
-    #[serde(with = "serde_fr")]
-    pub data: Fr,
 }
 
 impl Note {
-    // A user note under one key, its public key being also its staking key: no
-    // program governs it and it carries no data. It is the default of a wallet
-    // and of a transfer output, and the leader reward note, the Genesis notes,
+    // A note under one key, its public key being also its staking key. It is
+    // the default of a wallet and of a transfer output, and the leader reward
+    // note, the Genesis notes,
     // the service notes, the service reward notes and the proof of work claim
     // notes have their one key as both.
     #[must_use]
@@ -105,8 +99,6 @@ impl Note {
             nonce,
             public_key,
             stake_public_key: public_key,
-            program: Fr::ZERO,
-            data: Fr::ZERO,
         }
     }
 
@@ -120,8 +112,6 @@ impl Note {
             self.nonce,
             *self.public_key.as_fr(),
             *self.stake_public_key.as_fr(),
-            self.program,
-            self.data,
         ]))
     }
 }
@@ -134,25 +124,6 @@ pub fn derive_note_nullifier(commitment: &NoteCommitment, nullifier_key: &Fr) ->
         commitment.0,
         *nullifier_key,
     ]))
-}
-
-/// The nonce the `ZkProgramSpend` enforces on the output `output_index` of a
-/// step consuming a note of its program, derived from the nullifier of its
-/// first input.
-#[must_use]
-pub fn derive_program_output_nonce(
-    first_input: &NoteNullifier,
-    output_index: usize,
-    value: Value,
-    public_key: &ZkPublicKey,
-) -> Fr {
-    ZkHasher::digest(&[
-        *NOTE_NONCE_V1,
-        first_input.0,
-        Fr::from(output_index as u64),
-        Fr::from(value),
-        *public_key.as_fr(),
-    ])
 }
 
 #[must_use]
@@ -173,13 +144,14 @@ pub fn derive_note_nonce(
 
 #[cfg(test)]
 mod test {
+    use ark_ff::AdditiveGroup as _;
     use lb_groth16::fr_from_bytes_unchecked;
     use lb_key_management_system_keys::keys::ZkKey;
 
     use super::*;
 
     #[test]
-    fn test_user_note_commitment_has_its_key_as_staking_key_and_zero_program_and_data() {
+    fn test_user_note_commitment_has_its_key_as_staking_key() {
         let note = Note::new(100, Fr::from(7u64), ZkPublicKey::from(Fr::from(456u64)));
         assert_eq!(note.stake_public_key, note.public_key);
         assert_eq!(
@@ -190,8 +162,6 @@ mod test {
                 Fr::from(7u64),
                 Fr::from(456u64),
                 Fr::from(456u64),
-                Fr::ZERO,
-                Fr::ZERO
             ])
         );
         // the staking key is part of the commitment

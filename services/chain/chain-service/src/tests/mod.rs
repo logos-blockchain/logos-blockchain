@@ -1615,7 +1615,6 @@ pub fn genesis_parameters() -> GenesisParameters {
 
 pub const GAS_PROFILE: GasProfile = GasProfile {
     transfer: Gas::new(10),
-    program_register: Gas::new(15114),
     channel_config: Gas::new(24),
     channel_inscribe: Gas::new(26),
     channel_deposit: Gas::new(26),
@@ -1633,9 +1632,6 @@ pub const GAS_PROFILE: GasProfile = GasProfile {
     commitment: Gas::new(58),
     signature: Gas::new(557),
     user_step: Gas::new(28),
-    program_deposit: Gas::new(144),
-    program_step: Gas::new(13528),
-    opening: Gas::new(470),
 };
 
 /// [`ledger_config`] with `W`, the uncle reference window in blocks, and

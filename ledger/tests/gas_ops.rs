@@ -97,12 +97,9 @@ fn every_op_case_applies() {
 fn assert_each_round_of_a_spending_case_has_its_own_transaction(shapes: &[ops::OpShape]) {
     for shape in shapes {
         let spends = match shape.name {
-            "op/transfer"
-            | "op/deposit"
-            | "op/withdraw"
-            | "op/inscribe_program"
-            | "op/sdp_declare"
-            | "op/sdp_withdraw" => true,
+            "op/transfer" | "op/deposit" | "op/withdraw" | "op/sdp_declare" | "op/sdp_withdraw" => {
+                true
+            }
             "op/inscribe" => dim(&shape.dims, "user_steps") != Some(0),
             _ => false,
         };
@@ -121,7 +118,6 @@ fn assert_each_round_of_a_spending_case_has_its_own_transaction(shapes: &[ops::O
 fn each_round_of_a_spending_case_has_its_own_transaction() {
     let mut shapes = ops::transfers();
     shapes.extend(ops::inscriptions());
-    shapes.extend(ops::program_inscriptions());
     shapes.extend(ops::deposits());
     shapes.extend(ops::withdrawals());
     shapes.extend(ops::sdp_declares());
@@ -143,8 +139,6 @@ fn the_op_cases_cover_every_series() {
         ("op/config_keys", 6),
         ("op/deposit", 11),
         ("op/inscribe", 20),
-        ("op/inscribe_program", 30),
-        ("op/program_register", 1),
         ("op/sdp_active", 1),
         ("op/sdp_declare", 4),
         ("op/sdp_withdraw", 1),
@@ -231,68 +225,22 @@ fn longer_inscriptions_cost_more_cycles() {
         long > short,
         "user_steps=512: {long}, user_steps=16: {short}"
     );
-    let program = |deposits| {
-        [
-            ("program_deposits", deposits),
-            ("program_inputs", 1),
-            ("program_outputs", 1),
-            ("openings", 0),
-        ]
-    };
-    let short = cycles_of(
-        &mut cases,
-        "op/inscribe_program",
-        &program(16),
-        &mut counter,
-    );
-    let long = cycles_of(
-        &mut cases,
-        "op/inscribe_program",
-        &program(256),
-        &mut counter,
-    );
-    assert!(
-        long > short,
-        "program_deposits=256: {long}, program_deposits=16: {short}"
-    );
 }
 
-// The ends of the user step and program deposit series are transactions a
-// block takes, within its Execution Gas limit.
+// The end of the user step series is a transaction a block takes, within its
+// Execution Gas limit.
 #[test]
 fn the_longest_inscriptions_fit_the_execution_gas_limit() {
-    let shapes = [
-        ops::user_steps_shape(ops::MOST_USER_STEPS),
-        ops::program_inscription_shape(
-            ops::ProgramShape {
-                deposits: ops::MOST_PROGRAM_DEPOSITS,
-                inputs: 1,
-                outputs: 1,
-                openings: 0,
-            },
-            ops::channel_tip(),
-        ),
-    ];
-    for (name, dimension, count) in [
-        ("op/inscribe", "user_steps", ops::MOST_USER_STEPS),
-        (
-            "op/inscribe_program",
-            "program_deposits",
-            ops::MOST_PROGRAM_DEPOSITS,
-        ),
-    ] {
-        let shape = shapes
-            .iter()
-            .find(|shape| shape.name == name && dim(&shape.dims, dimension) == Some(count as u64))
-            .unwrap_or_else(|| panic!("no case {name} {dimension}={count}"));
-        let (.., deferred) = block::execute(shape.state.clone(), &shape.config, &shape.bytes[..1])
-            .unwrap_or_else(|error| panic!("{name} {dimension}={count}: {error}"));
-        assert_eq!(
-            ops::Deferred::of(&deferred),
-            shape.deferred,
-            "{name} {dimension}={count}"
-        );
-    }
+    let shape = ops::user_steps_shape(ops::MOST_USER_STEPS);
+    let count = ops::MOST_USER_STEPS;
+    assert_eq!(dim(&shape.dims, "user_steps"), Some(count as u64));
+    let (.., deferred) = block::execute(shape.state.clone(), &shape.config, &shape.bytes[..1])
+        .unwrap_or_else(|error| panic!("op/inscribe user_steps={count}: {error}"));
+    assert_eq!(
+        ops::Deferred::of(&deferred),
+        shape.deferred,
+        "op/inscribe user_steps={count}"
+    );
 }
 
 #[test]
@@ -415,9 +363,8 @@ fn the_mixed_block_verifies_each_of_its_deferred_proofs() {
     assert_eq!((&shape.dims, &shape.txs), (&bare.dims, &bare.txs));
     let (.., deferred) =
         block::execute(shape.state.clone(), &shape.config, &shape.txs).expect("the block applies");
-    let program_steps = dim(&shape.dims, "program_steps").expect("the program steps");
-    // One ZkTransfer batch, one ZkProgramSpend batch and each program proof.
-    assert_eq!(block::verify_each(deferred).len() as u64, 2 + program_steps);
+    // One ZkTransfer batch.
+    assert_eq!(block::verify_each(deferred).len(), 1);
 }
 
 #[test]
@@ -497,21 +444,20 @@ fn each_changed_note_set_is_recorded_at_the_end_of_the_block() {
 }
 
 #[test]
-fn the_mixed_block_holds_64_transactions_of_its_counted_shape() {
+fn the_mixed_block_holds_57_transactions_of_its_counted_shape() {
     let shape = block::block_shapes()
         .into_iter()
         .find(|shape| shape.name == "block/mixed")
         .expect("the mixed block");
-    assert_eq!(shape.txs.len(), 64);
+    assert_eq!(shape.txs.len(), 57);
     let bytes: usize = shape.txs.iter().map(Vec::len).sum();
     let dim = |name| dim(&shape.dims, name).unwrap_or_else(|| panic!("no dimension {name}"));
     assert_eq!(dim("bytes"), bytes as u64);
     let (_, _, _, deferred) =
         block::execute(shape.state.clone(), &shape.config, &shape.txs).expect("the block applies");
     let deferred = ops::Deferred::of(&deferred);
-    assert_eq!(deferred.program_spends as u64, dim("program_steps"));
     assert_eq!(
         deferred.zk_transfers as u64,
-        dim("transfers") + dim("user_steps") + dim("program_deposits") + dim("deposits")
+        dim("transfers") + dim("user_steps") + dim("deposits")
     );
 }

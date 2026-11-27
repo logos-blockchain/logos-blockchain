@@ -4,11 +4,7 @@ use lb_core::mantle::{
     Note, Op, Value,
     note_set::{CommitmentMmr, NoteSetIndex},
     notes::{NoteCommitment, NoteNullifier, derive_note_nonce},
-    ops::{
-        OpId as _,
-        channel::{ChannelId, inscribe::Step},
-        transfer::transfer_witness,
-    },
+    ops::{OpId as _, channel::ChannelId, transfer::transfer_witness},
     transactions::{Ops, builder::ZkTransferOpening},
 };
 use lb_groth16::Fr;
@@ -214,15 +210,12 @@ fn op_effects<'a>(
                 None,
                 inscription
                     .steps()
-                    .flat_map(Step::outputs)
+                    .flat_map(|step| step.outputs.iter())
                     .map(|commitment| (note_set, *commitment))
                     .collect(),
             )
         }
-        Op::ChannelInscribe(_)
-        | Op::ChannelConfig(_)
-        | Op::SDPActive(_)
-        | Op::ProgramRegister(_) => (None, Vec::new()),
+        Op::ChannelInscribe(_) | Op::ChannelConfig(_) | Op::SDPActive(_) => (None, Vec::new()),
     })
 }
 

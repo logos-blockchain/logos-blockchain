@@ -42,7 +42,6 @@ impl OpProof {
             Op::SDPActive(op) => decode_proof_for(op, input),
             Op::Transfer(op) => decode_proof_for(op, input),
             Op::ClaimPowReward(op) => decode_proof_for(op, input),
-            Op::ProgramRegister(op) => decode_proof_for(op, input),
         }
     }
 }

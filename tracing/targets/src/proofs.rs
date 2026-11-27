@@ -6,6 +6,5 @@ log_targets! {
     LEADER,
     POL,
     POQ,
-    PROGRAM_SPEND,
     ZKTRANSFER,
 }
