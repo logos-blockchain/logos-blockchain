@@ -1671,10 +1671,14 @@ where
         let mut blocks_since = Vec::with_capacity(headers.len());
         for header_id in headers.into_iter().rev().filter(|id| *id != saved_at) {
             let block = Self::load_block(header_id, storage).await?;
+            // Only the vouchers of these blocks are used, but a wallet block
+            // cannot be built without the events of its transactions: a
+            // leader claim with no event is a panic.
+            let events = Self::load_block_events(header_id, storage).await;
             blocks_since.push(WalletBlock::from_block(
                 &block,
                 era_schedule.epoch_for_slot(block.header().slot()),
-                &Events::new(),
+                &events,
             ));
         }
         Ok(saved.with_vouchers_at(lib, &blocks_since)?)
