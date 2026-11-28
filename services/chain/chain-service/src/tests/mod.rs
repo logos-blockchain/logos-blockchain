@@ -82,6 +82,7 @@ use crate::{
     saved_tip_era,
     service::{get_block_ids, process_block},
     states::{RECOVERY_PROGRESS_KEY_SUFFIX, RecoveryProgress, RecoveryRecorder},
+    verified::StoredBlock,
 };
 
 #[test]
@@ -652,9 +653,7 @@ fn future_block_is_rejected_only_from_network() {
 
     let mut cryptarchia = cryptarchia;
     cryptarchia
-        .try_apply_block_with_state_retention(&BlockWithVerifiedHeader::new_unchecked(
-            block.clone(),
-        ))
+        .try_apply_block_with_state_retention(&StoredBlock::new_unchecked(block.clone()))
         .expect("a stored block should be replayed regardless of the current slot");
     assert_eq!(cryptarchia.tip(), block.header().id());
 }

@@ -6,14 +6,15 @@ use lb_core::{
     header::{Header, HeaderId},
     mantle::{
         TxHash,
-        traits::{Hashable, StorageSize},
+        traits::{Hashable, PreverifiedMantleTransaction, StorageSize},
     },
     proofs::leader_proof::LeaderProof as _,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_ledger::LedgerError;
+use lb_ledger::{LedgerError, PreparedUpdate, VerifiedUpdate};
 use lb_storage_service::api::StorageApi;
+use overwatch::DynError;
 
 use crate::{Cryptarchia, Error};
 
@@ -135,22 +136,6 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
         )))
     }
 
-    /// Reads the block `id` from `storage`, without verifying it, since this
-    /// node verified the block before storing it.
-    pub(crate) async fn load_stored(storage: &StorageApi<Tx>, id: &HeaderId) -> Option<Self>
-    where
-        Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
-    {
-        storage.get_block(id).await.map(Self)
-    }
-
-    /// Takes `block` as verified without verifying it, for tests that need a
-    /// [`BlockWithVerifiedHeader`] regardless of the chain.
-    #[cfg(test)]
-    pub(crate) const fn new_unchecked(block: Block<Tx>) -> Self {
-        Self(block)
-    }
-
     #[must_use]
     pub const fn header(&self) -> &Header {
         self.0.header()
@@ -164,10 +149,121 @@ impl<Tx> BlockWithVerifiedHeader<Tx> {
     pub fn transactions_iter(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
         self.0.transactions_iter()
     }
+
+    /// Applies the block on top of its parent state, running the stateful
+    /// checks of every operation. The deferred proofs are not verified yet.
+    fn prepare_update(&self, cryptarchia: &Cryptarchia) -> Result<PreparedUpdate<HeaderId>, Error>
+    where
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
+    {
+        let header = self.header();
+        let leader_proof = header.leader_proof();
+        cryptarchia
+            .ledger
+            .prepare_update(
+                header.id(),
+                header.parent(),
+                header.slot(),
+                &leader_proof.entropy(),
+                *leader_proof.voucher_cm(),
+                &self.uncle_headers().slots(),
+                self.transactions_iter().cloned(),
+            )
+            .map_err(|e| match e {
+                LedgerError::ParentNotFound(parent) => Error::ParentMissing {
+                    parent,
+                    info: Box::new(cryptarchia.info()),
+                },
+                e => Error::Ledger(e),
+            })
+    }
+}
+
+impl<Tx> BlockToApply<Tx> for BlockWithVerifiedHeader<Tx> {
+    fn as_block(&self) -> &Block<Tx> {
+        &self.0
+    }
+
+    /// Prepares an update on top of its parent state, and verifies batch
+    /// proofs.
+    fn prepare_verified_update(
+        &self,
+        cryptarchia: &Cryptarchia,
+    ) -> Result<VerifiedUpdate<HeaderId>, Error>
+    where
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
+    {
+        Ok(self.prepare_update(cryptarchia)?.verify_batch_proofs()?)
+    }
 }
 
 impl<Tx> From<BlockWithVerifiedHeader<Tx>> for Block<Tx> {
     fn from(block: BlockWithVerifiedHeader<Tx>) -> Self {
         block.0
     }
+}
+
+/// A [`Block`] read from the storage of this node, which has been fully
+/// verified by this node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredBlock<Tx>(BlockWithVerifiedHeader<Tx>);
+
+impl<Tx> StoredBlock<Tx> {
+    /// Reads the block `id` from `storage`, without verifying it.
+    pub(crate) async fn load(
+        storage: &StorageApi<Tx>,
+        id: &HeaderId,
+    ) -> Result<Option<Self>, DynError>
+    where
+        Tx: BinaryDecode<Context = u32> + Hashable<Hash = TxHash> + StorageSize,
+    {
+        Ok(storage
+            .try_get_block(id)
+            .await?
+            .map(|block| Self(BlockWithVerifiedHeader(block))))
+    }
+
+    /// Only for testing
+    #[cfg(test)]
+    pub(crate) const fn new_unchecked(block: Block<Tx>) -> Self {
+        Self(BlockWithVerifiedHeader(block))
+    }
+}
+
+impl<Tx> BlockToApply<Tx> for StoredBlock<Tx> {
+    fn as_block(&self) -> &Block<Tx> {
+        self.0.as_block()
+    }
+
+    /// Prepares an update on top of its parent state, with skipping batch proof
+    /// verification.
+    fn prepare_verified_update(
+        &self,
+        cryptarchia: &Cryptarchia,
+    ) -> Result<VerifiedUpdate<HeaderId>, Error>
+    where
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone,
+    {
+        Ok(self.0.prepare_update(cryptarchia)?.trust_batch_proofs())
+    }
+}
+
+impl<Tx> From<StoredBlock<Tx>> for Block<Tx> {
+    fn from(block: StoredBlock<Tx>) -> Self {
+        block.0.into()
+    }
+}
+
+/// A block that can be applied to [`Cryptarchia`].
+pub trait BlockToApply<Tx>: Into<Block<Tx>> {
+    fn as_block(&self) -> &Block<Tx>;
+
+    /// Prepares an update on top of its parent state, and verifies batch
+    /// proofs.
+    fn prepare_verified_update(
+        &self,
+        cryptarchia: &Cryptarchia,
+    ) -> Result<VerifiedUpdate<HeaderId>, Error>
+    where
+        Tx: PreverifiedMantleTransaction + StorageSize + Clone;
 }

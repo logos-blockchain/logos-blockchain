@@ -42,6 +42,7 @@ use crate::{
     relays::{BroadcastRelay, CryptarchiaConsensusRelays},
     states::RecoveryRecorder,
     sync::block_provider::BlockProvider,
+    verified::BlockToApply,
 };
 
 pub struct ProcessBlockOutcome<Tx> {
@@ -979,11 +980,11 @@ fn log_canonical_blend_snapshots<Tx>(cryptarchia: &Cryptarchia, block: &Block<Tx
     target = LOG_TARGET,
     level = "debug",
     skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster, recovery),
-    fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count())
+    fields(block_id = %block.as_block().header().id(), tx_count = block.as_block().transactions_iter().count())
 )]
-pub async fn process_block<Tx>(
+pub async fn process_block<Tx, Block>(
     cryptarchia: &mut Cryptarchia,
-    block: BlockWithVerifiedHeader<Tx>,
+    block: Block,
     relays: &CryptarchiaConsensusRelays<Tx>,
     new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
     lib_broadcaster: &broadcast::Sender<LibUpdate>,
@@ -1004,14 +1005,15 @@ where
         + Sync
         + Unpin
         + 'static,
+    Block: BlockToApply<Tx>,
 {
-    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
-    let header = block.header().clone();
+    debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.as_block().header().id());
+    let header = block.as_block().header().clone();
     let prev_lib = cryptarchia.lib();
 
     let mut candidate = cryptarchia.clone();
     let applied = candidate.try_apply_block_with_state_retention(&block)?;
-    let block = Block::from(block);
+    let block: lb_core::block::Block<Tx> = block.into();
     let new_lib = candidate.lib();
 
     let tx_count = block.transactions_iter().count();
