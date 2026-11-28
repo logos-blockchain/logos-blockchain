@@ -4,7 +4,6 @@ set -e
 
 export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/user_config.yaml" \
        CFG_HOST_IDENTIFIER="i-${LB_HOST_IDX}" \
-       CFG_DEPLOYMENT_PATH="/node-data/deployment.yaml" \
        LOG_BACKEND="file" \
        LOG_DIR="/node-data/${LB_HOST_IDX}/" \
        LOGOSCTL_CONFIG_DIR="/opt/logos-session"
@@ -15,7 +14,8 @@ export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/user_config.yaml" \
     done
 
     logosctl module load blockchain_module
-    logosctl call blockchain_module start "$CFG_FILE_PATH" "$CFG_DEPLOYMENT_PATH"
+    # An empty deployment makes the node follow the 0.3.1 testnet, its built-in default.
+    logosctl call blockchain_module start "$CFG_FILE_PATH" ""
 
     echo "Logos Blockchain Module started."
 ) &
