@@ -4,7 +4,7 @@
 //! An era's ruleset is the only such type today. Its encoding is the preimage
 //! of the era's digest, so every node on a chain must produce it byte for
 //! byte: the ruleset's number as a little-endian `u16`, then its Blend,
-//! cryptarchia and time parameters, in that order, each writing
+//! cryptarchia, time and mempool parameters, in that order, each writing
 //! its fields in declaration order, depth first. Types from lower
 //! crates encode themselves in their own crates: an integer little-endian at
 //! its width, a non-zero or otherwise range-checked integer as the integer it
@@ -37,7 +37,13 @@ impl BinaryEncode for EraRuleset {
                     blend,
                     cryptarchia,
                     time,
-                }) => blend.encoded_length() + cryptarchia.encoded_length() + time.encoded_length(),
+                    mempool,
+                }) => {
+                    blend.encoded_length()
+                        + cryptarchia.encoded_length()
+                        + time.encoded_length()
+                        + mempool.encoded_length()
+                }
             }
     }
 
@@ -48,10 +54,12 @@ impl BinaryEncode for EraRuleset {
                 blend,
                 cryptarchia,
                 time,
+                mempool,
             }) => {
                 blend.encode_into(out);
                 cryptarchia.encode_into(out);
                 time.encode_into(out);
+                mempool.encode_into(out);
             }
         }
     }
@@ -62,6 +70,7 @@ fn fixture_era_ruleset() -> EraRuleset {
         blend: v1::blend::codec::fixture_settings(),
         cryptarchia: v1::cryptarchia::codec::fixture_settings(),
         time: v1::time::codec::fixture_settings(),
+        mempool: v1::mempool::codec::fixture_settings(),
     })
 }
 
@@ -74,6 +83,7 @@ fn era_ruleset_hex() -> String {
         v1::blend::codec::SETTINGS_HEX,
         v1::cryptarchia::codec::SETTINGS_HEX,
         v1::time::codec::SETTINGS_HEX,
+        v1::mempool::codec::SETTINGS_HEX,
     ]
     .concat()
 }
