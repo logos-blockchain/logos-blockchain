@@ -125,6 +125,20 @@ impl Service {
             }
         }
     }
+
+    /// Checks the activity [`Self::update_rewards`] would record, by running
+    /// it and dropping the state it moves to.
+    fn check_activity(
+        &self,
+        provider_id: ProviderId,
+        metadata: &ActivityMetadata,
+    ) -> Result<(), RewardsError> {
+        match self {
+            Self::BlendNetwork(state) => {
+                state.rewards.update_active(provider_id, metadata).map(drop)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -630,6 +644,21 @@ impl SdpLedger {
             };
             declarations.get(declaration_id)
         })
+    }
+
+    /// Checks the activity an active message from `declaration` reports in
+    /// `metadata` against the rewards of the declaration's service, which
+    /// record it when the message is executed.
+    pub fn check_activity(
+        &self,
+        declaration: &Declaration,
+        metadata: &ActivityMetadata,
+    ) -> Result<(), SdpError> {
+        self.services
+            .get(&declaration.service_type)
+            .ok_or(SdpError::ServiceNotFound(declaration.service_type))?
+            .check_activity(declaration.provider_id, metadata)
+            .map_err(SdpError::RejectedActivity)
     }
 
     /// Get the declarations for a given service type.

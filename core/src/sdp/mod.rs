@@ -700,6 +700,30 @@ impl ActivityMetadata {
     }
 }
 
+/// Why the rewards of a service refuse the activity an active message reports.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ActivityError {
+    #[error("Target epoch is not set")]
+    TargetEpochNotSet,
+    #[error("Invalid epoch: expected {expected}, got {got}")]
+    InvalidEpoch { expected: Epoch, got: Epoch },
+    #[error("Invalid opinion length: expected {expected}, got {got}")]
+    InvalidOpinionLength { expected: usize, got: usize },
+    #[error("Duplicate active message for epoch {epoch}, provider {provider_id:?}")]
+    DuplicateActiveMessage {
+        epoch: Epoch,
+        provider_id: Box<ProviderId>,
+    },
+    #[error("Invalid proof type")]
+    InvalidProofType,
+    #[error("Invalid proof")]
+    InvalidProof,
+    #[error("Hamming distance too large")]
+    HammingDistanceTooLarge,
+    #[error("Unknown provider: {0:?}")]
+    UnknownProvider(Box<ProviderId>),
+}
+
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
 
 impl BinaryEncode for ActivityMetadata {

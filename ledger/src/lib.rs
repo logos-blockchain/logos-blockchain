@@ -1041,6 +1041,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::{LeaderClaimError, LeaderClaimOp, LeaderClaimVerificationContext},
+                sdp::SdpError,
                 transfer::TransferOp,
             },
             traits::Hashable as _,
@@ -1055,7 +1056,7 @@ mod tests {
             leader_claim_proof::Groth16LeaderClaimProof,
             leader_proof::LeaderProof as _,
         },
-        sdp::{ActivityMetadata, DeclarationId, Nonce},
+        sdp::{ActivityError, ActivityMetadata, DeclarationId, Nonce},
     };
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};
@@ -2712,6 +2713,63 @@ mod tests {
                 .unwrap()
                 .config_tip_hash,
             config_op.id()
+        );
+    }
+
+    /// The Blend rewards refuse every activity until they have a target epoch,
+    /// so an active message reporting one fails verification, before anything
+    /// is executed.
+    #[test]
+    fn active_message_the_service_rewards_refuse_fails_verification() {
+        let leader_utxo = utxo();
+        let (_sdp_utxo_key, sdp_utxo) = utxo_with_sk();
+        let config = config();
+        let epoch_length = config.epoch_length();
+        let (mut ledger, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
+        let (declared, declare, zk_key) = apply_and_add_utxo_and_declaration(
+            &mut ledger,
+            genesis,
+            epoch_length,
+            leader_utxo,
+            utxo(),
+            sdp_utxo,
+        );
+
+        let state = ledger.states[&declared].clone();
+        let created = state
+            .mantle_ledger
+            .sdp_ledger()
+            .get_declaration(&declare.id())
+            .expect("the declaration was applied")
+            .created;
+        let epoch_state = state.cryptarchia_ledger.epoch_state.clone();
+        let active_op = SDPActiveOp {
+            declaration_id: declare.id(),
+            nonce: Nonce::new(created, 1),
+            metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
+                &zk_key,
+                &epoch_state,
+                &epoch_state,
+                &ledger
+                    .era_schedule()
+                    .genesis()
+                    .parameters
+                    .sdp_config
+                    .service_rewards_params
+                    .blend,
+            ))),
+        };
+        let tx = create_signed_tx(Op::SDPActive(active_op), &Key::Zk(zk_key));
+
+        assert_eq!(
+            state
+                .try_apply_tx_operations::<_, HeaderId>(ledger.era_schedule(), tx)
+                .err(),
+            Some(LedgerError::VerificationError(
+                VerificationError::SDPVerificationError(SdpError::RejectedActivity(
+                    ActivityError::TargetEpochNotSet
+                ))
+            ))
         );
     }
 

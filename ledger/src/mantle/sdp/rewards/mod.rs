@@ -5,6 +5,7 @@ mod test_utils;
 use std::collections::HashMap;
 
 use lb_binary_codec::bincode::SerializeOp as _;
+pub use lb_core::sdp::ActivityError as Error;
 use lb_core::{
     crypto::{Digest, Hash, Hasher},
     mantle::{Note, Utxo, Value},
@@ -12,7 +13,6 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use thiserror::Error;
 
 use crate::EpochState;
 
@@ -70,29 +70,6 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
 
     #[must_use]
     fn add_income(&self, income: Value) -> Self;
-}
-
-#[derive(Error, Debug, Clone, PartialEq, Eq)]
-pub enum Error {
-    #[error("Target epoch is not set")]
-    TargetEpochNotSet,
-    #[error("Invalid epoch: expected {expected}, got {got}")]
-    InvalidEpoch { expected: Epoch, got: Epoch },
-    #[error("Invalid opinion length: expected {expected}, got {got}")]
-    InvalidOpinionLength { expected: usize, got: usize },
-    #[error("Duplicate active message for epoch {epoch}, provider {provider_id:?}")]
-    DuplicateActiveMessage {
-        epoch: Epoch,
-        provider_id: Box<ProviderId>,
-    },
-    #[error("Invalid proof type")]
-    InvalidProofType,
-    #[error("Invalid proof")]
-    InvalidProof,
-    #[error("Hamming distance too large")]
-    HammingDistanceTooLarge,
-    #[error("Unknown provider: {0:?}")]
-    UnknownProvider(Box<ProviderId>),
 }
 
 /// Creates a deterministic transaction hash for reward distribution.

@@ -11,7 +11,10 @@ use lb_core::{
         },
         transactions::{OperationVerificationHelper, VerificationError},
     },
-    sdp::{Declaration, DeclarationId, MinStake, ServiceType, service_notes::ServiceNotes},
+    sdp::{
+        ActivityMetadata, Declaration, DeclarationId, MinStake, ServiceType,
+        service_notes::ServiceNotes,
+    },
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::UnverifiedEd25519PublicKey;
@@ -99,6 +102,16 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
         self.ledger_state.sdp_ledger().get_declaration(id).ok_or(
             VerificationError::SDPVerificationError(SdpError::DeclarationNotFound(*id)),
         )
+    }
+
+    fn check_activity(
+        &self,
+        declaration: &Declaration,
+        metadata: &ActivityMetadata,
+    ) -> Result<(), SdpError> {
+        self.ledger_state
+            .sdp_ledger()
+            .check_activity(declaration, metadata)
     }
 
     fn get_min_stake(&self) -> &MinStake {
