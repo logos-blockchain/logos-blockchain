@@ -166,7 +166,10 @@ mod tests {
             (
                 FIXTURE_LIMITS.max_uncles,
                 FIXTURE_LIMITS.max_transactions_size,
-                (FIXTURE_LIMITS.max_transactions, u32::MAX),
+                (
+                    FIXTURE_LIMITS.max_transactions,
+                    crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+                ),
             )
         });
     }

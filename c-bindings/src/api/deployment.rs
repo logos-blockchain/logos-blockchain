@@ -36,7 +36,7 @@ pub struct DeploymentInfo {
 impl DeploymentInfo {
     fn new(deployment: &DeploymentSettings) -> Result<Self, OperationStatus> {
         let deployment_chain_id = deployment.chain_id();
-        let chain = ProtocolScope::Chain(deployment.genesis_id());
+        let chain = deployment.chain_scope();
         let fork = ProtocolScope::Fork(deployment.fork_digest_in_force());
 
         // Every string is built before any of them is turned into a raw
@@ -103,7 +103,7 @@ pub type FfiDeploymentInfoResult = FfiStatusResult<*mut DeploymentInfo>;
 ///   configuration file.
 /// - `custom_deployment_path`: An optional pointer to a string holding the path
 ///   to a custom deployment file. If null, the `DEPLOYMENT` environment
-///   variable is used, falling back to the embedded default deployment.
+///   variable is used, falling back to the testnet release 0.3.1 started.
 ///
 /// # Returns
 ///

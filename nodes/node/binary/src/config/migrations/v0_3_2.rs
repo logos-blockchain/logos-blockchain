@@ -14,6 +14,9 @@
 //! the current default applies. A value someone set to a 0.3.2 default can't
 //! be told apart from it.
 //!
+//! Configs of 0.3.1 are upgraded too: they differ from those of 0.3.2 in the
+//! shape of `tracing.metrics` alone.
+//!
 //! Every step also accepts the new form, so a config already in it comes out
 //! unchanged; everything the steps don't name passes through untouched.
 
@@ -80,14 +83,11 @@ const INTEGER_DURATIONS: &[(&[&str], &str, &str, u64)] = &[
     ),
 ];
 
-/// 0.3.2 defaults that are not the current ones, as 0.3.2 wrote them: the
-/// mempool `tx_ttl` went from 9h to 1h, and a `null` kademlia `caching` was
-/// libp2p's default, which `cache_size` now defaults to. The upgrade test fails
-/// on any other 0.3.2 default left in the upgraded config.
-const STALE_DEFAULTS: &[(&[&str], &str, &str)] = &[
-    (&["mempool"], "tx_ttl", "'32400.000000000'"),
-    (KADEMLIA, "caching", "null"),
-];
+/// 0.3.2 defaults that are not the current ones, as 0.3.2 wrote them: a `null`
+/// kademlia `caching` was libp2p's default, which `cache_size` now defaults to.
+/// The upgrade test fails on any other 0.3.2 default left in the upgraded
+/// config.
+const STALE_DEFAULTS: &[(&[&str], &str, &str)] = &[(KADEMLIA, "caching", "null")];
 
 /// 0.3.2 `caching: {type: Disabled} | {type: Enabled, config: {max_peers}}`,
 /// now `cache_size: null | <max_peers>`.
@@ -115,6 +115,7 @@ pub fn migrate(config: &mut Value) -> Result<()> {
             section.remove(*key);
         }
     }
+    migrate_0_3_1_metrics(config);
     if let Some(metrics) = mapping_at(config, &["tracing", "metrics"]) {
         // Dropped rather than translated: 0.3.2 wrote its `false` default into
         // every config, and upgraded nodes get the new always-on default.
@@ -170,6 +171,29 @@ pub fn migrate(config: &mut Value) -> Result<()> {
         drop_generated_log_prefix(config);
     }
     Ok(())
+}
+
+/// 0.3.1 `metrics: None | !Otlp {url, ..}`, since 0.3.2 `metrics: {otlp:
+/// null | {endpoint, ..}}`. `None` is dropped, as 0.3.2's disabled metrics
+/// are: upgraded nodes get the current default.
+fn migrate_0_3_1_metrics(config: &mut Value) {
+    let Some(tracing) = mapping_at(config, &["tracing"]) else {
+        return;
+    };
+    if tracing.get("metrics").and_then(Value::as_str) == Some("None") {
+        tracing.remove("metrics");
+    } else if let Some(metrics) = tracing.get_mut("metrics")
+        && let Value::Tagged(tagged) = &*metrics
+        && tagged.tag == "Otlp"
+    {
+        let mut otlp = tagged.value.clone();
+        if let Some(otlp) = otlp.as_mapping_mut()
+            && let Some(url) = otlp.remove("url")
+        {
+            otlp.insert("endpoint".into(), url);
+        }
+        *metrics = Value::Mapping(Mapping::from_iter([("otlp".into(), otlp)]));
+    }
 }
 
 fn mapping_at<'a>(config: &'a mut Value, path: &[&str]) -> Option<&'a mut Mapping> {
@@ -256,6 +280,27 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_the_0_3_1_metrics_layer() {
+        let mut config = yaml("tracing: {level: INFO, metrics: None}");
+        migrate(&mut config).unwrap();
+        assert_eq!(config, yaml("tracing: {level: INFO}"));
+
+        let mut config = yaml(
+            "tracing: {metrics: !Otlp {url: 'http://localhost:4317/', service_name: node, protocol: Grpc}}",
+        );
+        migrate(&mut config).unwrap();
+        assert_eq!(
+            config,
+            yaml(
+                "tracing: {metrics: {otlp: {endpoint: 'http://localhost:4317/', service_name: node, protocol: Grpc}}}"
+            )
+        );
+        let upgraded = config.clone();
+        migrate(&mut config).unwrap();
+        assert_eq!(config, upgraded);
+    }
+
+    #[test]
     fn rewrites_a_0_3_2_config_into_the_new_format() {
         let mut config = yaml("
 api: {backend: {timeout: 45, max_body_size: 10}}
@@ -291,7 +336,7 @@ network:
       identify: {interval: 5m}
       chain_sync: {peer_response_timeout: 1s 500ms}
       nat: {autonat: {probe_interval: 250ms}, mapping: {timeout: 1s 500ms}}
-mempool: {seen_items_subscription_channel_size: 64}
+mempool: {tx_ttl: 9h, seen_items_subscription_channel_size: 64}
 tracing:
   level: INFO
   logger: {file: {}}

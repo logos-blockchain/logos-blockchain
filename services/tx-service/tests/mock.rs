@@ -630,7 +630,7 @@ async fn a_tx_whose_fork_digest_the_era_in_force_does_not_accept_is_refused() {
 
     assert!(matches!(
         error,
-        MempoolError::UnacceptedForkDigest(fork_digest) if fork_digest == other_fork
+        MempoolError::UnacceptedForkDigest(Some(fork_digest)) if fork_digest == other_fork
     ));
     assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
 }
@@ -1248,7 +1248,7 @@ async fn included_tx_remains_resolvable_after_recovery() {
 async fn removed_tx_is_released_by_its_age_since_admission() {
     let (old, recent) = (tx("old"), tx("recent"));
     let mut pool = pool_with_admission_times(
-        default_settings(),
+        ttl_settings(TEST_TX_TTL),
         InMemoryStorageAdapter::default(),
         &[(&old, minutes_ago(71)), (&recent, minutes_ago(30))],
     )

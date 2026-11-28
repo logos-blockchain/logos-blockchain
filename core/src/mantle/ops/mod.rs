@@ -150,7 +150,7 @@ mod mantle_test_vectors {
     /// implementation fixture.
     #[test]
     fn rfc_sdp_withdraw_operation_vector() {
-        let withdraw = WithdrawMessage {
+        let withdraw = WithdrawMessage::Master {
             declaration_id: DeclarationId([0x1b; 32]),
             nonce: Nonce::new(0.into(), 0x1d),
         };

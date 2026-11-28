@@ -17,6 +17,7 @@ pub use lb_time::Era;
 use crate::{
     crypto::Hasher,
     header::HeaderId,
+    mantle::transactions::genesis_tx::ChainId,
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -93,6 +94,31 @@ impl ForkDigest {
         }
         Self(hasher.finalize().into())
     }
+
+    /// The fork digest of the releases before 0.4, which also hashed the chain
+    /// ID after the genesis block ID:
+    /// `blake2b256(b"FORK_DIGEST_V1" || genesis_id || chain_id || era_0 || …)`.
+    ///
+    /// Only for the eras a chain activated under those releases, whose
+    /// protocol names carry it.
+    #[must_use]
+    pub fn compute_legacy<EraDigests>(
+        genesis_id: HeaderId,
+        chain_id: &ChainId,
+        era_digests: EraDigests,
+    ) -> Self
+    where
+        EraDigests: Iterator<Item = EraDigest>,
+    {
+        let mut hasher = Hasher::new();
+        hasher.update(FORK_DIGEST_V1);
+        hasher.update(genesis_id.encode());
+        hasher.update(chain_id.encode());
+        for era in era_digests {
+            hasher.update(era.0);
+        }
+        Self(hasher.finalize().into())
+    }
 }
 
 impl Debug for ForkDigest {
@@ -117,23 +143,43 @@ display_hex_bytes_newtype!(ForkDigest);
 serde_bytes_newtype!(ForkDigest, 32);
 codec_fixtures!(ForkDigest, Self([0x22u8; 32]) => "2222222222222222222222222222222222222222222222222222222222222222");
 
+/// How an error names the fork digest of a transaction: the digest, or that
+/// the transaction carries none.
+#[must_use]
+pub fn display_fork_digest(fork_digest: Option<&ForkDigest>) -> String {
+    fork_digest.map_or_else(|| "none".to_owned(), ToString::to_string)
+}
+
 /// The fork digests an era accepts on transactions: its own, and those of the
 /// eras before it back to the latest era that refuses the transactions of the
 /// eras before it.
+///
+/// An era from before transactions carried a fork digest accepts none: its
+/// transactions are the ones without a fork digest, which no later era
+/// accepts.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(transparent)]
-pub struct AcceptedForkDigests(Vec<ForkDigest>);
+pub enum AcceptedForkDigests {
+    /// Only transactions that carry no fork digest.
+    NoneCarried,
+    /// Only transactions that carry one of these fork digests.
+    AnyOf(Vec<ForkDigest>),
+}
 
 impl AcceptedForkDigests {
     #[must_use]
     pub const fn new(fork_digests: Vec<ForkDigest>) -> Self {
-        Self(fork_digests)
+        Self::AnyOf(fork_digests)
     }
 
-    /// Whether a transaction carrying `fork_digest` is valid under the era.
+    /// Whether a transaction carrying `fork_digest`, or none, is valid under
+    /// the era.
     #[must_use]
-    pub fn accepts(&self, fork_digest: &ForkDigest) -> bool {
-        self.0.contains(fork_digest)
+    pub fn accepts(&self, fork_digest: Option<&ForkDigest>) -> bool {
+        match (self, fork_digest) {
+            (Self::NoneCarried, None) => true,
+            (Self::AnyOf(accepted), Some(fork_digest)) => accepted.contains(fork_digest),
+            (Self::NoneCarried, Some(_)) | (Self::AnyOf(_), None) => false,
+        }
     }
 }
 

@@ -49,7 +49,7 @@ pub fn prepare_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
     priority_fee_percent: u64,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
 ) -> Result<PreparedWalletTransaction, WalletTransactionError> {
     finalize_prepared_wallet_transaction(prepare_wallet_transaction_work_item(
         intent,
@@ -68,7 +68,7 @@ pub fn prepare_wallet_transaction_work_item(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
     priority_fee_percent: u64,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
 ) -> Result<PreparedWalletTransactionWorkItem, WalletTransactionError> {
     let sender_pk = resources.sender().owner_public_key();
     let fee_sponsor_pk = resources.fee_sponsor().map(WalletFundingSource::public_key);

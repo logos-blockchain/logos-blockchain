@@ -26,6 +26,7 @@ pub fn create_epoch_state(
         .map(|(i, provider_id)| {
             let note_id = Fr::from(i as u64).into();
             let declaration = Declaration {
+                legacy: false,
                 service_type,
                 provider_id: *provider_id,
                 service_note_id: note_id,

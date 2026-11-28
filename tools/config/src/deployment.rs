@@ -9,8 +9,8 @@ use lb_groth16::ModulusShift;
 use lb_node::config::deployment::{
     DeploymentSettings, EraDeclarations,
     era::ruleset::{
-        EraRuleset, v1,
-        v1::{
+        EraRuleset, v2,
+        v2::{
             blend::{
                 CommonSettings as BlendCommonSettings, CoreSettings as BlendCoreSettings,
                 CoverReplicationFactor, CoverTrafficSettings, MessageDelayerSettings,
@@ -139,7 +139,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
         .map_or(DEFAULT_SLOT_TIME_IN_SECS, |s| s.parse::<u64>().unwrap());
 
     DeploymentSettings::new(
-        &EraDeclarations::new_genesis(EraRuleset::V1(v1::Parameters {
+        &EraDeclarations::new_genesis(EraRuleset::V2(v2::Parameters {
             blend: BlendDeploymentSettings {
                 common: BlendCommonSettings {
                     minimum_network_size: MinimumNetworkSize::try_new(MINIMUM_BLEND_NETWORK_SIZE)
@@ -208,7 +208,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     )
                     .unwrap(),
                 },
-                sdp_config: v1::cryptarchia::SdpConfig {
+                sdp_config: v2::cryptarchia::SdpConfig {
                     service_params: [ServiceParameters {
                         inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
                     }],
@@ -217,8 +217,8 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     },
                 },
                 learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
-                pow_config: v1::cryptarchia::PoWConfig {
-                    blend: v1::cryptarchia::BlendPoWConfig {
+                pow_config: v2::cryptarchia::PoWConfig {
+                    blend: v2::cryptarchia::BlendPoWConfig {
                         base_difficulty: ModulusShift::new::<BLEND_POW_BASE_DIFFICULTY_EXPONENT>(),
                         target_transactions_per_block: NonZero::new(BLEND_POW_TARGET_TXS_PER_BLOCK)
                             .unwrap(),
@@ -226,7 +226,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         damping_num: NonZero::new(BLEND_POW_DAMPING_NUM).unwrap(),
                         damping_den_offset: BLEND_POW_DAMPING_DEN_OFFSET,
                     },
-                    reward: v1::cryptarchia::RewardPoWConfig {
+                    reward: v2::cryptarchia::RewardPoWConfig {
                         minimum_difficulty: ModulusShift::new::<
                             REWARD_POW_MINIMUM_DIFFICULTY_EXPONENT,
                         >(),
@@ -241,17 +241,18 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         slot_window: NonZero::new(REWARD_POW_SLOT_WINDOW).unwrap(),
                     },
                 },
-                execution_market: v1::cryptarchia::ExecutionMarketConfig {
+                execution_market: v2::cryptarchia::ExecutionMarketConfig {
                     max_gas_per_block: EXECUTION_MARKET_MAX_GAS_PER_BLOCK,
                     fee_adjustment_rate: EXECUTION_MARKET_FEE_ADJUSTMENT_RATE,
                     ema_smoothing_factor: EXECUTION_MARKET_EMA_SMOOTHING_FACTOR,
                 },
-                storage_market: v1::cryptarchia::StorageMarketConfig {
+                storage_market: v2::cryptarchia::StorageMarketConfig {
                     max_adjustment_factor: STORAGE_MARKET_MAX_ADJUSTMENT_FACTOR,
                     ema_smoothing_factor: STORAGE_MARKET_EMA_SMOOTHING_FACTOR,
                 },
                 block_rewards: BLOCK_REWARDS,
                 gas_profile: GAS_PROFILE,
+                pow_reward_pool: v2::cryptarchia::EraStartRewardPool::default(),
             },
             time: TimeDeploymentSettings {
                 slot_duration_in_seconds: NonZero::new(slot_duration_in_secs)

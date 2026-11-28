@@ -188,7 +188,11 @@ mod tests {
 
         // DECODING
         let test_vector_bytes = hex::decode(test_vector).unwrap();
-        let (remaining, decoded_tx) = SignedOps::decode(&test_vector_bytes, &u32::MAX).unwrap();
+        let (remaining, decoded_tx) = SignedOps::decode(
+            &test_vector_bytes,
+            &crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+        )
+        .unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -235,7 +239,11 @@ mod tests {
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
-        let (remaining, decoded_tx) = SignedOps::decode(&encoded, &u32::MAX).unwrap();
+        let (remaining, decoded_tx) = SignedOps::decode(
+            &encoded,
+            &crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+        )
+        .unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
     }
@@ -289,8 +297,11 @@ mod tests {
                     "Size mismatch at payload size {payload_size}",
                 );
 
-                let (remaining, decoded_tx) = SignedOps::decode(&encoded, &u32::MAX)
-                    .unwrap_or_else(|_| panic!("Failed to decode at payload size {payload_size}"));
+                let (remaining, decoded_tx) = SignedOps::decode(
+                    &encoded,
+                    &crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+                )
+                .unwrap_or_else(|_| panic!("Failed to decode at payload size {payload_size}"));
 
                 assert!(
                     remaining.is_empty(),
@@ -329,7 +340,11 @@ mod tests {
         let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = Ops::decode(&encoded, &u32::MAX).unwrap();
+        let (remaining, decoded_tx) = Ops::decode(
+            &encoded,
+            &crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+        )
+        .unwrap();
 
         // Verify
         assert_eq!(remaining, b"");
@@ -501,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_minimum_signed_mantle_tx_size_with_sdp_withdraw() {
-        let sdp_withdraw_op = SDPWithdrawOp {
+        let sdp_withdraw_op = SDPWithdrawOp::Master {
             declaration_id: DeclarationId([0x11; 32]),
             nonce: Nonce::new(0.into(), 42),
         };
@@ -823,7 +838,11 @@ mod tests {
         let op = Op::LeaderClaim(leader_claim_op);
 
         let encoded = op.encode();
-        let (remaining, decoded_op) = Op::decode(&encoded, &u32::MAX).unwrap();
+        let (remaining, decoded_op) = Op::decode(
+            &encoded,
+            &crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+        )
+        .unwrap();
         assert_eq!(remaining, b"");
         assert_eq!(decoded_op, op);
     }
@@ -852,8 +871,11 @@ mod tests {
         let signed_tx = SignedOps::<_, StandardMode>::from_parts(mantle_tx, op_proofs).unwrap();
 
         let encoded = signed_tx.encode();
-        let (remaining, decoded_tx) =
-            SignedOps::<_, StandardMode>::decode(&encoded, &u32::MAX).unwrap();
+        let (remaining, decoded_tx) = SignedOps::<_, StandardMode>::decode(
+            &encoded,
+            &crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+        )
+        .unwrap();
 
         assert_eq!(remaining, b"");
         assert_eq!(decoded_tx, signed_tx);
@@ -929,7 +951,10 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = Ops::decode(&valid_input, &u32::MAX);
+        let result = Ops::decode(
+            &valid_input,
+            &crate::mantle::transactions::TxDecodeContext::UNBOUNDED,
+        );
         if let Err(err) = result {
             assert!(
                 !matches!(err, DecodeError::LengthOutOfBounds { .. }),

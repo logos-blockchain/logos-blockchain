@@ -332,6 +332,7 @@ mod tests {
 
     fn declaration(created: Epoch, withdraw_at: Option<Epoch>) -> Declaration {
         Declaration {
+            legacy: false,
             service_type: ServiceType::BlendNetwork,
             provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
             service_note_id: NoteId(*ZkPublicKey::zero().as_fr()),

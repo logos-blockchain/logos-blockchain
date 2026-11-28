@@ -67,9 +67,11 @@
             "nodes/node/binary/src/config/deployment/settings.yaml"
           ];
           # Directories whose files are embedded too: the era files the
-          # default deployment includes.
+          # default deployment includes, the constants of the era rulesets,
+          # and the settings and era files of the testnet deployment.
           assetDirs = [
-            "nodes/node/binary/src/config/deployment/era/schedule/"
+            "nodes/node/binary/src/config/deployment/era/"
+            "nodes/node/binary/src/config/deployment/testnet/"
           ];
           src = pkgs.lib.cleanSourceWith {
             src = craneLib.path ./.;

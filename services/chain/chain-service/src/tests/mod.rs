@@ -1579,6 +1579,7 @@ fn ledger_config_with_uncles(
         epoch_config,
         consensus_config,
         sdp_config: lb_ledger::mantle::sdp::Config {
+            era: lb_ledger::mantle::sdp::SdpEra::Master,
             service_params: Arc::new(service_params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
@@ -1596,6 +1597,8 @@ fn ledger_config_with_uncles(
         max_transactions: 1024,
         max_transactions_size: 2 * 1024 * 1024,
         max_op_data_size: 2 * 1024 * 1024 * 7 / 8,
+        tx_era: lb_core::mantle::transactions::TxEra::Master,
+        pow_reward_pool_reset: None,
         execution_market: lb_ledger::config::ExecutionMarketConfig {
             max_gas_per_block: lb_ledger::config::MaxGasPerBlock::new(3_193_460).unwrap(),
             fee_adjustment_rate: ProperFraction::new(1, 8.try_into().unwrap()).unwrap(),

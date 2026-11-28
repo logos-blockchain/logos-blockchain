@@ -1,7 +1,11 @@
-use std::{collections::HashMap, mem};
+use std::{borrow::Cow, collections::HashMap, mem};
 
 use futures::Stream;
-use lb_binary_codec::canonical::{BinaryDecode, BinaryEncode};
+use lb_binary_codec::{
+    bincode::{DeserializeOp as _, SerializeOp as _},
+    canonical::{BinaryDecode, BinaryEncode},
+};
+use lb_core::mantle::transactions::{TxDecodeContext, TxEra};
 use lb_log_targets::mempool;
 use lb_network_service::{
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
@@ -14,6 +18,43 @@ use tokio_stream::StreamExt as _;
 use crate::network::NetworkAdapter;
 
 const LOG_TARGET: &str = mempool::network::LIBP2P;
+
+// Releases 0.3.1 to 0.3.6 gossip a transaction as the `bincode` form of its
+// canonical bytes, which prefixes them with their length. A chain they started
+// keeps that message in its legacy era, where those releases still take part;
+// later eras gossip the canonical bytes alone.
+
+/// The canonical bytes of the transaction in `message`, a message of `era`.
+fn canonical_bytes(message: &[u8], era: TxEra) -> Result<Cow<'_, [u8]>, String> {
+    match era {
+        TxEra::Master => Ok(Cow::Borrowed(message)),
+        TxEra::Legacy => Vec::<u8>::from_bytes(message)
+            .map(Cow::Owned)
+            .map_err(|error| error.to_string()),
+    }
+}
+
+/// The message of `era` for the transaction of these canonical bytes.
+fn message(canonical: Box<[u8]>, era: TxEra) -> Box<[u8]> {
+    match era {
+        TxEra::Master => canonical,
+        TxEra::Legacy => canonical
+            .into_vec()
+            .to_bytes()
+            .expect("Bytes serialize to bytes.")
+            .to_vec()
+            .into_boxed_slice(),
+    }
+}
+
+/// Decodes a transaction from the message of the era of `context`.
+fn decode_message<Item>(message: &[u8], context: TxDecodeContext) -> Result<Item, String>
+where
+    Item: BinaryDecode<Context = TxDecodeContext>,
+{
+    let canonical = canonical_bytes(message, context.era)?;
+    Item::decode_all(&canonical, &context).map_err(|error| error.to_string())
+}
 
 #[derive(Clone)]
 pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
@@ -49,7 +90,7 @@ impl<Item, Key, RuntimeServiceId> Libp2pAdapter<Item, Key, RuntimeServiceId> {
 impl<Item, Key, RuntimeServiceId> NetworkAdapter<RuntimeServiceId>
     for Libp2pAdapter<Item, Key, RuntimeServiceId>
 where
-    Item: BinaryEncode + BinaryDecode<Context = u32> + Send + Sync + 'static + Clone,
+    Item: BinaryEncode + BinaryDecode<Context = TxDecodeContext> + Send + Sync + 'static + Clone,
     Key: Clone + Send + Sync + 'static,
 {
     type Backend = Libp2p;
@@ -152,14 +193,14 @@ where
         // the messages of every era's topic, each decoded under the limit of
         // that era, and follows the adapter from era to era, without requiring
         // any actions from consumers on era changes.
-        let max_op_data_sizes: HashMap<TopicHash, u32> = self
+        let max_op_data_sizes: HashMap<TopicHash, TxDecodeContext> = self
             .settings
             .era_schedule
             .iter()
             .map(|era| {
                 (
                     TopicHash::from_raw(era.parameters.topic.clone()),
-                    era.parameters.max_op_data_size,
+                    TxDecodeContext::at_slot(era.first_slot, era.parameters.max_op_data_size),
                 )
             })
             .collect();
@@ -173,7 +214,7 @@ where
         let stream = receiver.await.unwrap();
         Box::new(Box::pin(stream.filter_map(move |message| match message {
             Ok(Message { data, topic, .. }) => {
-                match Item::decode_all(&data, max_op_data_sizes.get(&topic)?) {
+                match decode_message(&data, *max_op_data_sizes.get(&topic)?) {
                     Ok(item) => Some((id(&item), item)),
                     Err(e) => {
                         tracing::debug!(target: LOG_TARGET, "Unrecognized message: {e}");
@@ -187,13 +228,13 @@ where
 
     async fn send(&self, item: Item) {
         let size = item.encoded_length();
-        let max_transaction_size = self
+        let era = self
             .settings
             .era_schedule
             .get(self.current_era)
-            .expect("The adapter is only ever in a scheduled era.")
-            .parameters
-            .max_transaction_size;
+            .expect("The adapter is only ever in a scheduled era.");
+        let tx_era = TxEra::at_slot(era.first_slot);
+        let max_transaction_size = era.parameters.max_transaction_size;
         if size > max_transaction_size {
             tracing::debug!(
                 target: LOG_TARGET,
@@ -209,7 +250,7 @@ where
                 .send(NetworkMsg::Process(Command::PubSub(
                     PubSubCommand::Broadcast {
                         topic: self.current_era_topic.clone(),
-                        message: item.encode(),
+                        message: message(item.encode(), tx_era),
                     },
                 )))
                 .await
@@ -238,4 +279,37 @@ pub struct EraSettings {
     /// The most bytes of data an Operation may carry in the era: what the
     /// transactions of its topic are decoded under.
     pub max_op_data_size: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_legacy_era_message_is_the_bincode_form_of_the_canonical_bytes() {
+        let canonical = vec![7; 300];
+
+        let message = message(canonical.clone().into_boxed_slice(), TxEra::Legacy);
+        // As releases 0.3.1 to 0.3.6 write it: the bytes after their length.
+        assert_eq!(&*message, &*canonical.to_bytes().unwrap());
+        assert_eq!(&message[..8], 300u64.to_le_bytes());
+        assert_eq!(
+            &*canonical_bytes(&message, TxEra::Legacy).unwrap(),
+            canonical
+        );
+        // The canonical bytes alone are not a message of the legacy era.
+        canonical_bytes(&canonical, TxEra::Legacy).unwrap_err();
+    }
+
+    #[test]
+    fn a_later_era_message_is_the_canonical_bytes() {
+        let canonical = vec![7; 300];
+
+        let message = message(canonical.clone().into_boxed_slice(), TxEra::Master);
+        assert_eq!(&*message, canonical);
+        assert_eq!(
+            &*canonical_bytes(&message, TxEra::Master).unwrap(),
+            canonical
+        );
+    }
 }

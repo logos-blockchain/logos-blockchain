@@ -286,7 +286,7 @@ fn cluster_client_exhausted_error() -> DynError {
 
 fn build_wallet_transaction(
     input: &WalletInput,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
     gas_context: &OpsGasContext,
 ) -> Result<SignedOps<Preverified, StandardMode>, DynError> {
     let receiver = input.account.public_key();

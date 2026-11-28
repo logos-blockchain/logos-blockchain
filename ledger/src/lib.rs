@@ -22,7 +22,7 @@ pub use intent::{Intent, IntentStatus};
 use lb_core::{
     block::BlockNumber,
     crypto::Hash as BlockHash,
-    era::ForkDigest,
+    era::{ForkDigest, display_fork_digest},
     events::{Events, HeaderEvent, TxEvent, TxEventPayload},
     mantle::{
         GenesisParameters, NoteId, Utxo, Value, VerificationError,
@@ -30,7 +30,7 @@ use lb_core::{
         gas::{Gas, GasCost, GasOverflow, GasProfile},
         ledger::verification_mode::StandardMode,
         ops::{
-            SignedOp,
+            OpRef, SignedOp,
             channel::{
                 channel_transfer::ChannelTransferExecutionContext,
                 deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext,
@@ -41,7 +41,7 @@ use lb_core::{
         },
         traits::{GenesisTx, PreverifiedMantleTransaction, StorageSize, genesis::GenesisOps},
         transactions::{
-            GasPrices,
+            GasPrices, TxDecodeContext, TxEra,
             hash::TxHash,
             states::Verified,
             tx_list::ops::{OpsContext, OpsGasContext},
@@ -117,8 +117,8 @@ pub enum LedgerError<Id> {
     InvalidStoragePrice,
     #[error("Verification error: {0}")]
     VerificationError(#[from] VerificationError),
-    #[error("The era of the block does not accept the fork digest {0} of the transaction")]
-    UnacceptedForkDigest(ForkDigest),
+    #[error("The era of the block does not accept the fork digest {} of the transaction", display_fork_digest(.0.as_ref()))]
+    UnacceptedForkDigest(Option<ForkDigest>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -790,7 +790,7 @@ impl LedgerState {
                 tx_events.extend(events);
             }
             SignedOp::ChannelDeposit(signed_operation) => {
-                check_op_data_size(signed_operation.operation().metadata.len(), config)?;
+                check_deposit_metadata_size(signed_operation.operation().metadata.len(), config)?;
                 let channels = self.mantle_ledger.channels();
                 let utxos = self.cryptarchia_ledger.latest_utxos();
 
@@ -955,7 +955,22 @@ impl LedgerState {
     {
         let config = config_for_slot(eras, self.slot());
         let fork_digest = tx.fork_digest();
-        if !config.accepted_fork_digests.accepts(&fork_digest) {
+        if !config.accepted_fork_digests.accepts(fork_digest.as_ref()) {
+            return Err(LedgerError::UnacceptedForkDigest(fork_digest));
+        }
+        // A transaction in another layout than its era's, or an Operation in
+        // another layout than its transaction's, would encode to bytes no
+        // node decodes back.
+        let tx_era = if fork_digest.is_some() {
+            TxEra::Master
+        } else {
+            TxEra::Legacy
+        };
+        if tx_era != config.tx_era
+            || tx.op_refs_iter().any(
+                |op| matches!(op, OpRef::SDPWithdraw(withdrawal) if withdrawal.era() != config.tx_era),
+            )
+        {
             return Err(LedgerError::UnacceptedForkDigest(fork_digest));
         }
         let mut verified_operations = tx.into_verified_operations();
@@ -1018,6 +1033,23 @@ const fn check_op_data_size<Id>(size: usize, config: &Config) -> Result<(), Ledg
     Ok(())
 }
 
+/// Refuses `size` bytes of metadata in a deposit if the era of `config` allows
+/// fewer.
+const fn check_deposit_metadata_size<Id>(
+    size: usize,
+    config: &Config,
+) -> Result<(), LedgerError<Id>> {
+    let max = TxDecodeContext {
+        era: config.tx_era,
+        max_op_data_size: config.max_op_data_size,
+    }
+    .max_deposit_metadata_size();
+    if size > max as usize {
+        return Err(LedgerError::OpDataTooLarge { size, max });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZero;
@@ -1031,7 +1063,7 @@ mod tests {
             gas::TxGasCalculator as _,
             ledger::{BoundedInputs, Inputs, Outputs, Utxos, VerifiableOperation as _},
             ops::{
-                OpId as _, OpRef, SignedOperation,
+                OpId as _, SignedOperation,
                 channel::{
                     ChannelId, MsgId,
                     channel_transfer::ChannelTransferOp,
@@ -1450,6 +1482,28 @@ mod tests {
                 max: size as u32 - 1,
             })
         );
+    }
+
+    /// Releases 0.3.1 to 0.3.6 bound a deposit's metadata only by the size of
+    /// a block's transactions.
+    #[test]
+    fn deposit_metadata_is_held_to_the_operation_data_limit_only_in_the_master_era() {
+        let master = Config {
+            max_op_data_size: 4,
+            tx_era: TxEra::Master,
+            ..config()
+        };
+        let legacy = Config {
+            tx_era: TxEra::Legacy,
+            ..master.clone()
+        };
+
+        assert_eq!(check_deposit_metadata_size::<HeaderId>(4, &master), Ok(()));
+        assert_eq!(
+            check_deposit_metadata_size::<HeaderId>(5, &master),
+            Err(LedgerError::OpDataTooLarge { size: 5, max: 4 })
+        );
+        assert_eq!(check_deposit_metadata_size::<HeaderId>(5, &legacy), Ok(()));
     }
 
     /// A block rebuilt from a proposal takes its transactions from the mempool,
@@ -2896,7 +2950,7 @@ mod tests {
             .try_apply_block_contents::<_, HeaderId>(&single_era(config), std::iter::once(tx))
             .err()
             .unwrap();
-        assert_eq!(err, LedgerError::UnacceptedForkDigest(other_fork));
+        assert_eq!(err, LedgerError::UnacceptedForkDigest(Some(other_fork)));
     }
 
     #[test]

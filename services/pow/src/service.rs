@@ -239,7 +239,7 @@ pub struct PoWEraSettings {
     /// smaller of what the two carry.
     pub max_claim_tx_size: usize,
     /// The fork digest of the era, which the claims signed in it carry.
-    pub fork_digest: ForkDigest,
+    pub fork_digest: Option<ForkDigest>,
     /// What the era's Operations cost, which a claim transaction pays for.
     pub gas_profile: GasProfile,
 }
@@ -1726,7 +1726,7 @@ fn max_claims_by_payload_size(max_payload_body_size: usize) -> usize {
 /// balance; see [`drain_ready_rewards`].
 async fn build_reward_claim_tx(
     claim_address: ZkPublicKey,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
     ledger_state: &LedgerState,
     reward_pool: Value,
     tickets: &[(UnsecuredZkKey, ClaimPowRewardOp)],
@@ -1757,7 +1757,7 @@ async fn build_reward_claim_tx(
 )]
 async fn build_reward_claim_tx_inner(
     claim_address: ZkPublicKey,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
     reward_value: Value,
     reward_pool: Value,
     gas_prices: GasPrices,
@@ -2282,7 +2282,7 @@ mod tests {
 
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
-            FORK_DIGEST,
+            Some(FORK_DIGEST),
             REWARD,
             POOL,
             GasPrices::new(1, 1),
@@ -2315,7 +2315,7 @@ mod tests {
     async fn build_reward_claim_tx_errors_when_rewards_disabled() {
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
-            FORK_DIGEST,
+            Some(FORK_DIGEST),
             0,
             POOL,
             GasPrices::new(1, 1),
@@ -2332,7 +2332,7 @@ mod tests {
         // Pool below a single reward -> nothing fundable.
         let result = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
-            FORK_DIGEST,
+            Some(FORK_DIGEST),
             REWARD,
             REWARD - 1,
             GasPrices::new(1, 1),
@@ -2350,7 +2350,7 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(5).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
-            FORK_DIGEST,
+            Some(FORK_DIGEST),
             REWARD,
             2 * REWARD,
             GasPrices::new(1, 1),
@@ -2386,7 +2386,7 @@ mod tests {
             let tickets = vec![ticket()];
             match build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
-                FORK_DIGEST,
+                Some(FORK_DIGEST),
                 REWARD,
                 available_pool,
                 GasPrices::new(1, 1),
@@ -2421,7 +2421,7 @@ mod tests {
             let tickets = vec![ticket()];
             let (_, claimed) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
-                FORK_DIGEST,
+                Some(FORK_DIGEST),
                 REWARD,
                 stale_pool,
                 GasPrices::new(1, 1),
@@ -2448,7 +2448,7 @@ mod tests {
         let tickets: Vec<_> = std::iter::repeat_with(ticket).take(cap + 50).collect();
         let (tx, claimed) = build_reward_claim_tx_inner(
             ZkPublicKey::zero(),
-            FORK_DIGEST,
+            Some(FORK_DIGEST),
             REWARD,
             POOL, // POOL / REWARD = 1000 > cap, so the pool does not bind
             GasPrices::new(1, 1),
@@ -2491,7 +2491,7 @@ mod tests {
             let tickets: Vec<_> = std::iter::repeat_with(ticket).take(claims).collect();
             let (tx, _) = build_reward_claim_tx_inner(
                 ZkPublicKey::zero(),
-                FORK_DIGEST,
+                Some(FORK_DIGEST),
                 REWARD,
                 POOL,
                 GasPrices::new(1, 1),

@@ -195,7 +195,7 @@ fn bench_decode_mantle_transaction(bencher: Bencher, size: usize) {
         let protected_input_slice = black_box(&encoded);
         black_box(SignedOps::<Unverified, StandardMode>::decode(
             protected_input_slice,
-            &u32::MAX,
+            &logos_blockchain_core::mantle::transactions::TxDecodeContext::UNBOUNDED,
         ))
     });
 }

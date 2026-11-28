@@ -25,7 +25,7 @@ use lb_core::{
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::{
     RunConfig,
-    deployment::era::ruleset::v1::{blend::MinimumNetworkSize, cryptarchia::EpochConfig},
+    deployment::era::ruleset::v2::{blend::MinimumNetworkSize, cryptarchia::EpochConfig},
 };
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
@@ -153,7 +153,7 @@ async fn sdp_ops_e2e() {
         .expect("declaration should appear after submission");
 
     // Submit an withdraw tx immediately.
-    let withdraw_message = WithdrawMessage {
+    let withdraw_message = WithdrawMessage::Master {
         declaration_id,
         nonce: declaration_created
             .nonce

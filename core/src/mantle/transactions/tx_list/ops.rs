@@ -27,7 +27,7 @@ use crate::{
         ops::channel::{ChannelId, ChannelKeyIndex},
         traits::{Hashable, MantleTx, StorageSize, hashable},
         transactions::{
-            GasPrices,
+            GasPrices, TxDecodeContext, TxEra,
             codec::minimum_signed_transaction_size,
             thresholds::RunningThresholds,
             tx_list::{
@@ -114,15 +114,20 @@ pub struct OpsContext {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ops {
-    pub(crate) fork_digest: ForkDigest,
+    /// The fork the transaction is bound to, or `None` for a transaction of
+    /// an era whose transactions carry no fork digest: it is then neither
+    /// encoded nor hashed.
+    pub(crate) fork_digest: Option<ForkDigest>,
     pub(crate) ops: TxList<Op>,
 }
 
 impl Ops {
+    /// The transaction of `ops` bound to the fork `fork_digest`, or carrying
+    /// no fork digest if it is `None`.
     #[must_use]
-    pub fn new(fork_digest: ForkDigest, ops: impl Into<TxList<Op>>) -> Self {
+    pub fn new(fork_digest: impl Into<Option<ForkDigest>>, ops: impl Into<TxList<Op>>) -> Self {
         Self {
-            fork_digest,
+            fork_digest: fork_digest.into(),
             ops: ops.into(),
         }
     }
@@ -226,12 +231,18 @@ impl TxGasCalculator for OpRefs<'_> {
     }
 }
 
+/// The fork digest, if the transaction carries one, then its operations. A
+/// transaction without a fork digest writes nothing in its place.
 impl BinaryEncode for Ops {
     fn encoded_length(&self) -> usize {
-        self.fork_digest.encoded_length() + self.ops.0.encoded_length()
+        self.fork_digest
+            .map_or(0, |fork_digest| fork_digest.encoded_length())
+            + self.ops.0.encoded_length()
     }
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.fork_digest.encode_into(out);
+        if let Some(fork_digest) = self.fork_digest {
+            fork_digest.encode_into(out);
+        }
         self.ops.0.encode_into(out);
     }
 }
@@ -243,7 +254,13 @@ impl BinaryDecode for Ops {
         input: &'input [u8],
         context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
-        let (input, fork_digest) = ForkDigest::decode(input, &())?;
+        let (input, fork_digest) = match context.era {
+            TxEra::Legacy => (input, None),
+            TxEra::Master => {
+                let (input, fork_digest) = ForkDigest::decode(input, &())?;
+                (input, Some(fork_digest))
+            }
+        };
         let (input, ops) = TxBoundedVec::decode(input, context)?;
         Ok((
             input,
@@ -273,7 +290,7 @@ impl StorageSize for Ops {
 }
 
 impl MantleTx for Ops {
-    fn fork_digest(&self) -> ForkDigest {
+    fn fork_digest(&self) -> Option<ForkDigest> {
         self.fork_digest
     }
 
@@ -292,9 +309,12 @@ impl MantleTx for Ops {
 /// ```json
 /// { "fork_digest": "…", "ops": [ ... ] }
 /// ```
+///
+/// A transaction that carries no fork digest has no `fork_digest` key.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct MantleTxSerde<Column> {
-    pub(crate) fork_digest: ForkDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) fork_digest: Option<ForkDigest>,
     pub(crate) ops: Column,
 }
 
@@ -310,8 +330,8 @@ impl Serialize for Ops {
             }
             .serialize(serializer)
         } else {
-            let bytes = self.encode();
-            serializer.serialize_bytes(&bytes)
+            FormatTaggedTx::of(self.fork_digest.is_none(), self.encode().into())
+                .serialize(serializer)
         }
     }
 }
@@ -325,9 +345,9 @@ impl<'de> Deserialize<'de> for Ops {
             MantleTxSerde::<TxList<Op>>::deserialize(deserializer)
                 .map(|MantleTxSerde { fork_digest, ops }| Self { fork_digest, ops })
         } else {
-            let bytes = deserialize_bounded_bytes::<MAX_WIRE_MESSAGE_SIZE, D>(deserializer)?;
-            let (remaining, tx) =
-                Self::decode(&bytes, &u32::MAX).map_err(serde::de::Error::custom)?;
+            let tagged = FormatTaggedTx::deserialize(deserializer)?;
+            let (remaining, tx) = Self::decode(&tagged.bytes, &tagged.decode_context())
+                .map_err(serde::de::Error::custom)?;
             if remaining.is_empty() {
                 Ok(tx)
             } else {
@@ -364,8 +384,8 @@ impl<'de> Deserialize<'de> for TxList<Op> {
             TxBoundedVec::deserialize(deserializer).map(Self)
         } else {
             let bytes = deserialize_bounded_bytes::<MAX_WIRE_MESSAGE_SIZE, D>(deserializer)?;
-            let (remaining, ops) =
-                TxBoundedVec::decode(&bytes, &u32::MAX).map_err(serde::de::Error::custom)?;
+            let (remaining, ops) = TxBoundedVec::decode(&bytes, &TxDecodeContext::UNBOUNDED)
+                .map_err(serde::de::Error::custom)?;
             if remaining.is_empty() {
                 Ok(Self(ops))
             } else {
@@ -374,6 +394,66 @@ impl<'de> Deserialize<'de> for TxList<Op> {
                 ))
             }
         }
+    }
+}
+
+/// A transaction in formats that are not human-readable: its canonical
+/// encoding, after whether it is in the legacy layout, which the encoding
+/// itself does not tell.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct FormatTaggedTx {
+    legacy: bool,
+    bytes: WireBoundedBytes,
+}
+
+impl FormatTaggedTx {
+    pub(crate) const fn of(legacy: bool, bytes: Vec<u8>) -> Self {
+        Self {
+            legacy,
+            bytes: WireBoundedBytes(bytes),
+        }
+    }
+
+    pub(crate) const fn decode_context(&self) -> TxDecodeContext {
+        if self.legacy {
+            TxDecodeContext::UNBOUNDED_LEGACY
+        } else {
+            TxDecodeContext::UNBOUNDED
+        }
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// Bytes read no further than a wire message may be long.
+pub(crate) struct WireBoundedBytes(Vec<u8>);
+
+impl Deref for WireBoundedBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Serialize for WireBoundedBytes {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for WireBoundedBytes {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_bounded_bytes::<MAX_WIRE_MESSAGE_SIZE, D>(deserializer)
+            .map(|bytes| Self(bytes.into()))
     }
 }
 
@@ -612,7 +692,7 @@ mod tests {
 
         assert_eq!(
             ops.to_bytes().expect("the binary arm serializes"),
-            bincode::serialize(&ops.encode().into_vec()).expect("the envelope serializes")
+            bincode::serialize(&(false, ops.encode().into_vec())).expect("the envelope serializes")
         );
     }
 
@@ -631,7 +711,7 @@ mod tests {
     fn deserialize_from_binary() {
         let ops = Ops::sample();
         let envelope =
-            bincode::serialize(&ops.encode().into_vec()).expect("the envelope serializes");
+            bincode::serialize(&(false, ops.encode().into_vec())).expect("the envelope serializes");
 
         assert_eq!(
             Ops::from_bytes(&envelope).expect("the binary arm deserializes"),

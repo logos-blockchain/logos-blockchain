@@ -12,7 +12,7 @@ use std::{
 
 use cucumber::{given, then, when};
 use lb_core::header::HeaderId;
-use lb_node::config::{DeploymentSettings, deployment::era::ruleset::EraRuleset};
+use lb_node::config::DeploymentSettings;
 use lb_testing_framework::{NodeHttpClient, configs::deployment::EraBoundarySchedule};
 use tokio::time::{Instant, sleep, timeout_at};
 use tracing::info;
@@ -605,7 +605,7 @@ async fn verify_target_era_fork_digest(world: &mut CucumberWorld, seconds: u64) 
                 })?
                 .map_err(|error| failure(format!("Node `{name}` fork query failed: {error}")))?;
             match fork {
-                fork if format!("{fork:?}") == proof.target_fork => {
+                Some(fork) if format!("{fork:?}") == proof.target_fork => {
                     last_observations
                         .insert(name.clone(), format!("active target fork digest {fork:?}"));
                     observed_fork_digests.insert(name.clone(), format!("{fork:?}"));
@@ -669,8 +669,7 @@ fn target_era_limits(
         .iter()
         .nth(target_index)
         .ok_or_else(|| failure("Deployment is missing the target era"))?;
-    let EraRuleset::V1(parameters) = &target.parameters.ruleset;
-    let cryptarchia = &parameters.cryptarchia;
+    let cryptarchia = &target.parameters.ruleset.parameters().cryptarchia;
     Ok((
         cryptarchia.max_transactions.get(),
         cryptarchia.max_transactions_size,

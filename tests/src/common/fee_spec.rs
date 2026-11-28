@@ -149,7 +149,7 @@ pub fn self_transfer_paying_fee_at(
     account: &WalletAccount,
     prices: &GasPrices,
     tip: i128,
-    fork_digest: ForkDigest,
+    fork_digest: Option<ForkDigest>,
 ) -> SignedOps<Preverified, StandardMode> {
     const MAX_FEE_CONVERGENCE_ATTEMPTS: usize = 32;
 

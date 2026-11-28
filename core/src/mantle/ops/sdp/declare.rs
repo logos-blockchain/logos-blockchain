@@ -19,10 +19,14 @@ use crate::{
             states::{Preverified, Unverified, Verified},
         },
     },
-    sdp::{Declaration, MinStake, service_notes::ServiceNotes},
+    sdp::{Declaration, Locator, MinStake, SdpEra, service_notes::ServiceNotes},
 };
 
 trait SDPDeclareValidationExt {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Each argument is a separate part of the ledger the declaration is checked against."
+    )]
     fn validate(
         &self,
         note: Note,
@@ -31,6 +35,7 @@ trait SDPDeclareValidationExt {
         provider_index: &ProviderIndex,
         service_notes: &ServiceNotes,
         min_stake: MinStake,
+        era: SdpEra,
     ) -> Result<(), SdpError>;
 
     fn execute(
@@ -48,12 +53,26 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         provider_index: &ProviderIndex,
         service_notes: &ServiceNotes,
         min_stake: MinStake,
+        era: SdpEra,
     ) -> Result<(), SdpError> {
         // Check that the declaration doesn't already exist
-        if declarations.contains_key(&self.id()) {
-            return Err(SdpError::DuplicateDeclaration(self.id()));
+        let declaration_id = self.id_under(era);
+        if declarations.contains_key(&declaration_id) {
+            return Err(SdpError::DuplicateDeclaration(declaration_id));
+        }
+        // A legacy ID does not name the `zk_id` alone, so it does not collide
+        // with the ID of another declaration of the same `zk_id`: one made
+        // under the legacy rules, or a master one after the fork, while
+        // legacy declarations are still registered.
+        if let Some((existing_id, _)) = declarations.iter().find(|(_, declaration)| {
+            declaration.zk_id == self.zk_id && (era == SdpEra::Legacy || declaration.legacy)
+        }) {
+            return Err(SdpError::DuplicateDeclaration(*existing_id));
         }
         validate_service_scoped_uniqueness(self, provider_index)?;
+        if era == SdpEra::Master && self.locators.iter().any(Locator::has_zero_port) {
+            return Err(SdpError::LocatorWithZeroPort);
+        }
 
         // A channel note cannot be used as collateral for a service
         // declaration.
@@ -84,8 +103,11 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         &self,
         mut context: SDPDeclareExecutionContext,
     ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
-        let declaration_id = self.id();
-        let declaration = Declaration::new(context.epoch, self);
+        let declaration_id = self.id_under(context.era);
+        let declaration = match context.era {
+            SdpEra::Legacy => Declaration::new_legacy(context.epoch, self),
+            SdpEra::Master => Declaration::new(context.epoch, self),
+        };
         context.declarations.insert_mut(declaration_id, declaration);
         context
             .provider_index
@@ -132,6 +154,8 @@ pub struct SDPDeclarePreverificationContext<'a> {
 }
 
 pub struct SDPDeclareVerificationContext<'a> {
+    /// The era whose rules the declaration is made under.
+    pub era: SdpEra,
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
     pub service_notes: &'a ServiceNotes,
@@ -142,6 +166,8 @@ pub struct SDPDeclareVerificationContext<'a> {
 }
 
 pub struct SDPDeclareGenesisValidationContext<'a> {
+    /// The era whose rules the declaration is made under.
+    pub era: SdpEra,
     pub utxo_tree: &'a Utxos,
     pub channels: &'a Channels,
     pub service_notes: &'a ServiceNotes,
@@ -151,6 +177,8 @@ pub struct SDPDeclareGenesisValidationContext<'a> {
 }
 
 pub struct SDPDeclareExecutionContext {
+    /// The era whose rules the declaration is made under.
+    pub era: SdpEra,
     pub utxo_tree: Utxos,
     pub epoch: Epoch,
     pub declarations: Declarations,
@@ -210,6 +238,7 @@ impl VerifiableOperation<StandardMode>
             context.provider_index,
             context.service_notes,
             *context.min_stake,
+            context.era,
         )?;
 
         Ok(DeferredZkSig::new(*self.proof().zk_sig.as_proof(), inputs))
@@ -251,6 +280,7 @@ impl VerifiableOperation<GenesisMode> for SignedOperation<SDPDeclareOp, Preverif
             context.provider_index,
             context.service_notes,
             *context.min_stake,
+            context.era,
         )?;
 
         Ok(())
@@ -293,7 +323,7 @@ mod tests {
             ledger::{Declarations, ProviderIndex},
             ops::{channel::ChannelId, op_proof::samples::SampleProof as _},
         },
-        sdp::{Declaration, ServiceType},
+        sdp::{Declaration, SdpEra, ServiceType},
     };
 
     fn locked_utxo(zk_key: &ZkKey) -> Utxo {
@@ -404,6 +434,7 @@ mod tests {
             assert_eq!(
                 signed_operation
                     .verify(&SDPDeclareVerificationContext {
+                        era: SdpEra::Master,
                         utxo_tree: &Utxos::new(),
                         channels: &Channels::new(),
                         service_notes: &ServiceNotes::new(),
@@ -441,6 +472,7 @@ mod tests {
             assert_eq!(
                 signed_operation
                     .verify(&SDPDeclareVerificationContext {
+                        era: SdpEra::Master,
                         utxo_tree: &utxos,
                         channels: &Channels::new(),
                         service_notes: &ServiceNotes::new(),
@@ -479,6 +511,7 @@ mod tests {
             assert_eq!(
                 signed_operation
                     .verify(&SDPDeclareVerificationContext {
+                        era: SdpEra::Master,
                         utxo_tree: &utxos,
                         channels: &channels,
                         service_notes: &ServiceNotes::new(),
@@ -513,6 +546,7 @@ mod tests {
             assert_eq!(
                 signed_operation
                     .verify(&SDPDeclareVerificationContext {
+                        era: SdpEra::Master,
                         utxo_tree: &utxos,
                         channels: &Channels::new(),
                         service_notes: &ServiceNotes::new(),
@@ -551,6 +585,7 @@ mod tests {
 
             let _deferred_proof = signed_operation
                 .verify(&SDPDeclareVerificationContext {
+                    era: SdpEra::Master,
                     utxo_tree: &utxos,
                     channels: &Channels::new(),
                     service_notes: &ServiceNotes::new(),
@@ -562,6 +597,50 @@ mod tests {
                     },
                 })
                 .expect("a locked note exactly meeting the minimum stake is accepted");
+        }
+
+        /// A declaration of the legacy era keeps its legacy ID after the fork,
+        /// so a master declaration of the same `zk_id` does not collide with
+        /// it on the ID: the `zk_id` itself has to be looked for.
+        #[test]
+        fn verify_rejects_a_zk_id_a_legacy_declaration_already_holds() {
+            let legacy_operation = declare_op(2, 1, "/ip4/2.2.2.2/udp/3000");
+            let legacy_declaration = Declaration::new_legacy(Epoch::new(0), &legacy_operation);
+            let legacy_id = legacy_declaration.id();
+            let declarations = Declarations::new_sync().insert(legacy_id, legacy_declaration);
+            let provider_index =
+                ProviderIndex::new_sync().insert(legacy_operation.provider_id, legacy_id);
+
+            let note_key = ZkKey::from(BigUint::from(3u64));
+            let utxo = locked_utxo(&note_key);
+            let (utxos, _) = Utxos::new().insert(utxo.id(), utxo);
+            let operation = SDPDeclareOp {
+                service_note_id: utxo.id(),
+                ..declare_op(1, 1, "/ip4/1.1.1.1/udp/3000")
+            };
+            assert_eq!(operation.zk_id, legacy_operation.zk_id);
+            assert_ne!(operation.id(), legacy_id);
+            let declaration_key = ZkKey::from(BigUint::from(1u64));
+
+            let tx_hash_view = TxHashView::from(TxHash::from([11u8; 32]));
+            let zk_sig = ZkKey::multi_sign(&[note_key, declaration_key], tx_hash_view.as_fr())
+                .expect("signing should succeed");
+
+            assert_eq!(
+                preverified(operation, zk_sig, &tx_hash_view)
+                    .verify(&SDPDeclareVerificationContext {
+                        era: SdpEra::Master,
+                        utxo_tree: &utxos,
+                        channels: &Channels::new(),
+                        service_notes: &ServiceNotes::new(),
+                        tx_hash_view: &tx_hash_view,
+                        declarations: &declarations,
+                        provider_index: &provider_index,
+                        min_stake: &MinStake { threshold: 0 },
+                    })
+                    .unwrap_err(),
+                SdpError::DuplicateDeclaration(legacy_id)
+            );
         }
 
         #[test]
@@ -596,6 +675,7 @@ mod tests {
             assert_eq!(
                 signed_operation
                     .verify(&SDPDeclareVerificationContext {
+                        era: SdpEra::Master,
                         utxo_tree: &utxos,
                         channels: &Channels::new(),
                         service_notes: &locked_notes,
@@ -633,6 +713,7 @@ mod tests {
 
             preverified(operation, zk_sig, &tx_hash_view)
                 .verify(&SDPDeclareVerificationContext {
+                    era: SdpEra::Master,
                     utxo_tree: &utxos,
                     channels: &Channels::new(),
                     service_notes: &ServiceNotes::new(),
@@ -679,6 +760,7 @@ mod tests {
 
             let _deferred_proof = signed_operation
                 .verify(&SDPDeclareVerificationContext {
+                    era: SdpEra::Master,
                     utxo_tree: &utxos,
                     channels: &Channels::new(),
                     service_notes: &ServiceNotes::new(),
@@ -717,6 +799,7 @@ mod tests {
 
             let (context, events) = verified(operation)
                 .execute(SDPDeclareExecutionContext {
+                    era: SdpEra::Master,
                     utxo_tree: utxos,
                     epoch,
                     declarations: Declarations::new_sync(),
@@ -745,6 +828,7 @@ mod tests {
             };
 
             drop(verified(operation).execute(SDPDeclareExecutionContext {
+                era: SdpEra::Master,
                 utxo_tree: Utxos::new(),
                 epoch: Epoch::new(4),
                 declarations: Declarations::new_sync(),
@@ -768,6 +852,7 @@ mod tests {
             assert_eq!(
                 verified(operation)
                     .execute(SDPDeclareExecutionContext {
+                        era: SdpEra::Master,
                         utxo_tree: utxos,
                         epoch: Epoch::new(4),
                         declarations: Declarations::new_sync(),
@@ -830,6 +915,7 @@ mod tests {
             assert_eq!(
                 signed_operation
                     .verify(&SDPDeclareGenesisValidationContext {
+                        era: SdpEra::Master,
                         utxo_tree: &Utxos::new(),
                         channels: &Channels::new(),
                         service_notes: &ServiceNotes::new(),
@@ -886,6 +972,7 @@ mod tests {
 
             let () = signed_operation
                 .verify(&SDPDeclareGenesisValidationContext {
+                    era: SdpEra::Master,
                     utxo_tree: &utxos,
                     channels: &Channels::new(),
                     service_notes: &ServiceNotes::new(),

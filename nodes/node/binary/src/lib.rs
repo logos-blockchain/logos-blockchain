@@ -8,7 +8,10 @@ pub mod panic;
 use color_eyre::eyre::{Result, eyre};
 use lb_core::mantle::{
     ledger::verification_mode::StandardMode,
-    transactions::states::{Preverified, Unverified},
+    transactions::{
+        TxEra,
+        states::{Preverified, Unverified},
+    },
 };
 pub use lb_core::{
     header::HeaderId,
@@ -153,6 +156,10 @@ pub fn run_node_from_config(
 
     let recovery_data = load_recovery_data(storage_config.clone())?;
 
+    // Before any block is decoded: the slots of the legacy era, whose
+    // transactions are in the legacy layout.
+    TxEra::set_first_master_slot(config.deployment.first_master_slot());
+
     // Before any service starts: a deployment that changed an era the node has
     // already executed must not run on the state the node left.
     if let Some(tip_era) = lb_chain_service::saved_tip_era(&recovery_data)? {
@@ -189,7 +196,7 @@ pub fn run_node_from_config(
     let network_service_config = NetworkConfig {
         user: config.user.network,
     }
-    .into_network_service_settings(config.deployment.genesis_id(), eras);
+    .into_network_service_settings(&config.deployment.chain_scope(), eras);
 
     let wallet_config = WalletConfig {
         user: config.user.wallet,
@@ -219,7 +226,10 @@ pub fn run_node_from_config(
     let api_config = ApiConfig {
         user: config.user.api,
         chain_id,
-        fork_digests: eras.iter().map(|era| era.parameters.fork_digest).collect(),
+        fork_digests: eras
+            .iter()
+            .map(|era| era.parameters.tx_fork_digest())
+            .collect(),
     };
 
     let http_config = api_config.backend_settings();

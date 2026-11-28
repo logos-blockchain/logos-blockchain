@@ -64,6 +64,10 @@ pub enum Error {
     TooManyOps { count: usize },
     #[error("The genesis transaction carries the fork digest {0} instead of zero")]
     UnexpectedForkDigest(ForkDigest),
+    #[error(
+        "The genesis transaction inscribes every genesis parameter, so none can be given beside it"
+    )]
+    ParametersAlreadyInscribed,
 }
 
 impl GenesisTx {
@@ -71,10 +75,19 @@ impl GenesisTx {
     /// fork digest hashes the genesis block.
     pub const FORK_DIGEST: ForkDigest = ForkDigest::new([0; 32]);
 
+    /// The genesis transaction `signed_ops` is.
+    ///
+    /// A transaction that carries no fork digest is the genesis of a chain
+    /// started before transactions carried one. Its inscription is a
+    /// [`LegacyGenesisParameters`], which leaves out the `PoW` reward pool and
+    /// the keys excluded from consensus: those are given with
+    /// [`Self::with_0_3_1_uninscribed_params`], by the chain's genesis era.
     pub fn from_tx(signed_ops: SignedOps<Preverified, GenesisMode>) -> Result<Self, Error> {
-        if signed_ops.fork_digest != Self::FORK_DIGEST {
-            return Err(Error::UnexpectedForkDigest(signed_ops.fork_digest));
-        }
+        let inscribes_every_parameter = match signed_ops.fork_digest {
+            None => false,
+            Some(Self::FORK_DIGEST) => true,
+            Some(fork_digest) => return Err(Error::UnexpectedForkDigest(fork_digest)),
+        };
         // Genesis transactions must contain exactly one transfer as the first
         // op, one inscription as the second op, and then may contain
         // other SDP declarations
@@ -87,7 +100,8 @@ impl GenesisTx {
                 if !transfer.inputs.is_empty() {
                     return Err(Error::UnexpectedInput);
                 }
-                let genesis_parameters = valid_genesis_inscription(inscription)?;
+                let genesis_parameters =
+                    valid_genesis_inscription(inscription, inscribes_every_parameter)?;
 
                 let unsupported_ops = rest
                     .iter()
@@ -109,6 +123,35 @@ impl GenesisTx {
             signed_ops,
             genesis_parameters,
         })
+    }
+
+    /// Whether the transaction carries no fork digest and inscribes a
+    /// [`LegacyGenesisParameters`]: the genesis of a chain started before
+    /// transactions carried a fork digest.
+    #[must_use]
+    pub const fn is_legacy(&self) -> bool {
+        self.signed_ops.fork_digest.is_none()
+    }
+
+    /// This legacy genesis transaction, with the genesis parameters its
+    /// inscription leaves out. The transaction itself, and so its hash, is
+    /// unchanged.
+    ///
+    /// # Errors
+    ///
+    /// If the transaction is not a legacy one: its inscription then carries
+    /// these parameters itself.
+    pub fn with_0_3_1_uninscribed_params(
+        mut self,
+        pow_reward_pool: PowReward,
+        consensus_excluded_keys: ConsensusExcludedKeys,
+    ) -> Result<Self, Error> {
+        if !self.is_legacy() {
+            return Err(Error::ParametersAlreadyInscribed);
+        }
+        self.genesis_parameters.pow_reward_pool = pow_reward_pool;
+        self.genesis_parameters.consensus_excluded_keys = consensus_excluded_keys;
+        Ok(self)
     }
 
     #[must_use]
@@ -140,7 +183,10 @@ impl GenesisTx {
     }
 }
 
-fn valid_genesis_inscription(inscription: &InscriptionOp) -> Result<GenesisParameters, Error> {
+fn valid_genesis_inscription(
+    inscription: &InscriptionOp,
+    inscribes_every_parameter: bool,
+) -> Result<GenesisParameters, Error> {
     if inscription.parent != MsgId::root() {
         return Err(Error::InvalidInscription(Box::new(Op::ChannelInscribe(
             inscription.clone(),
@@ -159,8 +205,17 @@ fn valid_genesis_inscription(inscription: &InscriptionOp) -> Result<GenesisParam
         ))));
     }
 
-    GenesisParameters::decode_all(inscription.inscription.as_ref(), &())
-        .map_err(|e| Error::InvalidGenesisParameters(format!("Decoding error: {e}")))
+    let decoding_error =
+        |error| Error::InvalidGenesisParameters(format!("Decoding error: {error}"));
+    if inscribes_every_parameter {
+        GenesisParameters::decode_all(inscription.inscription.as_ref(), &()).map_err(decoding_error)
+    } else {
+        // Trailing bytes are ignored, as the releases that read this layout
+        // did.
+        LegacyGenesisParameters::decode(inscription.inscription.as_ref(), &())
+            .map(|(_, parameters)| parameters.into())
+            .map_err(decoding_error)
+    }
 }
 
 impl Hashable for GenesisTx {
@@ -175,7 +230,7 @@ impl Hashable for GenesisTx {
 }
 
 impl MantleTx for GenesisTx {
-    fn fork_digest(&self) -> ForkDigest {
+    fn fork_digest(&self) -> Option<ForkDigest> {
         self.signed_ops.fork_digest
     }
 
@@ -395,6 +450,36 @@ pub struct GenesisParameters {
     pub epoch_nonce: Fr,
     pub pow_reward_pool: PowReward,
     pub consensus_excluded_keys: ConsensusExcludedKeys,
+}
+
+/// The parameters a chain started before transactions carried a fork digest
+/// inscribes in its genesis block: the first three of [`GenesisParameters`].
+/// The rest were parameters of the genesis era then.
+#[derive(Debug, Clone, PartialEq, Eq, BinaryEncode, BinaryDecode)]
+pub struct LegacyGenesisParameters {
+    pub chain_id: ChainId,
+    pub genesis_time: GenesisTime,
+    pub epoch_nonce: Fr,
+}
+
+/// With no `PoW` reward pool and no key excluded from consensus, until
+/// [`GenesisTx::with_0_3_1_uninscribed_params`] gives them.
+impl From<LegacyGenesisParameters> for GenesisParameters {
+    fn from(
+        LegacyGenesisParameters {
+            chain_id,
+            genesis_time,
+            epoch_nonce,
+        }: LegacyGenesisParameters,
+    ) -> Self {
+        Self {
+            chain_id,
+            start_time: genesis_time,
+            epoch_nonce,
+            pow_reward_pool: 0,
+            consensus_excluded_keys: ConsensusExcludedKeys::empty(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -774,7 +859,7 @@ mod tests {
             ))],
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
         );
-        tx.fork_digest = ForkDigest::new([1; 32]);
+        tx.fork_digest = Some(ForkDigest::new([1; 32]));
 
         assert_eq!(
             GenesisTx::from_tx(tx),

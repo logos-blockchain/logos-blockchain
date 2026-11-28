@@ -489,6 +489,11 @@ pub struct StateArgs {
 pub struct DeploymentArgs {
     #[clap(long = "deployment", env = "DEPLOYMENT")]
     pub custom_deployment_path: Option<PathBuf>,
+    /// Follow the testnet release 0.3.1 started. This is what a node does
+    /// without a custom deployment, so the flag changes nothing; it is kept
+    /// for the commands that already pass it.
+    #[clap(long = "testnet", conflicts_with = "custom_deployment_path")]
+    pub testnet: bool,
 }
 
 pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {

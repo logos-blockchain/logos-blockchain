@@ -21,6 +21,7 @@ use crate::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
         },
+        transactions::TxDecodeContext,
     },
 };
 
@@ -98,7 +99,7 @@ impl<'de> Deserialize<'de> for Op {
             OpDe::deserialize(deserializer).map(Self::from)
         } else {
             let bytes = <Vec<u8>>::deserialize(deserializer)?;
-            Self::decode(&bytes, &u32::MAX)
+            Self::decode(&bytes, &TxDecodeContext::UNBOUNDED)
                 .map(|(_, op)| op)
                 .map_err(serde::de::Error::custom)
         }
@@ -117,14 +118,15 @@ impl BinaryEncode for Op {
 }
 
 impl BinaryDecode for Op {
-    /// The most bytes of data an Operation may carry in the era it is decoded
-    /// under: an inscription, or a deposit's metadata.
-    type Context = u32;
+    /// The layout of the transaction the Operation is decoded from, and the
+    /// most bytes of data it may carry in the era it is decoded under.
+    type Context = TxDecodeContext;
 
     fn decode<'input>(
         input: &'input [u8],
-        max_op_data_size: &Self::Context,
+        context: &Self::Context,
     ) -> Result<(&'input [u8], Self), DecodeError> {
+        let max_op_data_size = &context.max_op_data_size;
         let (input, opcode) = u8::decode(input, &())?;
 
         match opcode {
@@ -132,7 +134,7 @@ impl BinaryDecode for Op {
                 .map(|(rest, op)| (rest, Self::ChannelInscribe(op))),
             ChannelConfigOp::CODE => ChannelConfigOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelConfig(op))),
-            DepositOp::CODE => DepositOp::decode(input, max_op_data_size)
+            DepositOp::CODE => DepositOp::decode(input, &context.max_deposit_metadata_size())
                 .map(|(rest, op)| (rest, Self::ChannelDeposit(op))),
             ChannelWithdrawOp::CODE => ChannelWithdrawOp::decode(input, &())
                 .map(|(rest, op)| (rest, Self::ChannelWithdraw(op))),
@@ -141,9 +143,8 @@ impl BinaryDecode for Op {
             SDPDeclareOp::CODE => {
                 SDPDeclareOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPDeclare(op)))
             }
-            SDPWithdrawOp::CODE => {
-                SDPWithdrawOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPWithdraw(op)))
-            }
+            SDPWithdrawOp::CODE => SDPWithdrawOp::decode(input, &context.era)
+                .map(|(rest, op)| (rest, Self::SDPWithdraw(op))),
             SDPActiveOp::CODE => {
                 SDPActiveOp::decode(input, &()).map(|(rest, op)| (rest, Self::SDPActive(op)))
             }

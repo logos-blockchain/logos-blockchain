@@ -11,6 +11,7 @@ use lb_core::{
         transactions::genesis_tx::{ChainId, GenesisTime},
     },
 };
+use lb_libp2p::protocol_name::ProtocolScope;
 use lb_time::{
     Epoch, Slot,
     era::{EpochLength, EraEntriesAfterGenesis, SlotDuration},
@@ -23,7 +24,7 @@ use era::GENESIS_EPOCH;
 pub use era::{EraDeclarations, EraScheduleError};
 
 use crate::config::{
-    deployment::era::ruleset::{EraRuleset, v1},
+    deployment::era::ruleset::{EraRuleset, v2},
     time::check_transition_periods,
 };
 
@@ -59,6 +60,20 @@ const SERIALIZED_DEPLOYMENT: &str = include_str!("settings.yaml");
 /// build script lists them.
 const SERIALIZED_ERAS: &[(&str, &str)] = include!(concat!(env!("OUT_DIR"), "/serialized_eras.rs"));
 
+/// The main file of the testnet release 0.3.1 started, and the era files it
+/// includes.
+const SERIALIZED_TESTNET_DEPLOYMENT: &str = include_str!("testnet/settings.yaml");
+const SERIALIZED_TESTNET_ERAS: &[(&str, &str)] = &[
+    (
+        "era/schedule/0.yaml",
+        include_str!("testnet/era/schedule/0.yaml"),
+    ),
+    (
+        "era/schedule/14.yaml",
+        include_str!("testnet/era/schedule/14.yaml"),
+    ),
+];
+
 type EraSchedule = lb_time::era::EraSchedule<EraDefinition>;
 
 /// An era schedule as its file declares it.
@@ -82,6 +97,18 @@ pub struct DeploymentSettings {
 }
 
 impl DeploymentSettings {
+    /// The testnet release 0.3.1 started: its genesis block, and its genesis
+    /// era under the rules of releases 0.3.1 to 0.3.6.
+    #[must_use]
+    pub fn testnet() -> Self {
+        deserialize_embedded_value(
+            SERIALIZED_TESTNET_DEPLOYMENT,
+            SERIALIZED_TESTNET_ERAS,
+            OnUnknownKeys::Fail,
+        )
+        .expect("The testnet deployment settings must be valid.")
+    }
+
     /// The deployment whose chain starts from `genesis_block` and runs the eras
     /// `eras` declares, resolved: where each era starts, and its digest and
     /// fork digest.
@@ -97,10 +124,15 @@ impl DeploymentSettings {
     ) -> Result<Self, InvalidDeployment> {
         // Before resolving the eras, which reads their epoch lengths.
         eras.validate()?;
-        let (genesis_id, genesis_time) = (
-            genesis_block.header().id(),
-            genesis_block.genesis_tx().genesis_parameters().start_time,
-        );
+        let genesis_block = with_genesis_era_parameters(genesis_block, eras.genesis_era())?;
+        let (genesis_id, genesis_time, chain_id) = {
+            let genesis_parameters = genesis_block.genesis_tx().genesis_parameters();
+            (
+                genesis_block.header().id(),
+                genesis_parameters.start_time,
+                genesis_parameters.chain_id,
+            )
+        };
         let eras_after_genesis = eras.eras_after_genesis();
         let mut era_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
         let mut accepted_fork_digests = Vec::with_capacity(eras_after_genesis.len() + 1);
@@ -111,7 +143,13 @@ impl DeploymentSettings {
         let mut definition = |first_epoch: Epoch, ruleset: &EraRuleset| {
             let digest = EraDigest::compute(first_epoch, ruleset);
             era_digests.push(digest);
-            let fork_digest = ForkDigest::compute(genesis_id, era_digests.iter().copied());
+            // An era keeps the fork digest the releases that activated it gave
+            // it, and with it the names of its protocols.
+            let fork_digest = if ruleset.is_legacy() {
+                ForkDigest::compute_legacy(genesis_id, &chain_id, era_digests.iter().copied())
+            } else {
+                ForkDigest::compute(genesis_id, era_digests.iter().copied())
+            };
             if previous_ruleset
                 .as_ref()
                 .is_some_and(|previous| ruleset.refuses_earlier_transactions(previous))
@@ -124,7 +162,12 @@ impl DeploymentSettings {
                 ruleset: ruleset.clone(),
                 digest,
                 fork_digest,
-                accepted_fork_digests: AcceptedForkDigests::new(accepted_fork_digests.clone()),
+                // The transactions of a legacy era carry no fork digest.
+                accepted_fork_digests: if ruleset.is_legacy() {
+                    AcceptedForkDigests::NoneCarried
+                } else {
+                    AcceptedForkDigests::new(accepted_fork_digests.clone())
+                },
             }
         };
         let genesis = definition(GENESIS_EPOCH, eras.genesis_era());
@@ -146,6 +189,32 @@ impl DeploymentSettings {
             eras,
             genesis_block,
         })
+    }
+
+    /// What the names of Kademlia and identify are bound to: this deployment's
+    /// chain, on every fork of it.
+    ///
+    /// The genesis block ID, but for a chain with a legacy genesis era, which
+    /// keeps the names the releases that started it gave it: bound to the
+    /// chain ID its genesis block inscribes.
+    #[must_use]
+    pub fn chain_scope(&self) -> ProtocolScope {
+        if self.eras.genesis().parameters.ruleset.is_legacy() {
+            ProtocolScope::LegacyChain(self.chain_id())
+        } else {
+            ProtocolScope::Chain(self.genesis_id())
+        }
+    }
+
+    /// The first slot whose transactions are bound to a fork: the first slot
+    /// of the era that follows the legacy era, the first slot of the chain if
+    /// it has no legacy era, and none while the legacy era is the last.
+    #[must_use]
+    pub fn first_master_slot(&self) -> Slot {
+        self.eras
+            .iter()
+            .find(|era| !era.parameters.ruleset.is_legacy())
+            .map_or(Slot::new(u64::MAX), |era| era.first_slot)
     }
 
     /// The eras of this deployment's chain, resolved.
@@ -221,13 +290,10 @@ impl DeploymentSettings {
         Ok(())
     }
 
-    /// The parameters of the genesis era, in version 1's layout, the only one
-    /// there is.
+    /// The parameters of the genesis era, in the latest ruleset's layout.
     #[must_use]
-    pub const fn genesis_era_parameters(&self) -> &v1::Parameters {
-        match &self.eras.genesis().parameters.ruleset {
-            EraRuleset::V1(parameters) => parameters,
-        }
+    pub const fn genesis_era_parameters(&self) -> &v2::Parameters {
+        self.eras.genesis().parameters.ruleset.parameters()
     }
 
     /// Changes the parameters of the genesis era with `update`, and resolves
@@ -236,19 +302,26 @@ impl DeploymentSettings {
     /// # Errors
     ///
     /// If [`Self::new`] does on the changed deployment, leaving this one as it
-    /// was.
+    /// was, or if the genesis era runs an earlier ruleset, whose parameters
+    /// are declared in another layout.
     pub fn update_genesis_era_parameters<Update>(
         &mut self,
         update: Update,
     ) -> Result<(), InvalidDeployment>
     where
-        Update: FnOnce(&mut v1::Parameters),
+        Update: FnOnce(&mut v2::Parameters),
     {
         let EraDefinitions {
             mut eras,
             genesis_block,
         } = EraDefinitions::from(self.clone());
-        let EraRuleset::V1(parameters) = eras.genesis_era_mut();
+        let EraRuleset::V2(parameters) = eras.genesis_era_mut() else {
+            return Err(InvalidDeployment::new(
+                "The genesis era runs an earlier ruleset, whose parameters cannot be changed in \
+                 the latest ruleset's layout."
+                    .to_owned(),
+            ));
+        };
         update(parameters);
         *self = Self::new(&eras, genesis_block)?;
         Ok(())
@@ -257,6 +330,44 @@ impl DeploymentSettings {
     #[must_use]
     pub const fn genesis_blend_round_duration(&self) -> Duration {
         self.genesis_era_parameters().blend_round_duration()
+    }
+}
+
+/// `genesis_block`, with the genesis parameters the genesis era declares in
+/// its place if it runs the legacy ruleset, whose genesis block does not
+/// inscribe them all.
+///
+/// # Errors
+///
+/// If the genesis block is not of the genesis era's ruleset: a legacy era
+/// starts from a legacy genesis transaction, and no other era does.
+fn with_genesis_era_parameters(
+    genesis_block: GenesisBlock,
+    genesis_era: &EraRuleset,
+) -> Result<GenesisBlock, InvalidDeployment> {
+    let legacy_genesis = genesis_block.genesis_tx().is_legacy();
+    match genesis_era {
+        EraRuleset::V1(parameters) => {
+            ensure!(
+                legacy_genesis,
+                "The genesis era runs the legacy ruleset, but the genesis transaction carries a \
+                 fork digest, which no transaction of that ruleset does."
+            );
+            genesis_block
+                .with_0_3_1_uninscribed_params(
+                    parameters.pow_reward_pool(),
+                    parameters.consensus_excluded_keys(),
+                )
+                .map_err(|error| InvalidDeployment::new(error.to_string()))
+        }
+        EraRuleset::V2(_) => {
+            ensure!(
+                !legacy_genesis,
+                "The genesis transaction carries no fork digest, which only the legacy ruleset \
+                 allows, but the genesis era runs another."
+            );
+            Ok(genesis_block)
+        }
     }
 }
 
@@ -306,6 +417,19 @@ pub struct EraDefinition {
     pub accepted_fork_digests: AcceptedForkDigests,
 }
 
+impl EraDefinition {
+    /// The fork digest the transactions made in the era carry: none in a
+    /// legacy era, whose transactions carry no fork digest.
+    #[must_use]
+    pub const fn tx_fork_digest(&self) -> Option<ForkDigest> {
+        if self.ruleset.is_legacy() {
+            None
+        } else {
+            Some(self.fork_digest)
+        }
+    }
+}
+
 impl SlotDuration for EraDefinition {
     fn slot_duration(&self) -> Duration {
         self.ruleset.slot_duration()
@@ -331,10 +455,16 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use lb_chain_service::TipEra;
-    use lb_core::era::{AcceptedForkDigests, ForkDigest};
+    use lb_core::{
+        block::genesis::GenesisBlock,
+        era::{AcceptedForkDigests, ForkDigest},
+        mantle::traits::{GenesisTx as _, Hashable as _},
+    };
+    use lb_libp2p::protocol_name::ProtocolScope;
     use lb_time::{Epoch, Era, Slot, era::EpochLength as _};
     use lb_utils::{math::NonNegativeRatio, yaml::INCLUDE_TAG};
     use serde_yaml::Value;
+    use time::OffsetDateTime;
 
     use super::{
         EraDeclarations, EraDefinitions, InvalidDeployment, SERIALIZED_DEPLOYMENT, SERIALIZED_ERAS,
@@ -343,7 +473,7 @@ mod tests {
         DeploymentSettings,
         deployment::era::ruleset::{
             EraRuleset,
-            v1::{self, cryptarchia::EpochConfig},
+            v2::{self, cryptarchia::EpochConfig},
         },
     };
 
@@ -353,6 +483,14 @@ mod tests {
         eras: impl IntoIterator<Item = (u32, EraRuleset)>,
     ) -> Result<DeploymentSettings, InvalidDeployment> {
         let EraDefinitions { genesis_block, .. } = DeploymentSettings::default().into();
+        deployment_from(genesis_block, eras)
+    }
+
+    /// `genesis_block`, starting `eras`, each keyed by its first epoch.
+    fn deployment_from(
+        genesis_block: GenesisBlock,
+        eras: impl IntoIterator<Item = (u32, EraRuleset)>,
+    ) -> Result<DeploymentSettings, InvalidDeployment> {
         let eras = EraDeclarations::try_from(
             eras.into_iter()
                 .map(|(first_epoch, ruleset)| (Epoch::new(first_epoch), ruleset))
@@ -363,12 +501,12 @@ mod tests {
     }
 
     /// The default deployment's genesis era, changed by `change`.
-    fn ruleset(change: impl FnOnce(&mut v1::Parameters)) -> EraRuleset {
+    fn ruleset(change: impl FnOnce(&mut v2::Parameters)) -> EraRuleset {
         let mut parameters = DeploymentSettings::default()
             .genesis_era_parameters()
             .clone();
         change(&mut parameters);
-        EraRuleset::V1(parameters)
+        EraRuleset::V2(parameters)
     }
 
     /// The default deployment, with a second era from epoch 10 that runs the
@@ -558,6 +696,256 @@ mod tests {
             era_1.accepted_fork_digests,
             AcceptedForkDigests::new(vec![genesis_era.fork_digest, era_1.fork_digest])
         );
+    }
+
+    /// The testnet release 0.3.1 started, followed from epoch `first_epoch` by
+    /// an era of the default deployment's ruleset.
+    fn testnet_then_latest_ruleset(first_epoch: u32) -> DeploymentSettings {
+        let EraDefinitions {
+            eras,
+            genesis_block,
+        } = DeploymentSettings::testnet().into();
+        let eras = EraDeclarations::try_from(BTreeMap::from([
+            (Epoch::new(0), eras.genesis_era().clone()),
+            (Epoch::new(first_epoch), ruleset(|_| ())),
+        ]))
+        .unwrap();
+        DeploymentSettings::new(&eras, genesis_block).unwrap()
+    }
+
+    // The values the tests below pin were printed by release 0.3.6 for its
+    // default deployment, not by this release.
+
+    #[test]
+    fn the_testnet_starts_from_the_genesis_block_of_release_0_3() {
+        let testnet = DeploymentSettings::testnet();
+        assert_eq!(
+            testnet.genesis_id().to_string(),
+            "0x6e82a56ced487ec9ef2442c8734465704d184719b499f03213138993535fb8d7"
+        );
+        assert_eq!(
+            hex::encode(testnet.genesis_block().genesis_tx().hash().0),
+            "aa524374ed489bf31abca33d38658c4366dd7a3e16f7ce187fb585f5dd3e6a8a"
+        );
+        assert_eq!(AsRef::<str>::as_ref(&testnet.chain_id()), "0.3.1");
+        assert_eq!(
+            OffsetDateTime::from(testnet.genesis_time()).unix_timestamp(),
+            1_791_556_200
+        );
+    }
+
+    #[test]
+    fn the_testnet_genesis_era_has_the_digests_of_release_0_3() {
+        let testnet = DeploymentSettings::testnet();
+        let genesis_era = testnet.era_schedule().genesis().parameters;
+        assert_eq!(
+            genesis_era.digest.to_string(),
+            "0xbb7a9de2dee794d771c95b48da7e9078e3ee24340d8dd1118ecb5382edba5022"
+        );
+        assert_eq!(
+            genesis_era.fork_digest.to_string(),
+            "0xed7f4300b476aa6d704edd05d53394ad53c1c27553643883ba29478b52471ab6"
+        );
+        // 300,000 one-second slots.
+        assert_eq!(genesis_era.epoch_length().get(), 300_000);
+    }
+
+    #[test]
+    fn the_testnet_moves_to_the_latest_ruleset_at_epoch_14() {
+        let testnet = DeploymentSettings::testnet();
+        let schedule = testnet.era_schedule();
+        assert_eq!(schedule.iter().count(), 2);
+        let era_1 = schedule.get(Era::new(1)).unwrap();
+
+        assert_eq!(era_1.first_epoch, Epoch::new(14));
+        assert_eq!(era_1.first_slot, Slot::new(4_200_000));
+        // 2026-11-27T05:10:00Z.
+        assert_eq!(era_1.start_time.unix_timestamp(), 1_795_756_200);
+        assert_eq!(testnet.first_master_slot(), Slot::new(4_200_000));
+
+        let definition = era_1.parameters;
+        assert!(!definition.ruleset.is_legacy());
+        assert!(!definition.accepted_fork_digests.accepts(None));
+        // k = 1000 at f = 1/30, as in the genesis era: 300,000 one-second
+        // slots.
+        assert_eq!(definition.epoch_length().get(), 300_000);
+        let cryptarchia = &definition.ruleset.parameters().cryptarchia;
+        // Kept as the genesis era set them.
+        let genesis_era = schedule.genesis().parameters.ruleset.parameters();
+        assert_eq!(
+            cryptarchia.security_param,
+            genesis_era.cryptarchia.security_param
+        );
+        assert_eq!(
+            cryptarchia.pow_config.blend.target_transactions_per_block,
+            genesis_era
+                .cryptarchia
+                .pow_config
+                .blend
+                .target_transactions_per_block
+        );
+        assert_eq!(
+            cryptarchia.pow_config.reward.target_claims_per_block,
+            genesis_era
+                .cryptarchia
+                .pow_config
+                .reward
+                .target_claims_per_block
+        );
+        assert_eq!(
+            cryptarchia.pow_config.reward.slot_window,
+            genesis_era.cryptarchia.pow_config.reward.slot_window
+        );
+        assert_eq!(cryptarchia.pow_reward_pool.0, Some(50_000_000_000_000));
+        assert_eq!(cryptarchia.pow_config.reward.rate_num, 1);
+        assert_eq!(cryptarchia.pow_config.reward.rate_den.get(), 26);
+        // The genesis era keeps the pool its genesis block gives it.
+        let genesis = schedule.genesis().parameters.ruleset.parameters();
+        assert!(genesis.cryptarchia.pow_reward_pool.is_unset());
+    }
+
+    #[test]
+    fn a_legacy_chain_keeps_the_discovery_names_of_release_0_3() {
+        // What release 0.3.6 prints for its Kademlia and identify protocols:
+        // named after the chain ID its genesis block inscribes.
+        let testnet = DeploymentSettings::testnet();
+        assert_eq!(
+            testnet.chain_scope().to_string_with_name("kad"),
+            "/logos-blockchain/0.3.1/kad"
+        );
+        assert_eq!(
+            testnet.chain_scope().to_string_with_name("identify"),
+            "/logos-blockchain/0.3.1/identify"
+        );
+        // Any other chain names them after its genesis block ID.
+        let default = DeploymentSettings::default();
+        assert_eq!(
+            default.chain_scope().to_string_with_name("kad"),
+            ProtocolScope::Chain(default.genesis_id()).to_string_with_name("kad")
+        );
+        assert_ne!(
+            testnet.chain_scope().to_string_with_name("kad"),
+            ProtocolScope::Chain(testnet.genesis_id()).to_string_with_name("kad")
+        );
+    }
+
+    #[test]
+    fn the_testnet_genesis_gives_the_parameters_its_inscription_leaves_out() {
+        let testnet = DeploymentSettings::testnet();
+        let genesis_parameters = testnet.genesis_block().genesis_tx().genesis_parameters();
+        assert_eq!(genesis_parameters.pow_reward_pool, 12_600_000_000_000);
+        let excluded: Vec<String> = genesis_parameters
+            .consensus_excluded_keys
+            .iter()
+            .map(|key| hex::encode(lb_groth16::fr_to_bytes(key.as_fr())))
+            .collect();
+        assert_eq!(
+            excluded,
+            ["c2a6a4a0981d5bdcf8ddeb8d7934fd8c5510efeb1053f613b45871670b6f7b19"]
+        );
+    }
+
+    #[test]
+    fn the_testnet_survives_a_round_trip_through_yaml() {
+        let testnet = DeploymentSettings::testnet();
+        let recovered: DeploymentSettings =
+            serde_yaml::from_str(&serde_yaml::to_string(&testnet).unwrap()).unwrap();
+        assert_eq!(recovered.genesis_id(), testnet.genesis_id());
+        assert_eq!(
+            recovered.era_schedule().genesis().parameters.fork_digest,
+            testnet.era_schedule().genesis().parameters.fork_digest
+        );
+        let era_1 = |settings: &DeploymentSettings| {
+            settings
+                .era_schedule()
+                .get(Era::new(1))
+                .unwrap()
+                .parameters
+                .fork_digest
+        };
+        assert_eq!(era_1(&recovered), era_1(&testnet));
+    }
+
+    #[test]
+    fn a_legacy_era_accepts_only_transactions_without_a_fork_digest() {
+        let settings = testnet_then_latest_ruleset(20);
+        let genesis_era = settings.era_schedule().genesis().parameters;
+        let era_1 = settings.era_schedule().get(Era::new(1)).unwrap().parameters;
+
+        assert_eq!(
+            genesis_era.accepted_fork_digests,
+            AcceptedForkDigests::NoneCarried
+        );
+        assert!(genesis_era.accepted_fork_digests.accepts(None));
+        // The era after it refuses the transactions of the legacy era, and
+        // accepts neither its fork digest nor a transaction without one.
+        assert_eq!(
+            era_1.accepted_fork_digests,
+            AcceptedForkDigests::new(vec![era_1.fork_digest])
+        );
+        assert!(!era_1.accepted_fork_digests.accepts(None));
+    }
+
+    #[test]
+    fn an_era_after_a_legacy_one_leaves_the_legacy_fork_digest_unchanged() {
+        let settings = testnet_then_latest_ruleset(20);
+        let schedule = settings.era_schedule();
+        let (genesis, era_1) = (schedule.genesis(), schedule.get(Era::new(1)).unwrap());
+
+        assert_eq!(
+            genesis.parameters.fork_digest,
+            DeploymentSettings::testnet()
+                .era_schedule()
+                .genesis()
+                .parameters
+                .fork_digest
+        );
+        // Its own fork digest no longer hashes the chain ID.
+        assert_eq!(
+            era_1.parameters.fork_digest,
+            ForkDigest::compute(
+                settings.genesis_id(),
+                [genesis.parameters.digest, era_1.parameters.digest].into_iter()
+            )
+        );
+        assert_eq!(era_1.first_slot, Slot::new(20 * 300_000));
+    }
+
+    #[test]
+    fn a_legacy_era_after_another_era_is_refused() {
+        let EraDefinitions {
+            eras,
+            genesis_block,
+        } = DeploymentSettings::testnet().into();
+        let legacy = eras.genesis_era().clone();
+        let eras = EraDeclarations::try_from(BTreeMap::from([
+            (Epoch::new(0), legacy.clone()),
+            (Epoch::new(20), legacy),
+        ]))
+        .unwrap();
+        let reason = DeploymentSettings::new(&eras, genesis_block)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            reason.contains("An era of ruleset 1 cannot follow another era"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_genesis_block_of_another_ruleset_than_the_genesis_era_is_refused() {
+        let EraDefinitions { eras: legacy, .. } = DeploymentSettings::testnet().into();
+        let EraDefinitions { genesis_block, .. } = DeploymentSettings::default().into();
+        let reason = DeploymentSettings::new(&legacy, genesis_block)
+            .unwrap_err()
+            .to_string();
+        assert!(reason.contains("carries a fork digest"), "{reason}");
+
+        let EraDefinitions { genesis_block, .. } = DeploymentSettings::testnet().into();
+        let reason = deployment_from(genesis_block, [(0, ruleset(|_| ()))])
+            .unwrap_err()
+            .to_string();
+        assert!(reason.contains("carries no fork digest"), "{reason}");
     }
 
     #[test]
