@@ -12,7 +12,7 @@ use std::{
 
 use cucumber::{given, then, when};
 use lb_core::header::HeaderId;
-use lb_node::config::{DeploymentSettings, deployment::era::ruleset::EraRuleset};
+use lb_node::config::DeploymentSettings;
 use lb_testing_framework::{NodeHttpClient, configs::deployment::EraBoundarySchedule};
 use tokio::time::{Instant, sleep, timeout_at};
 use tracing::info;
@@ -669,8 +669,7 @@ fn target_era_limits(
         .iter()
         .nth(target_index)
         .ok_or_else(|| failure("Deployment is missing the target era"))?;
-    let EraRuleset::V1(parameters) = &target.parameters.ruleset;
-    let cryptarchia = &parameters.cryptarchia;
+    let cryptarchia = &target.parameters.ruleset.parameters().cryptarchia;
     Ok((
         cryptarchia.max_transactions.get(),
         cryptarchia.max_transactions_size,
